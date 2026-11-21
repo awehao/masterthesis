@@ -109,6 +109,15 @@ ALONG_PAD = float(os.environ.get('YS_ALONG_PAD', '0.10'))
 ALONG_COS = math.cos(math.radians(float(__import__('os').environ.get('YS_ALONG_DEG', '30'))))
 
 
+CROSS = os.environ.get('YS_CROSS', '1') == '1'                       # Isaac 84：橫越行人（walker_l2 向西）⇒ 側移選邊選到行人去的方向、進入行人帶並行被追撞 ⇒ 橫越改「路徑上停在行人帶外等它過」
+CROSS_COS = math.cos(math.radians(float(os.environ.get('YS_CROSS_DEG', '45'))))   # 行人方向與參考走向夾角 > 45° 才算橫越
+CROSS_MARGIN_S = float(os.environ.get('YS_CROSS_MARGIN_S', '1.0'))  # 先過／等待判定的時間餘裕
+CROSS_V = float(os.environ.get('YS_CROSS_V', '0.22'))                # 機器人通過行人帶的名目速度（導航名目）
+CROSS_LOOK = float(os.environ.get('YS_CROSS_LOOK', '8.0'))
+CROSS_BEHIND_PAD = float(os.environ.get('YS_CROSS_BEHIND_PAD', '0.10'))   # 行人已過交點後從它後面過的餘裕（m）
+CROSS_MAX_S = float(os.environ.get('YS_CROSS_MAX_S', '15.0'))
+
+
 class YieldSide:
     def __init__(self):
         self.lock = None                                              # dict(name_key, n, s_tgt)
@@ -162,6 +171,67 @@ class YieldSide:
                 best = (u, n, c, dist, need)
         return best
 
+    def _crossing(self, q, e, obs):
+        """橫越衝突：回 dict(n, c_lat, need, sg, sig_in, a, sp) 或 None。只用追蹤速度 ≥ V_MIN 的群（不用相對運動代替）。
+        機器人在行人帶外、參考走向 e 朝帶內；機器人以 CROSS_V 走完帶的時段與行人佔用交點的時段（各加餘裕）重疊 ⇒ 衝突。"""
+        best = None
+        for gp in _groups(obs):
+            vo = gp['v']; sp = float(np.linalg.norm(vo))
+            if sp < V_MIN:
+                continue
+            u = vo / sp
+            if abs(float(u @ e)) > CROSS_COS:
+                continue
+            n = np.array([-u[1], u[0]])
+            lo, hi = _interval(gp, n, q[:2])
+            c_lat = 0.5 * (lo + hi); need = R_BASE + 0.5 * (hi - lo) + PAD
+            s_q = float(q[:2] @ n) - c_lat
+            en = float(e @ n)
+            if abs(s_q) < need - 0.05 or en * s_q >= 0.0 or abs(en) < 0.2:   # 已在帶內／不朝帶走
+                continue
+            sig_in = (abs(s_q) - need) / abs(en); sig_out = (abs(s_q) + need) / abs(en)
+            px = q[:2] + (abs(s_q) / abs(en)) * e                     # 參考走向與行人中心線交點
+            m_ = gp['P'].mean(axis=0); d_ = m_ - q[:2]; nd_ = float(np.linalg.norm(d_))
+            c_al = float((m_ + (R_MIN * d_ / nd_ if nd_ > 1e-6 else 0.0)) @ u)   # 可見表面點偏向機器人 ⇒ 中心往遠離機器人推一個半徑（同 _interval）
+            a = float(px @ u) - c_al                                  # 交點在行人前方的距離（負＝行人已過交點）
+            if a < -(need - PAD + CROSS_BEHIND_PAD):                   # 行人背面已過交點（從它後面過，餘裕較小）
+                continue
+            tw0, tw1 = (a - need) / sp, (a + need) / sp
+            tr0, tr1 = max(sig_in, 0.0) / CROSS_V, sig_out / CROSS_V
+            if tw0 > CROSS_LOOK or tr1 + CROSS_MARGIN_S < tw0 or tr0 > tw1 + CROSS_MARGIN_S:
+                continue
+            if best is None or tw0 < best['tw0']:
+                best = dict(n=n, c_lat=c_lat, need=need, sg=1.0 if s_q > 0 else -1.0, sig_in=sig_in, a=a, sp=sp, tw0=tw0, tr1=tr1, u=u)
+        return best
+
+    def _apply_cross(self, t, q, X, cr):
+        """停在行人帶外（自己的參考路徑上）：參考點側向進入帶（＋0.05）的部分改成路徑上最後一個帶外點；朝向照參考。"""
+        if cr is not None:
+            if getattr(self, 'cross', None) is None:
+                self.cross = dict(t0=t)
+                self.log.append(dict(t=round(t, 2), what='yield_cross_hold', a=round(cr['a'], 3), tw0=round(cr['tw0'], 2), tr1=round(cr['tr1'], 2), sp=round(cr['sp'], 3), sig_in=round(cr['sig_in'], 3), need=round(cr['need'], 3)))
+            self.cross.update(cr=cr, t_seen=t)
+        C = self.cross
+        if t - C['t_seen'] > 0.5 or t - C['t0'] > CROSS_MAX_S:
+            self.log.append(dict(t=round(t, 2), what='yield_cross_release', held_s=round(t - C['t0'], 2)))
+            self.cross = None
+            return None
+        cr = C['cr']; n, c_lat, need, sg = cr['n'], cr['c_lat'], cr['need'], cr['sg']
+        last = np.array([float(q[0]), float(q[1])])
+        if sg * (float(last @ n) - c_lat) < need + 0.05:                # 目前已比停止線近 ⇒ 停在目前位置
+            pin = last
+        else:
+            pin = None
+        for Xk in X:
+            p = np.array([Xk[0, 2], Xk[1, 2]])
+            if pin is None and sg * (float(p @ n) - c_lat) >= need + 0.05:
+                last = p
+                continue
+            if pin is None:
+                pin = last
+            Xk[0, 2], Xk[1, 2] = float(pin[0]), float(pin[1])
+        return dict(off=0.0, cross_hold=True)
+
     def _apply_along(self, t, q, X, al):
         """讓行人先走：沿行人方向不再前進（參考沿 u 的進度釘在目前位置），側向離開行人帶到目前所在側；行人領先 > need＋0.3 才放行（之後從它後面過）。"""
         if al is not None:
@@ -204,6 +274,12 @@ class YieldSide:
         d_ref = np.array([float(X[-1][0, 2] - X[0][0, 2]), float(X[-1][1, 2] - X[0][1, 2])])   # s147d：以「要去的方向」（參考視窗走向）判並行，不用實際速度（被側移推向行人方向後又被當同向、被帶走 3 m）
         v_al = d_ref / float(np.linalg.norm(d_ref)) * max(float(np.linalg.norm(v_b)), 0.06) if float(np.linalg.norm(d_ref)) > 0.10 else np.zeros(2)
         self._d_ref = d_ref
+        if CROSS and self.lock is None and getattr(self, 'along', None) is None and float(np.linalg.norm(d_ref)) > 0.10:   # 橫越：路徑上等（優先於側移選邊；側移中／並行中不切換）
+            cr = self._crossing(q, d_ref / float(np.linalg.norm(d_ref)), obs)
+            if cr is not None or getattr(self, 'cross', None) is not None:
+                r_ = self._apply_cross(t, q, X, cr)
+                if r_ is not None:
+                    return r_
         al = self._alongside(q, v_al, obs)
         if self.lock is None and (al is not None or getattr(self, 'along', None) is not None):   # s153d：橫越選邊鎖定中又進並行（選邊互相矛盾）⇒ 鎖定時不進並行   # 同向並行（s113d：相對速度≈0 ⇒ 最近接近預測不觸發，被行人帶著走 30 s）
             return self._apply_along(t, q, X, al)
