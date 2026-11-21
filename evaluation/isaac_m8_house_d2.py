@@ -165,6 +165,14 @@ ARM = [f'joint{i}' for i in range(1, 7)]
 FINGER_OPEN = float(G.XO.FINGER_OPEN)
 FINGER_TOL_M = 0.0005
 DT, D_STEPS = 0.01, 8
+STEP_PROF = os.environ.get('D2_STEP_PROF', '0') == '1'               # 主迴圈分項計時（即時化剖析；不改任何行為）
+RENDER_EVERY = max(1, int(os.environ.get('D2_RENDER_EVERY', '1')))   # 繪圖頻率：每 N 個物理步繪一次（Howard 11/21 問 RTF 1：每步 100 Hz 繪圖＋讀相機）
+_SP_T, _SP_ACC = [0.0], {}
+
+
+def _sp_mark(name):
+    now_ = time.perf_counter(); a_ = _SP_ACC.setdefault(name, [0.0, 0])
+    a_[0] += now_ - _SP_T[0]; a_[1] += 1; _SP_T[0] = now_
 CONTACT_N, DOOR_DEG = 0.05, 0.05
 NO_CATCHUP = os.environ.get('D2_NO_CATCHUP', '1') == '1'          # RTF 上限配速（落後不補步）
 R_REM = int(os.environ.get('D2_R_REM', '3'))                       # 放行收到後到套用的剩餘延遲（步）
@@ -744,6 +752,7 @@ def main():
     try:
         for k in range(n_steps):
             w_step0 = time.perf_counter()
+            if STEP_PROF: _SP_T[0] = w_step0
             t_sim = float(world.current_time)
             node.t = t = t_sim - T0
             q, jp = q9()
@@ -800,6 +809,7 @@ def main():
                     v_.set_world_poses(positions=np.array([[p_[0], p_[1], w_['height'] / 2]], np.float32))
                 if k % 10 == 0:
                     walk_log.append([float(t)] + [float(x) for w_ in walk_list for x in WK.crowd_pos(w_, t)])
+            if STEP_PROF: _sp_mark('state')
             # ---- ROS 收命令
             for _ in range(4):
                 rclpy.spin_once(node, timeout_sec=0.0)
@@ -979,8 +989,10 @@ def main():
             for i, j in zip(idx, range(6)):
                 tgt[i] = float(s[j])
             tgt[f1] = f_hold if (bound and not released and f_hold is not None) else fcmd   # 綁定中保持鎖存開度（名目段、停止尾段的閉爪命令都不覆寫）；解綁後照命令（張開）
+            if STEP_PROF: _sp_mark('ctrl_wait')
             apply(tgt)
             base_cmd(ue[:3], float(q[2]))
+            if STEP_PROF: _sp_mark('apply')
             # ---- 發布
             ck = Clock()
             ck.clock = node.stamp()
@@ -1022,6 +1034,7 @@ def main():
                 s_end = s + DT * sum(p_[3:] for p_ in pipe)
                 node.p_truth.publish(Float64MultiArray(data=[t, *[float(x) for x in q], *[float(x) for x in s], *[float(x) for x in s_end], *[float(x) for x in np.concatenate(pipe)]]))
                 node.p_state.publish(String(data='latched:' + latch['why'] if latch is not None else ('static' if static else 'run')))
+            if STEP_PROF: _sp_mark('publish')
             if k % scan_every == 0:
                 r, whom = scan(q)
                 m = LaserScan()
@@ -1033,11 +1046,12 @@ def main():
                 node.p_scan.publish(m)
                 scan_min_log = float(whom[0])
                 scans.append(np.r_[t, q[:3], r])
+            if STEP_PROF: _sp_mark('scan')
             # ---- 相機：持續取像（送偵測程序，不等結果）
             if DRAWER and getattr(node, 'dr_pose_vis', None) is not None and not getattr(node, '_dr_pose_set', False):
                 DRS_.set_pose(*[float(v) for v in node.dr_pose_vis]); node._dr_pose_set = True
                 ev('drawer_pose_vision_applied', pose=[round(float(v), 4) for v in node.dr_pose_vis], pose_true=dr_pose_true)
-            f = grab()
+            f = grab() if (k % RENDER_EVERY == 0) else None              # 只在有繪圖的步讀相機（D2_RENDER_EVERY；相機 5 Hz）
             if f is not None and f['t_obs'] >= t_next_cam - 1e-9:
                 if det_busy:
                     cam_stat['rejects']['detector_busy'] = cam_stat['rejects'].get('detector_busy', 0) + 1
@@ -1094,6 +1108,7 @@ def main():
                     frames[-1]['cyl'] = dict(p=None if pc_ is None else [round(float(v), 4) for v in pc_], yaw=rr['cyl'].get('yaw'), info=rr['cyl']['info'])
                 if seq_r <= 3 or seq_r % 25 == 0:
                     print(f"[fc] 影格 {seq_r} t_obs={f['t_obs']:.2f} valid={T_est is not None} {'' if T_est is not None else info.get('why') or info.get('cls')} 距離 {frames[-1]['eval_only']['range_m']} m 偵測 {ms:.0f} ms", flush=True)
+            if STEP_PROF: _sp_mark('camera')
             tgt_w = w_all0 + pace_off + (t + DT) / a.rtf                       # RTF 上限配速：早到就睡；晚到不補步（重設基準，實得 RTF ≤ 目標）——物理照牆鐘推進、不等任何計算
             now_w = time.perf_counter()
             if now_w < tgt_w:
@@ -1103,8 +1118,10 @@ def main():
                     pace['behind_steps'] += 1; pace['behind_max_s'] = max(pace['behind_max_s'], now_w - tgt_w)
                 if NO_CATCHUP:                                         # 不連續補步（m8house_d2_unified_2：補步時每步 16 ms，控制側預算被壓縮 ⇒ not_ready）
                     pace_off += now_w - tgt_w; pace['reanchored_s'] = pace.get('reanchored_s', 0.0) + (now_w - tgt_w)
+            if STEP_PROF: _sp_mark('sleep')
             st0 = float(world.current_time)
-            world.step(render=True)
+            world.step(render=(k % RENDER_EVERY == 0))                  # D2_RENDER_EVERY：物理每步、繪圖每 N 步（視窗與相機；預設 1＝原行為）
+            if STEP_PROF: _sp_mark('step')
             if abs((float(world.current_time) - st0) - DT) > 1e-9:
                 clock_bad += 1
             sw = time.perf_counter() - w_step0
@@ -1143,6 +1160,9 @@ def main():
                sources=dict(odom='物理位姿直接當里程（理想，無滑移）', scan='PhysX 射線 360 道，略過機器人自身形狀，無雜訊', pose_for_camera='渲染時刻的關節／底盤讀值 FK', delay='8 步在途管線（軟體模型）'),
                step_wall_ms_p50=round(float(np.median(step_wall)) * 1e3, 1) if step_wall else None, supervisor_done=t_done is not None,
                pacing=dict(pace, rtf_target=a.rtf, note='物理依牆鐘固定 RTF 推進、不等計算；behind＝迴圈本身（算圖、射線、發布）比目標慢的步數與最大落後'), detector=dict(process='獨立程序（模擬器前 fork）', pending_at_end=len(det_pend)))
+    if STEP_PROF:
+        res['step_prof'] = {k_: dict(total_s=round(v_[0], 2), per_step_ms=round(1e3 * v_[0] / max(v_[1], 1), 3), n=v_[1]) for k_, v_ in _SP_ACC.items()}
+        res['render_every'] = RENDER_EVERY
     res['walkers'] = dict(names=[w_['name'] for w_ in walk_list], log=walk_log, note='每 10 步位置（模擬時間）') if walk_list else None
     res['drawer'] = None if dr_info is None else dict(dr_info, bound_end=dr_bound, released=dr_released, log_cols=['t', 'opening_truth', 'bound'], log=dr_log, note='開度真值只做驗收記錄；控制用開度＝控制器 TCP 位移估計')
     res['marker'] = None if not DRAWER else dict(attached=cyl_attached, log_cols=['t', 'x', 'y', 'z', 'grip_x', 'grip_y', 'grip_z', 'f1_n', 'f2_n'], log=cyl_log, note='筆真值只做驗收記錄，不進控制')
