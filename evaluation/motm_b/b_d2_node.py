@@ -51,6 +51,9 @@ HEAD_DOOR_R = float(os.environ.get('HEAD_DOOR_R', '0.0'))            # 回程關
 NOPATH_RECOVER = os.environ.get('B_NOPATH_RECOVER', '1') == '1'       # 穿門後：送出目標 NOPATH_S 秒仍無新路徑 ⇒ 清全域代價圖＋丟目前途經點
 NOPATH_S = float(os.environ.get('B_NOPATH_S', '4.0'))
 HO_LEAD = int(os.environ.get('B_HO_LEAD', '3'))
+PICK_FLOW = os.environ.get('PICK_FLOW', '0') == '1'                 # Howard 11/21 晚：移動中夾取但不要經過線——底盤照導航（目標＝下一站、途經抓取點附近），夾時才轉、限速，閉爪看狀態
+FLOW_V = float(os.environ.get('PICK_FLOW_V', '0.08'))                 # 抓取點附近底盤限速（m/s）
+FLOW_AHEAD = float(os.environ.get('PICK_FLOW_AHEAD', '0.35'))         # 途經點＝抓取點沿行進方向再往前（讓路徑穿過抓取點、不在抓取點停）
 DOOR_LINE = os.environ.get('B_DOOR_LINE', '0') == '1'               # Howard 11/21「門把要移動中抓」：沿門前走廊經過抓取（不收斂到站位）
 DOOR_LINE_PRE = float(os.environ.get('B_DOOR_LINE_PRE', '0.7'))       # 走廊起點＝抓取底盤位沿門往回（m）
 DOOR_LINE_SEND = float(os.environ.get('B_DOOR_LINE_SEND', '0.9'))
@@ -1060,7 +1063,7 @@ def main():
                     self.event('pick_scan_unknown_pts', n=int(n_unk_))
                     def _sel(box=self.pick_box, c=est, b=b_now):
                         w0 = time.perf_counter()
-                        box['sel'] = CR.select(c[:2], b) if PICK_MOTM_V is None else CR.select_motm(c[:2], b, PICK_MOTM_V, goal_next=np.asarray(DR_PRIOR[:2], float) if CHAIN else None)
+                        box['sel'] = CR.select(c[:2], b) if (PICK_MOTM_V is None and not PICK_FLOW) else CR.select_motm(c[:2], b, PICK_MOTM_V if PICK_MOTM_V is not None else FLOW_V, goal_next=np.asarray(DR_PRIOR[:2], float) if CHAIN else None)
                         if box['sel'] is None and PICK_LINE:            # Howard 11/21「不要寫死」：位置隨機時可能沒有可行經過線 ⇒ 退回收斂抓取選位（不中止）
                             box['sel'] = CR.select(c[:2], b)
                             if box['sel'] is not None:
@@ -1076,6 +1079,12 @@ def main():
                 Tbm_ = _T3(self.T_mo_now) @ _T3(sel['base_start'] if (PICK_MOTM_V is not None and not sel.get('convergent')) else sel['base'])   # 選位結果（里程）→ 地圖（只給 Smac）；移動中夾取＝路線起點
                 self.pick_sel = sel; self.pick_goal = [float(Tbm_[0, 3]), float(Tbm_[1, 3]), math.atan2(Tbm_[1, 0], Tbm_[0, 0])]; self.pass_t = t
                 self.pick_via = [list(p) for p in (sel.get('via') or [])]   # 依可走路線的途經點（里程；Isaac 39–46 Smac 鑽茶几角與未知箱之間的窄縫）
+                if PICK_FLOW and sel.get('e') is not None and not sel.get('convergent'):   # 移動中夾取（照導航）：導航目標＝下一站；途經點＝路線＋抓取點沿行進方向前 FLOW_AHEAD；之後接往下一站的途經點
+                    b0f_ = np.asarray(sel['base'], float); ef_ = np.asarray(sel['e'], float)
+                    self.pick_via = self.pick_via + [[float(b0f_[0] + FLOW_AHEAD * ef_[0]), float(b0f_[1] + FLOW_AHEAD * ef_[1])]]
+                    self._flow_next = [list(p_) for p_ in (sel.get('via_next') or [])]
+                    if CHAIN:
+                        self.pick_goal = list(DR_PRIOR)
                 self.event('pick_goal', base=[round(float(x), 4) for x in sel['base']], side=sel['side'], flip=sel['flip'], sigma_min=round(sel['sigma_min'], 4), ms=round(self.pick_box['ms'], 1), route_len=None if sel.get('route_len') is None else round(float(sel['route_len']), 3), via=self.pick_via)
             if PICK_PATH and not PICK_LINE and self.pick_sel is not None:   # 依導航路徑的移動中抓取：記錄實際行進方向；近抓取位 PATH_EXT_R 時線上算經過方向／速度送執行端
                 hist_ = [h for h in getattr(self, '_xy_hist', []) if t - h[0] <= 1.0] + [(t, self.b_od_now[:3].copy())]; self._xy_hist = hist_
@@ -1189,6 +1198,13 @@ def main():
                                 self._next_via_new = None; self._next_via_err = repr(e_)[:120]
                         threading.Thread(target=_rv, daemon=True).start()
                 return
+            if PICK_FLOW and getattr(self, '_flow_next', None) is not None and not self.pick_via:
+                self.next_via, self._flow_next = self._flow_next, None   # 抓取點途經點走完 ⇒ 接往下一站的途經點
+            if PICK_FLOW and '"what": "pick_flow_missed"' in (self.xstate or '') and not getattr(self, '_flow_missed', False):
+                self._flow_missed = True                               # 經過時沒夾到 ⇒ 退回收斂：導航目標＝抓取點（到點停），清途經點
+                b_m_ = _T3(self.T_mo_now) @ _T3(np.asarray(self.pick_sel['base'], float))
+                self.pick_goal, self.pick_via, self.next_via, self._flow_next, self.pass_t = [float(b_m_[0, 3]), float(b_m_[1, 3]), math.atan2(b_m_[1, 0], b_m_[0, 0])], [], [], None, t
+                self.event('pick_flow_fallback')
             if self.pick_sel is not None and self.pick_app_t is None:
                 b_ = np.asarray(self.pick_sel['base'], float)          # 里程座標
                 dist_ = float(np.hypot(*(self.b_od_now[:2] - b_[:2])))
@@ -1201,6 +1217,8 @@ def main():
                     Tapp = max(PICK_T_MIN, dist_ / 0.12 + 2.0)
                     self.pick_Tg_od = Tg_od.copy()
                     app = dict(T_grasp=Tg_od.tolist(), base_goal=[float(Tb_od[0, 3]), float(Tb_od[1, 3]), math.atan2(Tb_od[1, 0], Tb_od[0, 0])], T=Tapp, T_b=max(1.5, Tapp - 1.5), t_l0=max(0.5, Tapp - 2.5))
+                    if PICK_FLOW and self.pick_sel.get('e') is not None and not self.pick_sel.get('convergent') and not getattr(self, '_flow_missed', False):
+                        app['flow'] = dict(b0=app['base_goal'], v_cap=FLOW_V, r_turn=1.0, r_in=0.35)   # 底盤照導航；控制器只在抓取點附近改偏航與限速
                     self.p_ho.publish(String(data=json.dumps(dict(what='pick_app', app=app))))
                     self.pick_app_t = t
                     self.event('pick_app_sent', dist=round(dist_, 3), T=round(Tapp, 3))
@@ -1412,7 +1430,8 @@ def main():
                 self.event('pick_via_reached', at=[round(float(x), 3) for x in via[0][:2]], left=len(via) - 1); via.pop(0); self.pass_t = t
             if not via:
                 return g_
-            nxt = np.asarray(via[1][:2], float) if len(via) > 1 else np.asarray(self.pick_sel.get('base_start', self.pick_sel['base'])[:2], float)
+            fn_ = getattr(self, '_flow_next', None)
+            nxt = np.asarray(via[1][:2], float) if len(via) > 1 else (np.asarray(fn_[0][:2], float) if (PICK_FLOW and fn_) else np.asarray(self.pick_sel.get('base_start', self.pick_sel['base'])[:2], float))
             p_ = np.asarray(via[0][:2], float); yaw_ = math.atan2(nxt[1] - p_[1], nxt[0] - p_[0])
             Tv_ = _T3(self.T_mo_now) @ _T3([p_[0], p_[1], yaw_])
             return [float(Tv_[0, 3]), float(Tv_[1, 3]), math.atan2(Tv_[1, 0], Tv_[0, 0])]

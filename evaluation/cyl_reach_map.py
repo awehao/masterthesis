@@ -372,7 +372,7 @@ MOTM_S0 = float(os.environ.get('MOTM_S0', '-0.05'))                  # 經過路
 MOTM_T_WIN = float(os.environ.get('MOTM_T_WIN', '1.9'))              # TCP 世界固定的時間窗（閉爪開始容許 0.5＋閉爪 0.6＋確認 0.3＋證據寬限 0.5 s）
 MOTM_DS = 0.05
 MOTM_T_ARM = float(os.environ.get('MOTM_T_ARM', '4.0'))              # 手臂自收臂展開到抓取線的最短時間（s73：只剩 2.4 s ⇒ 自身淨空 4.0 mm）
-LINE_MERGE = os.environ.get('PICK_LINE', '0') == '1'                 # 沿桌邊經過線＋邊走邊併線（不原地對齊）；路線起點經格點路線途經點
+LINE_MERGE = os.environ.get('PICK_LINE', '0') == '1' or os.environ.get('PICK_FLOW', '0') == '1'   # PICK_FLOW（11/21 晚）只借用選位（路線、窗口、車頭候選），底盤照導航                 # 沿桌邊經過線＋邊走邊併線（不原地對齊）；路線起點經格點路線途經點
 LINE_DMIN = float(os.environ.get('PICK_LINE_DMIN', '0.46'))          # 經過線底盤中心離桌邊下限
 LINE_TAIL = float(os.environ.get('PICK_LINE_TAIL', '0.15'))          # 窗口後沿線續走（抬升 1.2 s＋確認 0.3 s 約 0.15 m，之後交導航）要淨空的長度；0.35 時 l5 全見即無線可選
 LINE_W_YAW = float(os.environ.get('PICK_LINE_W_YAW', '0.25'))
