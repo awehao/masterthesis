@@ -472,10 +472,11 @@ def main():
             cxy = np.array([float(x) for x in os.environ['CYL_XY'].split(',')])
         else:
             rc_ = np.random.default_rng(int(os.environ.get('CYL_SEED', '0')))
-            e_ = os.environ.get('CYL_SIDE') == 'east'                 # Howard 11/21「放桌子右邊」＋「不要寫死」：右側邊緣帶隨機（離東緣 0.05–0.18、離兩端 ≥0.25；更內側從走道搆不到）
-            x_lo_ = tab_['c'][0] + tab_['s'][0] / 2 - 0.18 if e_ else tab_['c'][0] - tab_['s'][0] / 2 + 0.05
-            y_m_ = 0.25 if e_ else 0.05
-            cxy = np.array([rc_.uniform(x_lo_, tab_['c'][0] + tab_['s'][0] / 2 - 0.05), rc_.uniform(tab_['c'][1] - tab_['s'][1] / 2 + y_m_, tab_['c'][1] + tab_['s'][1] / 2 - y_m_)])
+            sd_ = os.environ.get('CYL_SIDE')                          # Howard 11/21：east＝右側、west＝左側邊緣帶隨機（離該側緣 0.05–0.18、離兩端 ≥0.25；更內側從走道搆不到）；未設＝全桌面
+            X0_, X1_ = tab_['c'][0] - tab_['s'][0] / 2, tab_['c'][0] + tab_['s'][0] / 2
+            x_lo_, x_hi_ = (X1_ - 0.18, X1_ - 0.05) if sd_ == 'east' else ((X0_ + 0.05, X0_ + 0.18) if sd_ == 'west' else (X0_ + 0.05, X1_ - 0.05))
+            y_m_ = 0.25 if sd_ in ('east', 'west') else 0.05
+            cxy = np.array([rc_.uniform(x_lo_, x_hi_), rc_.uniform(tab_['c'][1] - tab_['s'][1] / 2 + y_m_, tab_['c'][1] + tab_['s'][1] / 2 - y_m_)])
         DynamicCylinder(prim_path='/World/cyl', name='cyl', position=np.array([cxy[0], cxy[1], float(tab_['s'][2]) + 0.10]), radius=0.015, height=0.20, mass=0.20, color=np.array([0.2, 0.6, 0.9]))
         n_cf = bind_friction(stage, [stage.GetPrimAtPath('/World/cyl')], 1.0, 0.8, 0.0, mat_path='/World/PhysicsMaterials/cyl')
         n_tf = bind_friction(stage, [stage.GetPrimAtPath('/World/coffee_table')], 0.6, 0.5, 0.0, mat_path='/World/PhysicsMaterials/coffee_table')
