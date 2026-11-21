@@ -166,7 +166,8 @@ FINGER_OPEN = float(G.XO.FINGER_OPEN)
 FINGER_TOL_M = 0.0005
 DT, D_STEPS = 0.01, 8
 STEP_PROF = os.environ.get('D2_STEP_PROF', '0') == '1'               # 主迴圈分項計時（即時化剖析；不改任何行為）
-RENDER_EVERY = max(1, int(os.environ.get('D2_RENDER_EVERY', '1')))   # 繪圖頻率：每 N 個物理步繪一次（Howard 11/21 問 RTF 1：每步 100 Hz 繪圖＋讀相機）
+RENDER_EVERY = max(1, int(os.environ.get('D2_RENDER_EVERY', '1')))
+RENDER_BURST = max(1, int(os.environ.get('D2_RENDER_BURST', '1')))   # 讀相機前連續繪圖步數（RTX 管線延遲）   # 繪圖頻率：每 N 個物理步繪一次（Howard 11/21 問 RTF 1：每步 100 Hz 繪圖＋讀相機）
 _SP_T, _SP_ACC = [0.0], {}
 
 
@@ -1051,7 +1052,7 @@ def main():
             if DRAWER and getattr(node, 'dr_pose_vis', None) is not None and not getattr(node, '_dr_pose_set', False):
                 DRS_.set_pose(*[float(v) for v in node.dr_pose_vis]); node._dr_pose_set = True
                 ev('drawer_pose_vision_applied', pose=[round(float(v), 4) for v in node.dr_pose_vis], pose_true=dr_pose_true)
-            f = grab() if (k % RENDER_EVERY == 0) else None              # 只在有繪圖的步讀相機（D2_RENDER_EVERY；相機 5 Hz）
+            f = grab() if (k % RENDER_EVERY == 0) else None              # 只在連續繪圖段的最後一步讀相機（D2_RENDER_EVERY／D2_RENDER_BURST；相機 5 Hz）
             if f is not None and f['t_obs'] >= t_next_cam - 1e-9:
                 if det_busy:
                     cam_stat['rejects']['detector_busy'] = cam_stat['rejects'].get('detector_busy', 0) + 1
@@ -1120,7 +1121,7 @@ def main():
                     pace_off += now_w - tgt_w; pace['reanchored_s'] = pace.get('reanchored_s', 0.0) + (now_w - tgt_w)
             if STEP_PROF: _sp_mark('sleep')
             st0 = float(world.current_time)
-            world.step(render=(k % RENDER_EVERY == 0))                  # D2_RENDER_EVERY：物理每步、繪圖每 N 步（視窗與相機；預設 1＝原行為）
+            world.step(render=((k + 1) % RENDER_EVERY == 0 or (k + 1) % RENDER_EVERY >= RENDER_EVERY - RENDER_BURST + 1 if RENDER_BURST > 1 else (k + 1) % RENDER_EVERY == 0) if RENDER_EVERY > 1 else True)   # 物理每步；繪圖在下一次讀相機前連續 RENDER_BURST 步（第七十七趟：每 10 步單繪 ⇒ 深度與彩色幀錯位、門把中心觀測不到 2758 次）
             if STEP_PROF: _sp_mark('step')
             if abs((float(world.current_time) - st0) - DT) > 1e-9:
                 clock_bad += 1
