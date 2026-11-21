@@ -104,7 +104,7 @@ def _interval(gp, n, q_xy=None):
     return sc - R_MIN, sc + R_MIN
 
 
-NO_BACK = os.environ.get('YS_NO_BACK', '1') == '1'
+NO_BACK = os.environ.get('YS_NO_BACK', '0') == '1'                  # s154d：行人從側邊直衝時往後讓正是唯一閃避方向 ⇒ 預設關
 ALONG_PAD = float(os.environ.get('YS_ALONG_PAD', '0.10'))
 ALONG_COS = math.cos(math.radians(float(__import__('os').environ.get('YS_ALONG_DEG', '30'))))
 
