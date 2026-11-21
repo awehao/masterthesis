@@ -50,3 +50,11 @@ ZIP 根目錄含 `main.tex`，由它載入 `thesis.tex`。TeX 編輯器魔法註
 2026-11-17 以 Tectonic 0.17.0（XeTeX 核心）完成本機編譯，輸出兩頁 A4 PDF：中文摘要與英文摘要各一頁，含各自關鍵字及 i、ii 頁碼。已檢查兩頁版面、輸出文字與字型嵌入；編譯記錄未出現缺字、Overfull 或 Underfull 警告。
 
 本機檢查沒有登入 Overleaf；上傳後仍須選擇 XeLaTeX。封面預設關閉，本次檢查範圍為摘要頁。
+
+## 前言圖文稿（2026-11-21）
+
+新增 `01_background.tex`，將產業需求與 AMMR 背景整合成單一「前言」節，配合兩張 IFR 官方原圖。文字對應上層 `1.1_前言_圖文稿.md`；圖檔位於 `figsrc/ch01/`，來源見同資料夾 `SOURCES.md`；本節引用集中於 `background_references.bib`。
+
+可將獨立交付的 `前言_Overleaf圖文稿.zip` 上傳至 Overleaf，Compiler 選 XeLaTeX、Main document 選 `main.tex`；包內入口會載入 `background_preview.tex`，輸出第一章前言與參考文獻。若直接使用本資料夾，將 Main document 改選 `background_preview.tex` 即可。原 `main.tex` 仍為摘要入口。
+
+合併到完整論文時，在第一章中 `\input{01_background}`，並將本節書目合併到全論文使用的 `.bib`。本輪已檢查引用鍵、圖檔路徑、原圖尺寸與來源，尚未於本機編譯此新稿。
