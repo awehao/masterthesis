@@ -45,6 +45,7 @@ APP_GATE_D0, APP_GATE_D1 = 0.70, 0.12                                 # 收斂�
 APP_GATE_CAP_S = 30.0
 FLOW_D0, FLOW_LINE_TOL = float(os.environ.get('PICK_FLOW_D0', '1.2')), float(os.environ.get('PICK_FLOW_LINE_TOL', '0.02'))
 FLOW_D1, FLOW_MISS_R = float(os.environ.get('PICK_FLOW_D1', '0.30')), float(os.environ.get('PICK_FLOW_MISS_R', '0.50'))   # 照導航移動中夾取：到站半徑（路徑不一定正好穿過抓取點）、錯過判定                                                 # 狀態閘門下的總安全逾時（名目時長之後）
+FLOW_HDL_DZ = float(os.environ.get('PICK_FLOW_HDL_DZ', '0.004'))     # 照導航抓把手：抓取線起始高度差上限（m；收斂趟 Isaac 82/80 線起點約 −3 mm）
 LIM_PAD = float(os.environ.get('PICK_LIM_PAD', '0.02'))               # 手臂關節位置界限內縮（rad）：s162d 茶几照導航接近 j3 名目 2.87、界限 2.936，在途命令積分越界 ⇒ setpoint_limit 停
 
 
@@ -460,7 +461,7 @@ class TablePickCtrl(P.DoorPassCtrl):
                 if self._t_arr is None and float(math.hypot(q[0] - self._bg[0], q[1] - self._bg[1])) <= (FLOW_D1 if self.flow else APP_GATE_D1):
                     self._t_arr = self.t
                     self._ev('pick_base_arrived', el=round(el, 2))
-                if self._t_arr is not None and getattr(self, '_t_line0', None) is None and float(np.linalg.norm(Tc[:3, 3] - self._T_line(D_LINE)[:3, 3])) <= (FLOW_LINE_TOL if self.flow else 0.01):
+                if self._t_arr is not None and getattr(self, '_t_line0', None) is None and float(np.linalg.norm(Tc[:3, 3] - self._T_line(D_LINE)[:3, 3])) <= (FLOW_LINE_TOL if (self.flow and getattr(self, 'app_tol_fy', None) is None) else 0.01) and not (self.flow and getattr(self, 'app_tol_fy', None) is not None and abs(float(Tc[2, 3] - self._T_line(D_LINE)[2, 3])) > FLOW_HDL_DZ):   # 照導航抓把手另要求高度差 ≤ FLOW_HDL_DZ（底盤在動時手臂下垂）；把手（橫桿窄）維持 1 cm（Isaac 83：2 cm 放行時 z 下垂 −8 mm ⇒ 手指撞桿 42 N 鎖存）
                     self._t_line0 = self.t
                     self._ev('pick_line_start', el=round(el, 2))
             if (fy_ is not None and ((not gated_ and el >= self.T_app - T_SETTLE) or (gated_ and getattr(self, '_t_line0', None) is not None and ep < AIM_START_M) or (self.motm is not None and ep < AIM_START_M))) or (self.flow and getattr(self, '_t_line0', None) is not None and self.t - self._t_line0 >= T_LINE_S and ep < 0.03 and getattr(self, '_vtcp_last', 9.0) <= 0.02):   # 照導航夾取：底盤在動，手臂追蹤穩態偏差（s159d 13 mm）⇒ 同把手的積分瞄準補償   # 瞄準補償（積分；移動中抓取窗短 ⇒ 誤差 <1 cm 即開始累積）：Isaac 手臂穩態誤差約 3 mm（第三十五趟 approach_not_reached 3.31 mm）⇒ 指令目標加上累積誤差，判定仍用真目標   # s163d：抓取線還在走（暫態落後 20 mm）就積分 ⇒ 補償飽和 +15 mm、過衝夾空 ⇒ 抓取線走完且 TCP 幾乎不動（穩態偏差）才積分
