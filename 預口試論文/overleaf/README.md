@@ -58,3 +58,13 @@ ZIP 根目錄含 `main.tex`，由它載入 `thesis.tex`。TeX 編輯器魔法註
 可將獨立交付的 `前言_Overleaf圖文稿.zip` 上傳至 Overleaf，Compiler 選 XeLaTeX、Main document 選 `main.tex`；包內入口會載入 `background_preview.tex`，輸出第一章前言與參考文獻。若直接使用本資料夾，將 Main document 改選 `background_preview.tex` 即可。原 `main.tex` 仍為摘要入口。
 
 合併到完整論文時，在第一章中 `\input{01_background}`，並將本節書目合併到全論文使用的 `.bib`。本輪已檢查引用鍵、圖檔路徑、原圖尺寸與來源，尚未於本機編譯此新稿。
+
+### 前言引用格式（v0.3）
+
+本節採 IEEE 數字引用，依首次引用順序編為 [1]–[6]。`background_preview.tex` 已使用 `\bibliographystyle{IEEEtran}`；標準 `IEEEtran.bst` 隨包提供，取自 [CTAN](https://ctan.math.illinois.edu/macros/latex/contrib/IEEEtran/bibtex/IEEEtran.bst)，原始標頭與授權保留。原範本說明亦建議一般使用者採 IEEEtran。
+
+IFR 公開發布頁以線上資料引用，附公開日期、存取日期及網址；2025 年資料為線上簡報。兩篇期刊的 68 與 210 為文章編號，不是頁碼。標準 IEEEtran 1.14 不讀取 DOI／eid 欄位，因此本節 `.bib` 將文章編號與 DOI 同時放入 note 供列印，並保留 doi／eid 原始欄位。來源主清單保留原工作編號供對照，不當作最終排版編號。
+
+網頁存取日期採實際核對的台灣日期 2026-11-21。新樣式與書目尚未於本機編譯 PDF。
+
+前言插圖已依參考範例使用 `figure[htbp]`、`\includegraphics`、圖說內 `\cite`、`\label` 及正文 `\cref`。`preamble.tex` 在 hyperref 後載入 cleveref，並將 figure 名稱設為「圖」；不需在正文額外寫「圖」再接 `\cref`。
