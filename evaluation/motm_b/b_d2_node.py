@@ -50,7 +50,12 @@ HEAD_NEAR = 1.0                                                       # 離終�
 HEAD_DOOR_R = float(os.environ.get('HEAD_DOOR_R', '0.0'))            # 回程關門前：門口中心這麼近就不給偏航（原導航行為）；s140d：撤了仍在門扇尖端停 6.5 s ⇒ 非偏航造成，預設關
 NOPATH_RECOVER = os.environ.get('B_NOPATH_RECOVER', '1') == '1'       # 穿門後：送出目標 NOPATH_S 秒仍無新路徑 ⇒ 清全域代價圖＋丟目前途經點
 NOPATH_S = float(os.environ.get('B_NOPATH_S', '4.0'))
-HO_LEAD = int(os.environ.get('B_HO_LEAD', '3'))                      # 交權提前量（物理步，＋NPH）；Isaac 65／66：+8 步時控制伺服器準備晚到 ⇒ not_ready 啟動中止
+HO_LEAD = int(os.environ.get('B_HO_LEAD', '3'))
+DOOR_LINE = os.environ.get('B_DOOR_LINE', '0') == '1'               # Howard 11/21「門把要移動中抓」：沿門前走廊經過抓取（不收斂到站位）
+DOOR_LINE_PRE = float(os.environ.get('B_DOOR_LINE_PRE', '0.7'))       # 走廊起點＝抓取底盤位沿門往回（m）
+DOOR_LINE_SEND = float(os.environ.get('B_DOOR_LINE_SEND', '0.9'))
+DOOR_LINE_V = float(os.environ.get('B_DOOR_LINE_V', '0.06'))          # 經過速度（m/s）
+DOOR_LINE_END = float(os.environ.get('B_DOOR_LINE_END', '0.25'))      # 抓取位之後可續走長度（走廊 a_end）                      # 交權提前量（物理步，＋NPH）；Isaac 65／66：+8 步時控制伺服器準備晚到 ⇒ not_ready 啟動中止
 DR_LINE = os.environ.get('DR_LINE', '0') == '1' and os.environ.get('DR_MOTM_V') is not None   # Howard 11/21「把手要真的移動中抓」：沿櫃面經過線＋邊走邊併線（不等偏航對齊、不停）   # Howard 11/19「門把、抽屜把手都要改」：抽屜把手移動中抓取的經過速度；未設＝停車抓
 DOOR_CLOSE = os.environ.get('D2_DOOR_CLOSE', '0') == '1'             # Howard 11/19 回程關門：抽屜完成後先回臥室側關門，再回起點
 DRAWER_CLOSE = os.environ.get('D2_DRAWER_CLOSE', '0') == '1'         # Howard 11/19「抽屜也要關阿」：筆放盒收臂後夾回把手推回，再返回
@@ -1737,12 +1742,26 @@ def main():
                     pl, rg = self.plan, self.region
                     d_, n_ = np.array(pl['d'], float), np.array(pl['n'], float)
                     gxy = np.asarray(self.h_xy, float) - float(pl['a_w']) * d_ + float(rg['sb_c']) * n_
+                    self.grasp_xy = gxy.copy()
+                    if DOOR_LINE:                                       # Howard 11/21「門把要移動中抓」：導航目標＝走廊起點（抓取底盤位沿門往回 DOOR_LINE_PRE），之後由控制器沿走廊經過抓取位
+                        gxy = gxy - DOOR_LINE_PRE * d_
                     self.goal_xy, self.goal_ver = gxy.tolist(), self.plan_ver
                     self.prior['yaw'] = float(pl['yaw']); self.t_goal_set = t; self.pub_goal(self.goal_xy, self.prior['yaw']); self.t_goal_pub = t
                     self.event('goal_grasp_pose', goal=[round(float(x), 4) for x in gxy], yaw=round(float(pl['yaw']), 4), a_w=pl['a_w'], sb_c=rg['sb_c'], plan_ver=self.plan_ver)
                 if self.mode == 'APPROACH' and self.app_sent is None and self.goal_xy is not None and self.ref is not None and self.stopped is None:
                     dist_ = float(np.linalg.norm(self.cur_map[:2] - np.asarray(self.goal_xy, float)))
-                    if dist_ <= APP_TRIG:
+                    dl_ = None
+                    if DOOR_LINE and getattr(self, 'grasp_xy', None) is not None:   # 走廊經過：離走廊起點 ≤DOOR_LINE_SEND 且還沒到伸手點 ⇒ 送（不等到點、不停）
+                        import motm_merge as MM_
+                        hist_ = [h for h in getattr(self, '_xy_hist_d', []) if t - h[0] <= 1.0] + [(t, self.cur_map[:3].copy())]; self._xy_hist_d = hist_   # 地圖座標（取物段的 _xy_hist 是里程）
+                        mvd_ = hist_[-1][1][:2] - hist_[0][1][:2]; dt_h_ = max(hist_[-1][0] - hist_[0][0], 1e-3)
+                        d_ = np.array(self.plan['d'], float)
+                        G_ = MM_.merge_geom(self.cur_map[:2], mvd_ if float(np.linalg.norm(mvd_)) > 0.02 else np.zeros(2), np.r_[self.grasp_xy, self.plan['yaw']], d_, s_cap=-0.2)
+                        if dist_ <= DOOR_LINE_SEND and G_['s_p'] <= -0.25:
+                            v0_ = float(np.clip(np.linalg.norm(mvd_) / dt_h_, 0.0, 0.2))
+                            law_ = MM_.time_law(G_, v0_, DOOR_LINE_V, -0.3, v_hi_cap=0.15)
+                            dl_ = dict(T=MM_.t_at_sig(law_, MM_.sig_of_s(G_, 0.0), DOOR_LINE_V), s_p=G_['s_p'], lat=G_['lat'])
+                    if (dist_ <= APP_TRIG and not DOOR_LINE) or dl_ is not None:
                         rf = self.ref
                         T_send, fz = np.asarray(rf['T_od'], float), None
                         keep = []
@@ -1756,9 +1775,15 @@ def main():
                             Tf[:3, :3] = U_ @ np.diag([1.0, 1.0, np.linalg.det(U_ @ Vt_)]) @ Vt_
                             fz = dict(n=len(keep), n_all=len(self.obs_T), dpos_mm=round(float(np.linalg.norm(Tf[:3, 3] - T_send[:3, 3])) * 1e3, 3), t_last=max(to_ for to_, _ in self.obs_T))
                             T_send = Tf
-                        Tapp = max(APP_T_MIN, dist_ / 0.08)
+                        Tapp = max(APP_T_MIN, dist_ / 0.08) if dl_ is None else max(APP_T_MIN, float(dl_['T']))   # 走廊經過：TCP 抵把手時刻＝底盤經過抓取位時刻（同一弧長—時間表）
                         app = dict(T=Tapp, T_b=max(1.5, Tapp - 1.5), t_l0=max(0.5, Tapp - APP_T_LINE), d_line=APP_D_LINE, t_settle=1.0, s_final=float(os.environ.get('B_S_FINAL', '0.0015')))
-                        Tg_od = np.linalg.inv(_T3(T_mo)) @ _T3([self.goal_xy[0], self.goal_xy[1], self.prior['yaw']])
+                        gb_ = self.grasp_xy if (DOOR_LINE and getattr(self, 'grasp_xy', None) is not None) else self.goal_xy
+                        Tg_od = np.linalg.inv(_T3(T_mo)) @ _T3([gb_[0], gb_[1], self.prior['yaw']])
+                        if dl_ is not None:
+                            e_od_ = np.linalg.inv(_T3(T_mo))[:2, :2] @ np.array(self.plan['d'], float)
+                            app['line'] = dict(b0=[float(Tg_od[0, 3]), float(Tg_od[1, 3]), math.atan2(Tg_od[1, 0], Tg_od[0, 0])], e=[float(e_od_[0]), float(e_od_[1])], v_g=DOOR_LINE_V,
+                                               s_end=DOOR_LINE_END, s_cap=-0.2, s_slow=-0.3, v_hi=0.15)
+                            self.event('door_line_sent', T=round(Tapp, 2), s_p=round(dl_['s_p'], 3), lat=round(dl_['lat'], 3), dist=round(dist_, 3))
                         app['base_goal'] = [float(Tg_od[0, 3]), float(Tg_od[1, 3]), math.atan2(Tg_od[1, 0], Tg_od[0, 0])]   # 抓取底盤位姿（里程座標）：導航到點後由同一控制器收斂到此
                         sreg_ = json.load(open(os.path.join(HERE, 'experiments', os.environ.get('M8_SCENE_REG', '20261112_m8_house_scene.json'))))
                         ox_ = sreg_['door']['opening_x']

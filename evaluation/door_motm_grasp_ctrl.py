@@ -321,6 +321,45 @@ class MovingGraspCtrl:
         return self.mpc
 
     def nav_window(self, q, qp):
+        """門把移動中抓取（Howard 11/21；app_prof 帶 line 時）：障礙物照導航前端，底盤參考改為「併線＋沿門前走廊等速經過抓取底盤位」（同茶几 motm_merge），
+        不收斂到站位、不停；走廊盡頭前指數減速。交接（READY 被接受）後由開門控制接手（首段規劃已含初速度）。"""
+        X, xi, obs, umin0, src = MovingGraspCtrl._nav_window_base(self, q, qp)   # 取物／抽屜／關門控制器以類別函式呼叫（self 不是本類）
+        ap_ = getattr(self, 'app_prof', None)
+        ln_ = None if (ap_ is None or not isinstance(self, MovingGraspCtrl)) else ap_.get('line')
+        if ln_ is None or obs is None or self.stop is not None or self.phase not in ('HOLD', 'INSERT', 'CLOSE', 'CONFIRM', 'READY'):
+            return X, xi, obs, umin0, src
+        import motm_merge as MM
+        tr = self.t - self.t0
+        v_ = float(ln_['v_g']); b0 = np.asarray(ln_['b0'], float); e = np.asarray(ln_['e'], float)[:2]; e = e / max(float(np.linalg.norm(e)), 1e-9)
+        L_ = getattr(self, '_dline', None)
+        if L_ is None:
+            cq_, sq_ = math.cos(float(q[2])), math.sin(float(q[2])); up_ = np.asarray(self.u_prev[:2], float)
+            vw_ = np.array([cq_ * up_[0] - sq_ * up_[1], sq_ * up_[0] + cq_ * up_[1]])
+            G_ = MM.merge_geom(q[:2], vw_ if float(np.linalg.norm(vw_)) > 0.03 else np.zeros(2), b0, e, s_cap=float(ln_.get('s_cap', -0.2)))
+            v0_ = float(np.clip(np.linalg.norm(vw_), 0.0, 0.2))
+            law_ = MM.time_law(G_, v0_, v_, float(ln_.get('s_slow', -0.3)), v_hi_cap=float(ln_.get('v_hi', 0.15)))
+            L_ = self._dline = dict(G=G_, law=law_, tr0=tr, y0=float(q[2]), sig_rot=G_['Lc'] + 0.2, sig_end=MM.sig_of_s(G_, float(ln_.get('s_end', 0.25))), w=max(v_, 0.02) * 1.0)
+            self._ev('door_line_start', lat=round(G_['lat'], 3), s_p=round(G_['s_p'], 3), s_m=round(G_['s_m'], 3), Lc=round(G_['Lc'], 3), v0=round(v0_, 3),
+                     t_pass=round(MM.t_at_sig(law_, MM.sig_of_s(G_, 0.0), v_), 2), T_app=round(float(ap_['T']), 2))
+        G_, law_ = L_['G'], L_['law']
+
+        def sig_(tt):
+            sg = MM.sig_at_t(law_, max(0.0, tt - L_['tr0']), v_)
+            s1 = L_['sig_end'] - L_['w']
+            return sg if sg <= s1 else L_['sig_end'] - L_['w'] * math.exp(-(sg - s1) / L_['w'])   # 走廊盡頭平滑停
+        te0 = tr + D_STEPS * PHYS
+        Xn = []
+        for k in range(XO.N + 1):
+            sg = sig_(te0 + k * DT); p_ = MM.at(G_, sg)
+            Xn.append(XO.from_xytheta(float(p_[0]), float(p_[1]), MM.yaw_at(G_, sg, L_['y0'], b0[2], L_['sig_rot'])))
+        xin = []
+        for k in range(len(Xn) - 1):
+            T1 = np.linalg.inv(Xn[k]) @ Xn[k + 1]
+            xin.append(np.array([T1[0, 2] / DT, T1[1, 2] / DT, math.atan2(T1[1, 0], T1[0, 0]) / DT]))
+        xin.append(xin[-1].copy())
+        return Xn, xin, obs, float('nan'), 'door_line'
+
+    def _nav_window_base(self, q, qp):
         """導航前端本拍輸入（相對擷取當時機器人位姿）→ 世界參考視窗、障礙物、速度下限；過期 ⇒ 在預測位姿保持（零速度）。"""
         N = XO.N
         ni = getattr(self, 'nav_in', None)
