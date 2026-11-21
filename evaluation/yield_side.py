@@ -166,7 +166,11 @@ class YieldSide:
         if al is not None:
             u, n, c, dist, need = al
             if getattr(self, 'along', None) is None:
-                sg = 1.0 if float((q[:2] - c) @ n) >= 0.0 else -1.0
+                lat0_ = float((q[:2] - c) @ n); dr_ = getattr(self, '_d_ref', None)
+                if abs(lat0_) < 0.15 and dr_ is not None and float(np.linalg.norm(dr_)) > 0.10:
+                    sg = 1.0 if float(dr_ @ n) >= 0.0 else -1.0           # s151d：已在行人帶中央 ⇒ 往機器人要去的那側讓出
+                else:
+                    sg = 1.0 if lat0_ >= 0.0 else -1.0
                 self.along = dict(u=u, n=n, sg=sg, need=need)
                 self.log.append(dict(t=round(t, 2), what='yield_along', dist=round(dist, 3), side=sg))
             self.along.update(c=c)
@@ -179,10 +183,11 @@ class YieldSide:
             return dict(off=0.0)
         u, n, sg, c = L['u'], L['n'], L['sg'], L['c']
         s_c = float(c @ n)
+        behind_ = float((c - q[:2]) @ u) < 0.0                          # 行人在機器人後方（追上來）⇒ 不釘進度（s151d：釘住＝站在行人前面等它撞），只側向讓出
         for Xk in X:
             p = np.array([Xk[0, 2], Xk[1, 2]])
             a_ = float((p - q[:2]) @ u)
-            if a_ > 0.0:
+            if a_ > 0.0 and not behind_:
                 p = p - a_ * u                                        # 不沿行人方向前進
             s_k = float(p @ n)
             if sg * (s_k - s_c) < L['need']:
@@ -197,6 +202,7 @@ class YieldSide:
         q = np.asarray(q, float); v_b = np.asarray(v_b, float)[:2]
         d_ref = np.array([float(X[-1][0, 2] - X[0][0, 2]), float(X[-1][1, 2] - X[0][1, 2])])   # s147d：以「要去的方向」（參考視窗走向）判並行，不用實際速度（被側移推向行人方向後又被當同向、被帶走 3 m）
         v_al = d_ref / float(np.linalg.norm(d_ref)) * max(float(np.linalg.norm(v_b)), 0.06) if float(np.linalg.norm(d_ref)) > 0.10 else np.zeros(2)
+        self._d_ref = d_ref
         al = self._alongside(q, v_al, obs)
         if al is not None or getattr(self, 'along', None) is not None:   # 同向並行（s113d：相對速度≈0 ⇒ 最近接近預測不觸發，被行人帶著走 30 s）
             return self._apply_along(t, q, X, al)
