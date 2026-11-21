@@ -35,6 +35,7 @@ H_FQ, H_FQ_TOL, H_FSUM = 0.0018, 0.0006, 1.0                         # 把手夾
 Q_UNFOLD = np.array([float(x) for x in os.environ.get('DR_Q_UNFOLD', '-0.0128,-0.0519,0.086,0.0116,-1.6249,-0.0018').split(',')])   # 抓把手前展開到原收臂構型（第二十三趟：緊湊收臂直接接近 ⇒ 自身淨空 4.9 mm）
 UNFOLD_TOL = 0.03
 OBS_QD = float(os.environ.get('DR_OBS_QD', '0.6'))                    # 俯視關節空間移動峰速上限（rad/s）
+UNF_QD = float(os.environ.get('DR_UNF_QD', '1.2'))                    # 展開關節空間峰速（rad/s）：Howard「依照硬體限制」，Lite 6 手冊 180°/s＝3.14 rad/s，取 38%（原沿用俯視 0.6 ⇒ 展開 7.25 s，照導航接近時底盤已到站等手臂）
 W_Q_OBS = float(os.environ.get('DR_W_Q_OBS', '5.0'))
 W_Q_APP = float(os.environ.get('DR_W_Q_APP', '0.0'))                  # 把手接近的關節姿態引導權重（s52：1.0 時引導解與實際底盤位不符 ⇒ 接近誤差 110 mm 未到位；預設關）
 OBS_BUMP = float(os.environ.get('DR_OBS_BUMP', '0.05'))              # 俯視接近路徑上拱（m）
@@ -64,6 +65,8 @@ class DrawerCtrl(PK.TablePickCtrl):
         if app.get('drawer_pose') is not None:                       # 視覺估計的抽屜位姿（監督融合把手偵測）⇒ 淨空模型與把手幾何依此
             D.set_pose(*[float(x) for x in app['drawer_pose']])
             self._ev('pick_dr_pose_vision', pose=[round(float(x), 4) for x in app['drawer_pose']])
+        self.flow = app.get('flow')                                   # Howard 11/21 晚：把手也照導航移動中抓（底盤參考＝導航前端；把手附近只改偏航與限速；閉爪看狀態；不畫經過線）
+        self._flow_w = 0.0
         self.q_unf0 = None
         if os.environ.get('PASS_Q_STOW') and float(np.abs(np.asarray(src.s, float) - Q_UNFOLD).max()) > UNFOLD_TOL and app.get('motm') is None:   # 緊湊收臂導航 ⇒ 先關節空間展開（移動中抓取不展開：接近段直接姿態引導，展開與底盤移動重疊）
             self.phase, self.T_unf = 'UNFOLD', None
@@ -104,6 +107,7 @@ class DrawerCtrl(PK.TablePickCtrl):
             self.T_rel0 = None
             self.t = float(t0)
             self.motm, self.m_s0, self.m_t0 = None, None, None          # s90d：把手移動中路線參考不可帶進後續段
+            self.flow, self._flow_w = app.get('flow'), 0.0               # 關抽屜再夾把手：同樣照導航移動中抓
             self._goto('UNFOLD', task='close', open0=round(self.open0, 4))
             return
         elif kind == 'marker' and self.task == 'observe' and self.phase == 'OBSERVE':
@@ -114,6 +118,7 @@ class DrawerCtrl(PK.TablePickCtrl):
         else:
             self._ev('pick_dr_app_ignored', kind=kind, task=self.task, phase=self.phase)
             return
+        self.flow = None                                              # 觀察位／夾筆：不照導航（底盤收斂到選位）
         self.motm, self.m_s0, self.m_t0 = None, None, None              # s90d：把手 MotM 路線參考（s 隨時間增長）殘留到夾筆接近 ⇒ 底盤 0.26 m/s 往 +y 衝、link4 擦櫃側板
         self.app_prof = dict(base_goal=list(app['base_goal']), door=None)
         self.T_app, self.T_b, self.t_l0 = float(app['T']), float(app['T_b']), float(app['t_l0'])
@@ -196,7 +201,7 @@ class DrawerCtrl(PK.TablePickCtrl):
             if self.phase == 'UNFOLD':
                 if self.q_unf0 is None:
                     self.q_unf0 = np.asarray(q[3:], float).copy()
-                    self.T_unf = 1.875 * float(np.abs(Q_UNFOLD - self.q_unf0).max()) / OBS_QD + 0.5
+                    self.T_unf = 1.875 * float(np.abs(Q_UNFOLD - self.q_unf0).max()) / UNF_QD + 0.5
                 if el >= self.T_unf and float(np.abs(np.asarray(q[3:], float) - Q_UNFOLD).max()) <= UNFOLD_TOL:
                     self.T_rel0 = np.linalg.inv(_T3(q[:3])) @ K.fk(q, 'link_tcp')   # 接近剖面自展開後的構型起算（同拍 _solve 即用；s57 設 None ⇒ 崩潰）
                     self._goto('APPROACH', unfold_s=round(el, 2))
@@ -329,7 +334,7 @@ class DrawerCtrl(PK.TablePickCtrl):
                 return super()._solve(q)
             finally:
                 C0.W_FAR = w_far
-        if self.task == 'marker' or (self.task == 'handle' and self.phase in ('APPROACH', 'CLOSE', 'ALIGN')):
+        if self.task == 'marker' or (self.task == 'handle' and (self.phase in ('APPROACH', 'CLOSE', 'ALIGN') or (self.flow and self.phase == 'CONFIRM'))):   # 照導航：確認夾住時底盤仍照導航（限速），TCP 世界固定在把手
             return super()._solve(q)
         qp, sp = self._pred(q)
         t_eff = self.t + D_STEPS * PHYS
@@ -341,7 +346,7 @@ class DrawerCtrl(PK.TablePickCtrl):
         if self.task == 'handle' and self.phase == 'UNFOLD':
             if self.q_unf0 is None:
                 self.q_unf0 = np.asarray(q[3:], float).copy()
-                self.T_unf = 1.875 * float(np.abs(Q_UNFOLD - self.q_unf0).max()) / OBS_QD + 0.5
+                self.T_unf = 1.875 * float(np.abs(Q_UNFOLD - self.q_unf0).max()) / UNF_QD + 0.5
             Ts = [K.fk(np.r_[np.zeros(3), self._unf_q(t_eff + k * DT)], 'link_tcp') for k in range(XO.N + 1)]
             q_post = np.array([self._unf_q(t_eff + (k + 1) * DT) for k in range(XO.N)])
             tcp_rel, w_p = True, C0.W_FAR                             # 底盤照導航前端／收斂到把手底盤位（nav_window）
@@ -389,7 +394,7 @@ class DrawerCtrl(PK.TablePickCtrl):
             umin0, src = float('nan'), 'anchor' if self.phase != 'PULL' else 'pull'
             w_p = C0.W_NEAR if self.phase in ('CONFIRM', 'PULL', 'OBSERVE') else C0.W_FAR
         arm = dict(mode='active', K=K, tcp='link_tcp', q_arm=qp[3:], s_arm=sp, u_arm_prev=self.u_prev[3:], model=self.cfg.arm_model, T_seq=np.array(Ts), w_p=w_p,
-                   lo=XO.LITE6_SAFE.lower, hi=XO.LITE6_SAFE.upper, tcp_rel_base=tcp_rel, qp_solver='gi', **B.W_ARM)
+                   lo=PK.arm_lim(qp[3:])[0], hi=PK.arm_lim(qp[3:])[1], tcp_rel_base=tcp_rel, qp_solver='gi', **B.W_ARM)
         if q_post is not None:
             arm.update(q_post=q_post, w_q=W_Q_OBS)
         mpc = self.mpc

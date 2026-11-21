@@ -45,6 +45,13 @@ APP_GATE_D0, APP_GATE_D1 = 0.70, 0.12                                 # 收斂�
 APP_GATE_CAP_S = 30.0
 FLOW_D0, FLOW_LINE_TOL = float(os.environ.get('PICK_FLOW_D0', '1.2')), float(os.environ.get('PICK_FLOW_LINE_TOL', '0.02'))
 FLOW_D1, FLOW_MISS_R = float(os.environ.get('PICK_FLOW_D1', '0.30')), float(os.environ.get('PICK_FLOW_MISS_R', '0.50'))   # 照導航移動中夾取：到站半徑（路徑不一定正好穿過抓取點）、錯過判定                                                 # 狀態閘門下的總安全逾時（名目時長之後）
+LIM_PAD = float(os.environ.get('PICK_LIM_PAD', '0.02'))               # 手臂關節位置界限內縮（rad）：s162d 茶几照導航接近 j3 名目 2.87、界限 2.936，在途命令積分越界 ⇒ setpoint_limit 停
+
+
+def arm_lim(qa):
+    """QP 用的關節位置界限：機器安全界限內縮 LIM_PAD；目前值已在內縮帶內 ⇒ 該側放寬到目前值（不讓 QP 不可行）。"""
+    qa = np.asarray(qa, float)
+    return np.minimum(XO.LITE6_SAFE.lower + LIM_PAD, qa), np.maximum(XO.LITE6_SAFE.upper - LIM_PAD, qa)
 DR_APP_GATE = APP_GATE and os.environ.get('DR_APP_GATE', '1') == '1'   # 抽屜把手（開、關）也用狀態閘門（Isaac 53：底盤 t=159 到位後照 17.6 s 時間表伸手、停 16 s）
 T_BMIN = float(os.environ.get('PICK_T_BMIN', '2.5'))                  # 伸手進度 0→1 至少這麼久（s131d：已到站時目標一步跳到把手 ⇒ 全身 QP 走貼近自身的路徑、自身淨空 4.3 mm）
 T_LINE_S = max(0.8, D_LINE / 0.06)                                    # 抓取線（預抓→抓取 D_LINE）時長：由狀態觸發後走完
@@ -456,7 +463,7 @@ class TablePickCtrl(P.DoorPassCtrl):
                 if self._t_arr is not None and getattr(self, '_t_line0', None) is None and float(np.linalg.norm(Tc[:3, 3] - self._T_line(D_LINE)[:3, 3])) <= (FLOW_LINE_TOL if self.flow else 0.01):
                     self._t_line0 = self.t
                     self._ev('pick_line_start', el=round(el, 2))
-            if (fy_ is not None and ((not gated_ and el >= self.T_app - T_SETTLE) or (gated_ and getattr(self, '_t_line0', None) is not None and ep < AIM_START_M) or (self.motm is not None and ep < AIM_START_M))) or (self.flow and getattr(self, '_t_line0', None) is not None and ep < 0.03):   # 照導航夾取：底盤在動，手臂追蹤穩態偏差（s159d 13 mm）⇒ 同把手的積分瞄準補償   # 瞄準補償（積分；移動中抓取窗短 ⇒ 誤差 <1 cm 即開始累積）：Isaac 手臂穩態誤差約 3 mm（第三十五趟 approach_not_reached 3.31 mm）⇒ 指令目標加上累積誤差，判定仍用真目標
+            if (fy_ is not None and ((not gated_ and el >= self.T_app - T_SETTLE) or (gated_ and getattr(self, '_t_line0', None) is not None and ep < AIM_START_M) or (self.motm is not None and ep < AIM_START_M))) or (self.flow and getattr(self, '_t_line0', None) is not None and self.t - self._t_line0 >= T_LINE_S and ep < 0.03 and getattr(self, '_vtcp_last', 9.0) <= 0.02):   # 照導航夾取：底盤在動，手臂追蹤穩態偏差（s159d 13 mm）⇒ 同把手的積分瞄準補償   # 瞄準補償（積分；移動中抓取窗短 ⇒ 誤差 <1 cm 即開始累積）：Isaac 手臂穩態誤差約 3 mm（第三十五趟 approach_not_reached 3.31 mm）⇒ 指令目標加上累積誤差，判定仍用真目標   # s163d：抓取線還在走（暫態落後 20 mm）就積分 ⇒ 補償飽和 +15 mm、過衝夾空 ⇒ 抓取線走完且 TCP 幾乎不動（穩態偏差）才積分
                 ao_ = getattr(self, 'aim_off', np.zeros(3))
                 self.aim_off = np.clip(ao_ + AIM_K * (self.T_grasp[:3, 3] - Tc[:3, 3]), -(0.02 if self.flow else AIM_MAX), (0.02 if self.flow else AIM_MAX))
             if fy_ is not None:                                       # 固定橫桿（抽屜把手）：沿兩指開合軸（TCP y）誤差另設門檻（Isaac 33b／34b：5 mm 球內閉爪、開合軸偏 ~2 mm ⇒ 單指接觸、證據逾時）
@@ -464,6 +471,7 @@ class TablePickCtrl(P.DoorPassCtrl):
                 ep_ok = ep_ok and ep_fy <= fy_
             v_tcp = float(np.linalg.norm(Tc[:3, 3] - self._tc_prev)) / (NPH * PHYS) if getattr(self, '_tc_prev', None) is not None else 9.0
             self._tc_prev = Tc[:3, 3].copy()
+            self._vtcp_last = v_tcp
             path_ok = self.motm is not None and self.motm.get('path') and self.m_s0 is not None and v_tcp <= 0.02   # 依導航路徑：TCP 已到位且相對目標（世界固定）幾乎不動 ⇒ 即閉爪，不等名目時刻（Howard 11/20 時機由狀態決定）
             gate_ok = gated_ and self._t_arr is not None and getattr(self, '_t_line0', None) is not None and self.t - self._t_line0 >= T_LINE_S and v_tcp <= 0.02   # 狀態閘門：抓取線走完、TCP 到位幾乎不動 ⇒ 即閉爪
             if (el >= self.T_app or path_ok or gate_ok) and ep_ok and er <= 3.0:
@@ -649,7 +657,7 @@ class TablePickCtrl(P.DoorPassCtrl):
                     Tg_ = self.T_grasp.copy(); Tg_[:3, 3] = Tg_[:3, 3] + self.aim_off   # 把手閉爪（及照導航夾取）：沿用瞄準補償（凍結）
                 Ts = [Tg_] * (XO.N + 1)
             arm = dict(mode='active', K=K, tcp='link_tcp', q_arm=qp[3:], s_arm=sp, u_arm_prev=self.u_prev[3:], model=self.cfg.arm_model, T_seq=np.array(Ts),
-                       w_p=C0.W_NEAR if (self.phase != 'APPROACH' or (self.flow and getattr(self, '_t_arr', None) is not None)) else C0.W_FAR, lo=XO.LITE6_SAFE.lower, hi=XO.LITE6_SAFE.upper,
+                       w_p=C0.W_NEAR if (self.phase != 'APPROACH' or (self.flow and getattr(self, '_t_arr', None) is not None)) else C0.W_FAR, lo=arm_lim(qp[3:])[0], hi=arm_lim(qp[3:])[1],
                        tcp_rel_base=bool((self.motm is not None or self.flow) and self.phase in ('LIFT', 'VERIFY')), qp_solver='gi', **B.W_ARM)
             qpf = getattr(self, 'app_qpost', None)                       # 選用：接近段關節姿態引導（抽屜把手；圓柱流程不設 ⇒ 不變）
             if qpf is not None and self.phase == 'APPROACH':
@@ -657,7 +665,7 @@ class TablePickCtrl(P.DoorPassCtrl):
         elif self.phase == 'CARRY':
             Ts = [self._carry_target(t_eff + k * DT) for k in range(XO.N + 1)]
             arm = dict(mode='active', K=K, tcp='link_tcp', q_arm=qp[3:], s_arm=sp, u_arm_prev=self.u_prev[3:], model=self.cfg.arm_model, T_seq=np.array(Ts), w_p=C0.W_FAR,
-                       lo=XO.LITE6_SAFE.lower, hi=XO.LITE6_SAFE.upper, tcp_rel_base=True, qp_solver='gi', **B.W_ARM)
+                       lo=arm_lim(qp[3:])[0], hi=arm_lim(qp[3:])[1], tcp_rel_base=True, qp_solver='gi', **B.W_ARM)
         mpc = self.mpc
         u_min_saved = np.asarray(mpc.cfg.u_min, float).copy()
         u_max_saved = np.asarray(mpc.cfg.u_max, float).copy()
@@ -731,7 +739,7 @@ class TablePickCtrl(P.DoorPassCtrl):
             qs = [self.bin_target] * (XO.N + 1)                       # 解除／張爪／落下：保持放置構型
         Ts = [K.fk(np.r_[np.zeros(3), qk], 'link_tcp') for qk in qs]
         arm = dict(mode='active', K=K, tcp='link_tcp', q_arm=qp[3:], s_arm=sp, u_arm_prev=self.u_prev[3:], model=self.cfg.arm_model, T_seq=np.array(Ts),
-                   w_p=C0.W_FAR, lo=XO.LITE6_SAFE.lower, hi=XO.LITE6_SAFE.upper, tcp_rel_base=True, qp_solver='gi', q_post=np.array(qs[1:]), w_q=5.0, **B.W_ARM)
+                   w_p=C0.W_FAR, lo=arm_lim(qp[3:])[0], hi=arm_lim(qp[3:])[1], tcp_rel_base=True, qp_solver='gi', q_post=np.array(qs[1:]), w_q=5.0, **B.W_ARM)
         mpc = self.mpc
         u_min_saved = np.asarray(mpc.cfg.u_min, float).copy()
         u_max_saved = np.asarray(mpc.cfg.u_max, float).copy()

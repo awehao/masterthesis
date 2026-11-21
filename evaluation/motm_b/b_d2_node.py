@@ -54,6 +54,7 @@ HO_LEAD = int(os.environ.get('B_HO_LEAD', '3'))
 PICK_FLOW = os.environ.get('PICK_FLOW', '0') == '1'                 # Howard 11/21 晚：移動中夾取但不要經過線——底盤照導航（目標＝下一站、途經抓取點附近），夾時才轉、限速，閉爪看狀態
 FLOW_V = float(os.environ.get('PICK_FLOW_V', '0.06'))                 # 抓取點附近底盤限速（m/s）
 FLOW_AHEAD = float(os.environ.get('PICK_FLOW_AHEAD', '0.35'))         # 途經點＝抓取點沿行進方向再往前（讓路徑穿過抓取點、不在抓取點停）
+DR_FLOW = PICK_FLOW and os.environ.get('DR_FLOW', '1') == '1'        # 抽屜把手（開、關）同樣照導航：邊走邊展開（早送封包），導航目標＝把手底盤位，近把手只轉偏航與限速，閉爪看狀態
 DOOR_LINE = os.environ.get('B_DOOR_LINE', '0') == '1'               # Howard 11/21「門把要移動中抓」：沿門前走廊經過抓取（不收斂到站位）
 DOOR_LINE_PRE = float(os.environ.get('B_DOOR_LINE_PRE', '0.7'))       # 走廊起點＝抓取底盤位沿門往回（m）
 DOOR_LINE_SEND = float(os.environ.get('B_DOOR_LINE_SEND', '0.9'))
@@ -1200,7 +1201,7 @@ def main():
                 return
             if PICK_FLOW and getattr(self, '_flow_next', None) is not None and not self.pick_via:
                 self.next_via, self._flow_next = self._flow_next, None   # 抓取點途經點走完 ⇒ 接往下一站的途經點
-            if PICK_FLOW and '"what": "pick_flow_missed"' in (self.xstate or '') and not getattr(self, '_flow_missed', False):
+            if PICK_FLOW and getattr(self, 'chain', 'cyl') != 'drawer' and '"what": "pick_flow_missed"' in (self.xstate or '') and not getattr(self, '_flow_missed', False):   # 抽屜段：錯過 ⇒ 控制器自行收斂（導航目標本來就是把手底盤位）
                 self._flow_missed = True                               # 經過時沒夾到 ⇒ 退回收斂：導航目標＝抓取點（到點停），清途經點
                 b_m_ = _T3(self.T_mo_now) @ _T3(np.asarray(self.pick_sel['base'], float))
                 self.pick_goal, self.pick_via, self.next_via, self._flow_next, self.pass_t = [float(b_m_[0, 3]), float(b_m_[1, 3]), math.atan2(b_m_[1, 0], b_m_[0, 0])], [], [], None, t
@@ -1304,6 +1305,17 @@ def main():
                            env=round(sel.get('env', sel.get('env_min', 0.0)), 4), motm=DR_MOTM_V is not None, ms=round(dr['box']['ms'] if dr['box'] else 0, 1))
             elif st == 'handle_nav' and CHAIN and getattr(self, 'n_stowed', 0) < 1:
                 pass                                                   # 串接：圓柱放盒後收臂未完成 ⇒ 先不送抽屜封包（執行端只在收臂完成後接受）
+            elif st == 'handle_nav' and DR_FLOW:                     # 照導航抓把手：展開＋伸手要在到把手底盤位前完成 ⇒ 送封包距離＝目前速度×展開時間＋0.3＋伸手起始距離（由狀態決定）
+                hist_ = [h for h in getattr(self, '_xy_hist', []) if t - h[0] <= 1.0] + [(t, self.b_od_now[:3].copy())]; self._xy_hist = hist_
+                dd_ = float(np.hypot(*(self.b_od_now[:2] - np.asarray(dr['sel']['base'][:2], float))))
+                q_unf_ = [float(x) for x in os.environ.get('DR_Q_UNFOLD', '-0.0128,-0.0519,0.086,0.0116,-1.6249,-0.0018').split(',')]
+                rd_ = self._reach_dist(q_unf_, extra_s=0.0)[0] + float(os.environ.get('PICK_FLOW_D0', '1.2'))
+                if dd_ <= rd_:
+                    sel = dr['sel']
+                    self._dr_send('drawer', sel['base'], t, T_grasp=sel['T_grasp'], q_grasp=sel.get('q_grasp'), pull=[float(R_.D.PULL[0]), float(R_.D.PULL[1])], open_m=float(R_.OPEN_M), drawer_pose=dr.get('pose_vis'),
+                                  flow=dict(b0=[float(x) for x in sel['base'][:3]], v_cap=FLOW_V, r_turn=1.3, r_in=0.4))
+                    dr['stage'] = 'wait_release'
+                    self.event('dr_flow_sent', dist=round(dd_, 3), rd=round(rd_, 3))
             elif st == 'handle_nav' and DR_MOTM_V is not None:         # 移動中抓把手：近路線起點、偏航齊（或已停 1.5 s）⇒ 送封包（控制器沿路線帶過把手）
                 bs_ = np.asarray(dr['sel']['base_start'], float)
                 dist_ = float(np.hypot(*(self.b_od_now[:2] - bs_[:2])))
@@ -1377,7 +1389,8 @@ def main():
                     Tg_ = np.asarray(dr['sel']['T_grasp'], float).copy(); Tg_[:3, 3] = Tg_[:3, 3] + qo_ * np.asarray(R_.D.PULL, float)
                 self.pick_goal, self.pass_t = self._dr_goal(b1_), t
                 dr['goal_od'] = list(b1_)
-                self._dr_send('dr_close', b1_, t, T_grasp=Tg_.tolist(), pull=[float(R_.D.PULL[0]), float(R_.D.PULL[1])], q_open=qo_)
+                self._dr_send('dr_close', b1_, t, T_grasp=Tg_.tolist(), pull=[float(R_.D.PULL[0]), float(R_.D.PULL[1])], q_open=qo_,
+                              **(dict(flow=dict(b0=[float(x) for x in b1_[:3]], v_cap=FLOW_V, r_turn=1.3, r_in=0.4)) if DR_FLOW else {}))
                 dr['stage'] = 'closing'
                 self.event('dr_close_sent', q_open=round(qo_, 4), base=[round(float(x), 4) for x in b1_])
             elif st == 'wait_release' and 'pick_dr_released' in dr:
