@@ -440,7 +440,15 @@ class MovingGraspCtrl:
             in_blend = (te0 - float(ap_.get('t0', 0.0))) < float(ap_['T_b'])
             arm = dict(mode='active', K=K, tcp='link_tcp', q_arm=qp[3:], s_arm=sp, u_arm_prev=self.u_prev[3:], model=self.cfg.arm_model, T_seq=np.array(Ts), w_p=C0.W_FAR if in_blend else C0.W_NEAR,
                        lo=XO.LITE6_SAFE.lower, hi=XO.LITE6_SAFE.upper, tcp_rel_base=False, qp_solver='gi', **B.W_ARM)
-            if in_blend and getattr(self, 'w_post', 0.0) > 0.0:       # 門旁分支姿態偏好（只引導分支）：時域末端目標在末端參考底盤上的門旁 IK
+            if ap_.get('line') is not None and getattr(self, 'w_post', 0.0) > 0.0 and in_blend:   # 走廊經過（s155d：沿走廊移動中逐拍接續 IK ⇒ j6 一路轉到限位）：固定引導到「抓取底盤位 b0 上的門旁抓取解」
+                if getattr(self, '_q_line', None) is None:
+                    b0_ = np.asarray(ap_['line']['b0'], float)
+                    qg_, rg_ = self._ik(b0_, self.T_at(self.handle_ref(), float(ap_.get('s_final', 0.0))), np.array([-0.354, -0.088, 1.435, -1.421, -0.358, -0.157]))
+                    self._q_line = np.asarray(qg_, float).copy() if (rg_ < 1e-6 and np.isfinite(qg_).all()) else False
+                    self._ev('door_line_qpost', ok=self._q_line is not False, resid=round(float(rg_), 7), q=None if self._q_line is False else [round(float(x), 3) for x in self._q_line])
+                if self._q_line is not False:
+                    arm.update(q_post=np.tile(self._q_line, (XO.N, 1)), w_q=float(self.w_post))
+            elif in_blend and getattr(self, 'w_post', 0.0) > 0.0:       # 門旁分支姿態偏好（只引導分支）：時域末端目標在末端參考底盤上的門旁 IK
                 seed_ = self.q_post if getattr(self, 'q_post', None) is not None else np.array([-0.354, -0.088, 1.435, -1.421, -0.358, -0.157])
                 bN = np.array(self._xref_cache[1][-1])
                 qN, rN = self._ik(bN, Ts[-1], seed_)
