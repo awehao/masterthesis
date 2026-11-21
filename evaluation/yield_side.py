@@ -171,7 +171,7 @@ class YieldSide:
                 best = (u, n, c, dist, need)
         return best
 
-    def _crossing(self, q, e, obs):
+    def _crossing(self, q, e, obs, sticky=False):
         """橫越衝突：回 dict(n, c_lat, need, sg, sig_in, a, sp) 或 None。只用追蹤速度 ≥ V_MIN 的群（不用相對運動代替）。
         機器人在行人帶外、參考走向 e 朝帶內；機器人以 CROSS_V 走完帶的時段與行人佔用交點的時段（各加餘裕）重疊 ⇒ 衝突。"""
         best = None
@@ -198,7 +198,8 @@ class YieldSide:
                 continue
             tw0, tw1 = (a - need) / sp, (a + need) / sp
             tr0, tr1 = max(sig_in, 0.0) / CROSS_V, sig_out / CROSS_V
-            if tw0 > CROSS_LOOK or tr1 + CROSS_MARGIN_S < tw0 or tr0 > tw1 + CROSS_MARGIN_S:
+            look_, mg_ = (CROSS_LOOK + 3.0, CROSS_MARGIN_S + 0.5) if sticky else (CROSS_LOOK, CROSS_MARGIN_S)   # 等待中放寬（s167d：預測窗邊界上 0.6–2.8 s 開關閃爍）
+            if tw0 > look_ or tr1 + mg_ < tw0 or tr0 > tw1 + mg_:
                 continue
             if best is None or tw0 < best['tw0']:
                 best = dict(n=n, c_lat=c_lat, need=need, sg=1.0 if s_q > 0 else -1.0, sig_in=sig_in, a=a, sp=sp, tw0=tw0, tr1=tr1, u=u)
@@ -212,7 +213,7 @@ class YieldSide:
                 self.log.append(dict(t=round(t, 2), what='yield_cross_hold', a=round(cr['a'], 3), tw0=round(cr['tw0'], 2), tr1=round(cr['tr1'], 2), sp=round(cr['sp'], 3), sig_in=round(cr['sig_in'], 3), need=round(cr['need'], 3)))
             self.cross.update(cr=cr, t_seen=t)
         C = self.cross
-        if t - C['t_seen'] > 0.5 or t - C['t0'] > CROSS_MAX_S:
+        if t - C['t_seen'] > 1.0 or t - C['t0'] > CROSS_MAX_S:
             self.log.append(dict(t=round(t, 2), what='yield_cross_release', held_s=round(t - C['t0'], 2)))
             self.cross = None
             return None
@@ -275,7 +276,7 @@ class YieldSide:
         v_al = d_ref / float(np.linalg.norm(d_ref)) * max(float(np.linalg.norm(v_b)), 0.06) if float(np.linalg.norm(d_ref)) > 0.10 else np.zeros(2)
         self._d_ref = d_ref
         if CROSS and self.lock is None and getattr(self, 'along', None) is None and float(np.linalg.norm(d_ref)) > 0.10:   # 橫越：路徑上等（優先於側移選邊；側移中／並行中不切換）
-            cr = self._crossing(q, d_ref / float(np.linalg.norm(d_ref)), obs)
+            cr = self._crossing(q, d_ref / float(np.linalg.norm(d_ref)), obs, sticky=getattr(self, 'cross', None) is not None)
             if cr is not None or getattr(self, 'cross', None) is not None:
                 r_ = self._apply_cross(t, q, X, cr)
                 if r_ is not None:

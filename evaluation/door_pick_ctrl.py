@@ -467,6 +467,11 @@ class TablePickCtrl(P.DoorPassCtrl):
             if (fy_ is not None and ((not gated_ and el >= self.T_app - T_SETTLE) or (gated_ and getattr(self, '_t_line0', None) is not None and ep < AIM_START_M) or (self.motm is not None and ep < AIM_START_M))) or (self.flow and getattr(self, '_t_line0', None) is not None and self.t - self._t_line0 >= T_LINE_S and ep < 0.03 and getattr(self, '_vtcp_last', 9.0) <= 0.02):   # 照導航夾取：底盤在動，手臂追蹤穩態偏差（s159d 13 mm）⇒ 同把手的積分瞄準補償   # 瞄準補償（積分；移動中抓取窗短 ⇒ 誤差 <1 cm 即開始累積）：Isaac 手臂穩態誤差約 3 mm（第三十五趟 approach_not_reached 3.31 mm）⇒ 指令目標加上累積誤差，判定仍用真目標   # s163d：抓取線還在走（暫態落後 20 mm）就積分 ⇒ 補償飽和 +15 mm、過衝夾空 ⇒ 抓取線走完且 TCP 幾乎不動（穩態偏差）才積分
                 ao_ = getattr(self, 'aim_off', np.zeros(3))
                 self.aim_off = np.clip(ao_ + AIM_K * (self.T_grasp[:3, 3] - Tc[:3, 3]), -(0.02 if self.flow else AIM_MAX), (0.02 if self.flow else AIM_MAX))
+            elif self.flow and fy_ is not None and gated_ and self._t_arr is not None and getattr(self, '_t_line0', None) is None and getattr(self, '_vtcp_last', 9.0) <= 0.02:   # 照導航抓把手：停在預抓點時的穩態下垂（Isaac 84 z −9.9 mm 持續 5 s）⇒ 對預抓點積分同一瞄準補償，抓取線沿用
+                Tpre_ = self._T_line(D_LINE)[:3, 3]
+                if float(np.linalg.norm(Tc[:3, 3] - Tpre_)) < 0.02 + float(np.abs(getattr(self, 'aim_off', np.zeros(3))).max()):
+                    ao_ = getattr(self, 'aim_off', np.zeros(3))
+                    self.aim_off = np.clip(ao_ + AIM_K * (Tpre_ - Tc[:3, 3]), -0.02, 0.02)
             if fy_ is not None:                                       # 固定橫桿（抽屜把手）：沿兩指開合軸（TCP y）誤差另設門檻（Isaac 33b／34b：5 mm 球內閉爪、開合軸偏 ~2 mm ⇒ 單指接觸、證據逾時）
                 ep_fy = abs(float((self.T_grasp[:3, :3].T @ (Tc[:3, 3] - self.T_grasp[:3, 3]))[1]))
                 ep_ok = ep_ok and ep_fy <= fy_
