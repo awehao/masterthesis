@@ -687,6 +687,9 @@ class TablePickCtrl(P.DoorPassCtrl):
         if obs is None:
             return None, 'nav_obstacles_stale'
         self.app_prof = None
+        if BIN_MOVE and src == 'nav':                                   # s150d：放盒中底盤照導航（限速 0.15）沒接會車選邊 ⇒ 橫越行人從側後方追上撞到；同 RETURN 段接上
+            X = list(X)
+            P.yield_apply(self, qp, X, obs)
         if not BIN_MOVE:
             X = [XO.from_xytheta(*self.b_anchor)] * (XO.N + 1)
             xi = [np.zeros(3)] * (XO.N + 1)
