@@ -1056,6 +1056,10 @@ def main():
                     def _sel(box=self.pick_box, c=est, b=b_now):
                         w0 = time.perf_counter()
                         box['sel'] = CR.select(c[:2], b) if PICK_MOTM_V is None else CR.select_motm(c[:2], b, PICK_MOTM_V, goal_next=np.asarray(DR_PRIOR[:2], float) if CHAIN else None)
+                        if box['sel'] is None and PICK_LINE:            # Howard 11/21「不要寫死」：位置隨機時可能沒有可行經過線 ⇒ 退回收斂抓取選位（不中止）
+                            box['sel'] = CR.select(c[:2], b)
+                            if box['sel'] is not None:
+                                box['sel']['convergent'] = True
                         box['ms'] = (time.perf_counter() - w0) * 1e3; box['done'] = True
                     self.pick_th = threading.Thread(target=_sel, daemon=True); self.pick_th.start()
                     self.event('pick_estimate', c_map=[round(float(x), 4) for x in c_map], n_obs=len(self.cyl_obs))
@@ -1064,7 +1068,7 @@ def main():
                 if sel is None:
                     self.event('pick_unreachable', c_map=[round(float(x), 4) for x in self.pick_box['c_map']], ms=round(self.pick_box['ms'], 1))
                     self.abort('pick_unreachable'); return
-                Tbm_ = _T3(self.T_mo_now) @ _T3(sel['base_start'] if PICK_MOTM_V is not None else sel['base'])   # 選位結果（里程）→ 地圖（只給 Smac）；移動中夾取＝路線起點
+                Tbm_ = _T3(self.T_mo_now) @ _T3(sel['base_start'] if (PICK_MOTM_V is not None and not sel.get('convergent')) else sel['base'])   # 選位結果（里程）→ 地圖（只給 Smac）；移動中夾取＝路線起點
                 self.pick_sel = sel; self.pick_goal = [float(Tbm_[0, 3]), float(Tbm_[1, 3]), math.atan2(Tbm_[1, 0], Tbm_[0, 0])]; self.pass_t = t
                 self.pick_via = [list(p) for p in (sel.get('via') or [])]   # 依可走路線的途經點（里程；Isaac 39–46 Smac 鑽茶几角與未知箱之間的窄縫）
                 self.event('pick_goal', base=[round(float(x), 4) for x in sel['base']], side=sel['side'], flip=sel['flip'], sigma_min=round(sel['sigma_min'], 4), ms=round(self.pick_box['ms'], 1), route_len=None if sel.get('route_len') is None else round(float(sel['route_len']), 3), via=self.pick_via)
@@ -1090,7 +1094,7 @@ def main():
                     if r_ is not None:
                         self.p_ho.publish(String(data=json.dumps(dict(what='pick_app', app=dict(kind='path_ext', motm=r_)))))
                     self.event('path_ext_sent' if r_ is not None else 'path_ext_none', ms=round(pe_['ms'], 1), res=None if r_ is None else {k: r_[k] for k in ('b0', 'e', 'v_g', 's_feas', 's_grasp')})
-            if self.pick_sel is not None and self.pick_app_t is None and PICK_MOTM_V is not None:   # 移動中夾取：近路線起點即送封包（底盤由控制器沿路線帶過抓取位，不停）
+            if self.pick_sel is not None and self.pick_app_t is None and PICK_MOTM_V is not None and not self.pick_sel.get('convergent'):   # 移動中夾取：近路線起點即送封包（底盤由控制器沿路線帶過抓取位，不停）
                 bs_ = np.asarray(self.pick_sel['base_start'], float)
                 dist_ = float(np.hypot(*(self.b_od_now[:2] - bs_[:2])))
                 dyaw_c_ = abs((float(self.b_od_now[2]) - float(bs_[2]) + math.pi) % (2 * math.pi) - math.pi)

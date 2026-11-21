@@ -48,8 +48,10 @@ if os.environ.get('CYL_XY'):
     CYL_XY = np.array([float(x) for x in os.environ['CYL_XY'].split(',')])
 else:                                                                 # 桌面隨機（Howard 11/17「隨機放」；seed 登錄）
     _rc = np.random.default_rng(CYL_SEED)
-    CYL_XY = np.array([_rc.uniform(_TAB['c'][0] - _TAB['s'][0] / 2 + CYL_MARGIN, _TAB['c'][0] + _TAB['s'][0] / 2 - CYL_MARGIN),
-                       _rc.uniform(_TAB['c'][1] - _TAB['s'][1] / 2 + CYL_MARGIN, _TAB['c'][1] + _TAB['s'][1] / 2 - CYL_MARGIN)])
+    _E = os.environ.get('CYL_SIDE') == 'east'                         # CYL_SIDE＝east：右側邊緣帶隨機（同 Isaac；Howard 11/21）
+    _YM = 0.25 if _E else CYL_MARGIN
+    CYL_XY = np.array([_rc.uniform(_TAB['c'][0] + _TAB['s'][0] / 2 - 0.18 if _E else _TAB['c'][0] - _TAB['s'][0] / 2 + CYL_MARGIN, _TAB['c'][0] + _TAB['s'][0] / 2 - CYL_MARGIN),
+                       _rc.uniform(_TAB['c'][1] - _TAB['s'][1] / 2 + _YM, _TAB['c'][1] + _TAB['s'][1] / 2 - _YM)])
 CYL_Z0 = float(_TAB['s'][2]) + CYL_H / 2
 WALKERS = os.environ.get('D2_WALKERS', '0') == '1'
 _OB = json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '..', _SC['obstacles']['path']))) if WALKERS else {'walkers': []}
