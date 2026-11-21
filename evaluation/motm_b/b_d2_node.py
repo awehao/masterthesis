@@ -1117,7 +1117,13 @@ def main():
                         return
                     if t - getattr(self, '_line_scan_t', -9.0) >= 1.0:     # Isaac 64：選線時雷射被茶几擋、沒看到 unknown_l5 ⇒ 經過線起點貼箱、併線鑽縫（淨空 0.100 中止）⇒ 接近中每秒以最新雷射更新未知點
                         self._line_scan_t = t
-                        self._CR.set_scan_pts(self._scan_pts_od())
+                        Pn_ = self._scan_pts_od(); Pp_ = getattr(self, '_line_scan_prev', None); self._line_scan_prev = Pn_
+                        if Pn_ is not None and Pp_ is not None and len(Pn_) and len(Pp_):   # s145d：走道口的行人被當成未知箱 ⇒ 只留 1 s 前也在（6 cm 內）的點＝靜止物
+                            Pp2_ = np.asarray(Pp_, float); Pn2_ = np.asarray(Pn_, float)
+                            keep_ = np.array([float(np.min(np.hypot(Pp2_[:, 0] - p_[0], Pp2_[:, 1] - p_[1]))) < 0.06 for p_ in Pn2_])
+                            self._CR.set_scan_pts(Pn2_[keep_] if keep_.any() else None)
+                        else:
+                            return
                         b0c_ = np.asarray(self.pick_sel['base'], float); ec_ = np.asarray(self.pick_sel['e'], float)
                         s1c_ = float(PICK_MOTM_V) * float(self._CR.MOTM_T_WIN)
                         blk_ = not self._CR.line_scan_ok(b0c_, ec_, float(self.pick_sel['s_start']), s1c_)   # 與選線同一式（s141d：多核尾段 ⇒ 重選出的線又判被擋、反覆重選）
@@ -1140,7 +1146,7 @@ def main():
                         s_r_ = float(self._CR.MOTM_S0) - 0.05 - float(PICK_MOTM_V) * float(self._CR.MOTM_T_ARM)
                         G_ = MM_.merge_geom(self.b_od_now[:2], mvd_ if float(np.linalg.norm(mvd_)) > 0.02 else np.zeros(2), b0l_, el_, s_cap=s_r_)
                         pts_ = MM_.poly(G_, float(self._CR.MOTM_S0))
-                        ok_ = all(self._CR.base_clear(np.r_[p_, 0.0], PICK_LINE_MARGIN) and self._CR.scan_free(p_, float(self._CR.SCAN_CLEAR_EXT)) for p_ in pts_[1:])
+                        ok_ = G_['s_p'] <= s_r_ - 0.05 and all(self._CR.base_clear(np.r_[p_, 0.0], PICK_LINE_MARGIN) and self._CR.scan_free(p_, float(self._CR.SCAN_CLEAR_EXT)) for p_ in pts_[1:])   # s145d：已越過伸手點才送 ⇒ 併線不成立
                         if not ok_ and t - getattr(self, '_line_wait_ev', -9.0) > 2.0:
                             self._line_wait_ev = t
                             self.event('pick_line_wait', dist=round(dist_, 3), lat=round(G_['lat'], 3), s_m=round(G_['s_m'], 3))

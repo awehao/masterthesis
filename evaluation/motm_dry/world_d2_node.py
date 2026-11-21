@@ -545,7 +545,7 @@ class WorldD2(Node):
                             self.ev('release_committed')
                             self.ctl('unbind', req_n=int(self.n))
                         for e_ in (rec.get('events') or []):
-                            if str(e_.get('what', '')).startswith(('pass_', 'pick_')):
+                            if str(e_.get('what', '')).startswith(('pass_', 'pick_', 'yield', 'ref_still', 'ret_cbf', 'furn_ref', 'next_via', 'no_path')):   # 11/21：會車選邊與診斷事件原本被濾掉（Isaac 62／70 誤判「沒有事件」）
                                 self.ev(e_['what'], **{('ctrl_' + k_ if k_ in ('t', 'n', 'what') else k_): v_ for k_, v_ in e_.items() if k_ != 'what'})
                     elif was == 'nominal':
                         self.tail_props, self.tail_k0 = runner.tail_props(runner.tail, D_STEPS) if runner.tail is not None else [], k
