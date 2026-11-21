@@ -23,7 +23,7 @@ PAD = float(os.environ.get('YS_PAD', '0.25'))
 WALL_PAD = float(os.environ.get('YS_WALL_PAD', '0.14'))           # 目標點與側移路徑：底盤中心離地圖障礙 ≥0.30＋0.14（控制器底盤淨空門檻 0.10＋餘裕；Isaac 37 回程側移經床頭櫃 0.0954 被停）
 RATE = float(os.environ.get('YS_RATE', '0.25'))
 R_BASE = 0.30
-ALONG_MAX_S = float(os.environ.get('YS_ALONG_MAX_S', '10.0'))         # 同向並行讓行的安全時限（s）
+ALONG_MAX_S = float(os.environ.get('YS_ALONG_MAX_S', '6.0'))         # 同向並行讓行的安全時限（s）
 R_MIN = float(os.environ.get('YS_R_MIN', '0.25'))                     # 行人半徑下限（追蹤器回報的半徑偏小，s94d need 只有 0.45＜真實 0.55）
 
 _MAP = None
@@ -104,6 +104,10 @@ def _interval(gp, n, q_xy=None):
     return sc - R_MIN, sc + R_MIN
 
 
+ALONG_PAD = float(os.environ.get('YS_ALONG_PAD', '0.10'))
+ALONG_COS = math.cos(math.radians(float(__import__('os').environ.get('YS_ALONG_DEG', '30'))))
+
+
 class YieldSide:
     def __init__(self):
         self.lock = None                                              # dict(name_key, n, s_tgt)
@@ -144,12 +148,13 @@ class YieldSide:
         best = None
         for gp in _groups(obs):
             vo = gp['v']; sp = float(np.linalg.norm(vo))
-            if sp < V_MIN or float(np.dot(v_b, vo / sp)) < 0.05:
+            nb_ = float(np.linalg.norm(v_b))
+            if sp < V_MIN or nb_ < 0.05 or float(np.dot(v_b / nb_, vo / sp)) < ALONG_COS:   # s147d：橫越的行人（夾角 45°）也被當同向並行 ⇒ 進度被釘、卡 10 s ⇒ 只在夾角 ≤30° 時算並行
                 continue
             u = vo / sp; n = np.array([-u[1], u[0]])
             lo, hi = _interval(gp, n, q[:2])
             c = float((gp['P'] @ u).mean()) * u + 0.5 * (lo + hi) * n
-            need = R_BASE + 0.5 * (hi - lo) + PAD
+            need = R_BASE + 0.5 * (hi - lo) + ALONG_PAD                # s147d：側向 0.8 m 平行經過也被當成在行人帶內 ⇒ 進度被釘 8 s；只在真的同一條帶（餘裕 0.10）才算
             dist = float(np.linalg.norm(c - q[:2]))
             lat = abs(float((q[:2] - c) @ n)); alg = abs(float((q[:2] - c) @ u))
             if lat < need and alg < need + 0.5 and (best is None or dist < best[3]):   # s115d：只在真的落在行人帶內才算（側向 0.9 m 外也鎖 ⇒ 卡 130 s）
@@ -190,7 +195,9 @@ class YieldSide:
         if not ENABLE:
             return None
         q = np.asarray(q, float); v_b = np.asarray(v_b, float)[:2]
-        al = self._alongside(q, v_b, obs)
+        d_ref = np.array([float(X[-1][0, 2] - X[0][0, 2]), float(X[-1][1, 2] - X[0][1, 2])])   # s147d：以「要去的方向」（參考視窗走向）判並行，不用實際速度（被側移推向行人方向後又被當同向、被帶走 3 m）
+        v_al = d_ref / float(np.linalg.norm(d_ref)) * max(float(np.linalg.norm(v_b)), 0.06) if float(np.linalg.norm(d_ref)) > 0.10 else np.zeros(2)
+        al = self._alongside(q, v_al, obs)
         if al is not None or getattr(self, 'along', None) is not None:   # 同向並行（s113d：相對速度≈0 ⇒ 最近接近預測不觸發，被行人帶著走 30 s）
             return self._apply_along(t, q, X, al)
         c = self._conflict(q, v_b, obs, any_ds=self.lock is not None)
