@@ -244,7 +244,7 @@ class TablePickCtrl(P.DoorPassCtrl):
             s_ = D_LINE * (1.0 - XE.minjerk(u)[0])
             Tl = self._T_line(max(s_, 0.0))
         ao_ = getattr(self, 'aim_off', None)
-        if ao_ is not None and getattr(self, 'app_tol_fy', None) is not None and float(np.abs(ao_).max()) > 0.0:
+        if ao_ is not None and (getattr(self, 'app_tol_fy', None) is not None or getattr(self, 'flow', None)) and float(np.abs(ao_).max()) > 0.0:
             Tl = Tl.copy(); Tl[:3, 3] = Tl[:3, 3] + ao_                 # 瞄準補償只加在指令目標
         if beta >= 1.0 - 1e-12:
             return Tl
@@ -456,9 +456,9 @@ class TablePickCtrl(P.DoorPassCtrl):
                 if self._t_arr is not None and getattr(self, '_t_line0', None) is None and float(np.linalg.norm(Tc[:3, 3] - self._T_line(D_LINE)[:3, 3])) <= (FLOW_LINE_TOL if self.flow else 0.01):
                     self._t_line0 = self.t
                     self._ev('pick_line_start', el=round(el, 2))
-            if fy_ is not None and ((not gated_ and el >= self.T_app - T_SETTLE) or (gated_ and getattr(self, '_t_line0', None) is not None and ep < AIM_START_M) or (self.motm is not None and ep < AIM_START_M)):   # 瞄準補償（積分；移動中抓取窗短 ⇒ 誤差 <1 cm 即開始累積）：Isaac 手臂穩態誤差約 3 mm（第三十五趟 approach_not_reached 3.31 mm）⇒ 指令目標加上累積誤差，判定仍用真目標
+            if (fy_ is not None and ((not gated_ and el >= self.T_app - T_SETTLE) or (gated_ and getattr(self, '_t_line0', None) is not None and ep < AIM_START_M) or (self.motm is not None and ep < AIM_START_M))) or (self.flow and getattr(self, '_t_line0', None) is not None and ep < 0.03):   # 照導航夾取：底盤在動，手臂追蹤穩態偏差（s159d 13 mm）⇒ 同把手的積分瞄準補償   # 瞄準補償（積分；移動中抓取窗短 ⇒ 誤差 <1 cm 即開始累積）：Isaac 手臂穩態誤差約 3 mm（第三十五趟 approach_not_reached 3.31 mm）⇒ 指令目標加上累積誤差，判定仍用真目標
                 ao_ = getattr(self, 'aim_off', np.zeros(3))
-                self.aim_off = np.clip(ao_ + AIM_K * (self.T_grasp[:3, 3] - Tc[:3, 3]), -AIM_MAX, AIM_MAX)
+                self.aim_off = np.clip(ao_ + AIM_K * (self.T_grasp[:3, 3] - Tc[:3, 3]), -(0.02 if self.flow else AIM_MAX), (0.02 if self.flow else AIM_MAX))
             if fy_ is not None:                                       # 固定橫桿（抽屜把手）：沿兩指開合軸（TCP y）誤差另設門檻（Isaac 33b／34b：5 mm 球內閉爪、開合軸偏 ~2 mm ⇒ 單指接觸、證據逾時）
                 ep_fy = abs(float((self.T_grasp[:3, :3].T @ (Tc[:3, 3] - self.T_grasp[:3, 3]))[1]))
                 ep_ok = ep_ok and ep_fy <= fy_
@@ -481,7 +481,7 @@ class TablePickCtrl(P.DoorPassCtrl):
             elif self.motm is not None and el > self.T_app + MOTM_CLOSE_LATE_S:
                 self._stop('motm_window_missed', ep_mm=round(ep * 1e3, 2), er_deg=round(er, 2), s=round(self._motm_s(self.t), 4))
             elif gated_:                                                # 狀態閘門：底盤到站後才計抓取逾時（安全總時限另保留）
-                if (self._t_arr is not None and self.t - self._t_arr > PH_TO_S + T_SETTLE + 2.0) or el > self.T_app + APP_GATE_CAP_S:
+                if (self._t_arr is not None and self.t - self._t_arr > PH_TO_S + T_SETTLE + 2.0 and not self.flow) or el > self.T_app + APP_GATE_CAP_S:   # 照導航：到站逾時不停（由錯過判定退回收斂）
                     self._stop('approach_not_reached', ep_mm=round(ep * 1e3, 2), er_deg=round(er, 2), gated=True)
             elif el > self.T_app + PH_TO_S:
                 self._stop('approach_not_reached', ep_mm=round(ep * 1e3, 2), er_deg=round(er, 2))
@@ -645,8 +645,8 @@ class TablePickCtrl(P.DoorPassCtrl):
                 Ts = [self._lift_target(t_eff + k * DT) if self.phase == 'LIFT' else self._lift_target(self.t_ph0 + T_LIFT + 1.0) for k in range(XO.N + 1)]
             else:
                 Tg_ = self.T_grasp
-                if getattr(self, 'app_tol_fy', None) is not None and getattr(self, 'aim_off', None) is not None:
-                    Tg_ = self.T_grasp.copy(); Tg_[:3, 3] = Tg_[:3, 3] + self.aim_off   # 把手閉爪：沿用瞄準補償（凍結）
+                if (getattr(self, 'app_tol_fy', None) is not None or self.flow) and getattr(self, 'aim_off', None) is not None:
+                    Tg_ = self.T_grasp.copy(); Tg_[:3, 3] = Tg_[:3, 3] + self.aim_off   # 把手閉爪（及照導航夾取）：沿用瞄準補償（凍結）
                 Ts = [Tg_] * (XO.N + 1)
             arm = dict(mode='active', K=K, tcp='link_tcp', q_arm=qp[3:], s_arm=sp, u_arm_prev=self.u_prev[3:], model=self.cfg.arm_model, T_seq=np.array(Ts),
                        w_p=C0.W_NEAR if (self.phase != 'APPROACH' or (self.flow and getattr(self, '_t_arr', None) is not None)) else C0.W_FAR, lo=XO.LITE6_SAFE.lower, hi=XO.LITE6_SAFE.upper,
