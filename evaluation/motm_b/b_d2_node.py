@@ -1086,7 +1086,7 @@ def main():
                     if CHAIN:
                         self.pick_goal = list(DR_PRIOR)
                 self.event('pick_goal', base=[round(float(x), 4) for x in sel['base']], side=sel['side'], flip=sel['flip'], sigma_min=round(sel['sigma_min'], 4), ms=round(self.pick_box['ms'], 1), route_len=None if sel.get('route_len') is None else round(float(sel['route_len']), 3), via=self.pick_via)
-            if PICK_PATH and not PICK_LINE and self.pick_sel is not None:   # 依導航路徑的移動中抓取：記錄實際行進方向；近抓取位 PATH_EXT_R 時線上算經過方向／速度送執行端
+            if PICK_PATH and not PICK_LINE and not PICK_FLOW and self.pick_sel is not None:   # PICK_FLOW：不用 path_ext（那也是控制器自算直線帶底盤，Howard 11/21 不要）   # 依導航路徑的移動中抓取：記錄實際行進方向；近抓取位 PATH_EXT_R 時線上算經過方向／速度送執行端
                 hist_ = [h for h in getattr(self, '_xy_hist', []) if t - h[0] <= 1.0] + [(t, self.b_od_now[:3].copy())]; self._xy_hist = hist_
                 pe_ = getattr(self, 'path_box', None)
                 b0p_ = np.asarray(self.pick_sel['base'], float)
