@@ -52,7 +52,7 @@ NOPATH_RECOVER = os.environ.get('B_NOPATH_RECOVER', '1') == '1'       # 穿門�
 NOPATH_S = float(os.environ.get('B_NOPATH_S', '4.0'))
 HO_LEAD = int(os.environ.get('B_HO_LEAD', '3'))
 PICK_FLOW = os.environ.get('PICK_FLOW', '0') == '1'                 # Howard 11/21 晚：移動中夾取但不要經過線——底盤照導航（目標＝下一站、途經抓取點附近），夾時才轉、限速，閉爪看狀態
-FLOW_V = float(os.environ.get('PICK_FLOW_V', '0.08'))                 # 抓取點附近底盤限速（m/s）
+FLOW_V = float(os.environ.get('PICK_FLOW_V', '0.06'))                 # 抓取點附近底盤限速（m/s）
 FLOW_AHEAD = float(os.environ.get('PICK_FLOW_AHEAD', '0.35'))         # 途經點＝抓取點沿行進方向再往前（讓路徑穿過抓取點、不在抓取點停）
 DOOR_LINE = os.environ.get('B_DOOR_LINE', '0') == '1'               # Howard 11/21「門把要移動中抓」：沿門前走廊經過抓取（不收斂到站位）
 DOOR_LINE_PRE = float(os.environ.get('B_DOOR_LINE_PRE', '0.7'))       # 走廊起點＝抓取底盤位沿門往回（m）
@@ -1218,7 +1218,7 @@ def main():
                     self.pick_Tg_od = Tg_od.copy()
                     app = dict(T_grasp=Tg_od.tolist(), base_goal=[float(Tb_od[0, 3]), float(Tb_od[1, 3]), math.atan2(Tb_od[1, 0], Tb_od[0, 0])], T=Tapp, T_b=max(1.5, Tapp - 1.5), t_l0=max(0.5, Tapp - 2.5))
                     if PICK_FLOW and self.pick_sel.get('e') is not None and not self.pick_sel.get('convergent') and not getattr(self, '_flow_missed', False):
-                        app['flow'] = dict(b0=app['base_goal'], v_cap=FLOW_V, r_turn=1.0, r_in=0.35)   # 底盤照導航；控制器只在抓取點附近改偏航與限速
+                        app['flow'] = dict(b0=app['base_goal'], v_cap=FLOW_V, r_turn=1.3, r_in=0.4)   # 底盤照導航；控制器只在抓取點附近改偏航與限速
                     self.p_ho.publish(String(data=json.dumps(dict(what='pick_app', app=app))))
                     self.pick_app_t = t
                     self.event('pick_app_sent', dist=round(dist_, 3), T=round(Tapp, 3))

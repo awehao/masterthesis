@@ -43,6 +43,7 @@ PH_TO_S = 4.0
 APP_GATE = os.environ.get('PICK_PATH') == '1' and os.environ.get('PICK_APP_GATE', '1') == '1'
 APP_GATE_D0, APP_GATE_D1 = 0.70, 0.12                                 # 收斂接近：參考底盤離抓取站位 ≤0.70 m 才開始伸手、≤0.12 m 才走最後抓取線
 APP_GATE_CAP_S = 30.0
+FLOW_D0, FLOW_LINE_TOL = float(os.environ.get('PICK_FLOW_D0', '1.2')), float(os.environ.get('PICK_FLOW_LINE_TOL', '0.02'))
 FLOW_D1, FLOW_MISS_R = float(os.environ.get('PICK_FLOW_D1', '0.30')), float(os.environ.get('PICK_FLOW_MISS_R', '0.50'))   # 照導航移動中夾取：到站半徑（路徑不一定正好穿過抓取點）、錯過判定                                                 # 狀態閘門下的總安全逾時（名目時長之後）
 DR_APP_GATE = APP_GATE and os.environ.get('DR_APP_GATE', '1') == '1'   # 抽屜把手（開、關）也用狀態閘門（Isaac 53：底盤 t=159 到位後照 17.6 s 時間表伸手、停 16 s）
 T_BMIN = float(os.environ.get('PICK_T_BMIN', '2.5'))                  # 伸手進度 0→1 至少這麼久（s131d：已到站時目標一步跳到把手 ⇒ 全身 QP 走貼近自身的路徑、自身淨空 4.3 mm）
@@ -234,7 +235,8 @@ class TablePickCtrl(P.DoorPassCtrl):
         if self._app_gated():                                           # Isaac 43：時間表 β 在繞茶几角時已 0.68 ⇒ TCP 追蹤把全身拉向桌子另一側的圓柱、蓋過軟 CBF。Howard 11/20「何時伸手依剩餘距離」⇒ 伸手與抓取線都由參考底盤到抓取站位的距離決定（時間表只當上限）
             d_ = float(math.hypot(Xk[0] - self._bg[0], Xk[1] - self._bg[1]))
             d1_ = FLOW_D1 if getattr(self, 'flow', None) else APP_GATE_D1
-            p_ = min(max((APP_GATE_D0 - d_) / (APP_GATE_D0 - d1_), 0.0), 1.0)
+            d0_ = FLOW_D0 if getattr(self, 'flow', None) else APP_GATE_D0   # 照導航：提早伸手（經過時手臂已到位）
+            p_ = min(max((d0_ - d_) / (d0_ - d1_), 0.0), 1.0)
             p_ = min(p_, getattr(self, '_bp', 0.0) + max(t_abs - self.t, 0.0) / T_BMIN)   # 進度限速（狀態觸發、不一步跳）
             beta = XE.minjerk(p_)[0]   # 只看狀態（Isaac 53 抽屜：時間表上限使手臂在底盤到位後再慢慢伸 16 s）
             tl0 = getattr(self, '_t_line0', None)
@@ -437,7 +439,8 @@ class TablePickCtrl(P.DoorPassCtrl):
             fy_ = getattr(self, 'app_tol_fy', None)
             gated_ = self._app_gated()
             if gated_:                                                  # 伸手進度：實際底盤距離決定、每拍至多前進 DT/T_BMIN
-                pd_ = min(max((APP_GATE_D0 - float(math.hypot(q[0] - self._bg[0], q[1] - self._bg[1]))) / (APP_GATE_D0 - (FLOW_D1 if self.flow else APP_GATE_D1)), 0.0), 1.0)
+                d0g_ = FLOW_D0 if self.flow else APP_GATE_D0
+                pd_ = min(max((d0g_ - float(math.hypot(q[0] - self._bg[0], q[1] - self._bg[1]))) / (d0g_ - (FLOW_D1 if self.flow else APP_GATE_D1)), 0.0), 1.0)
                 self._bp = min(max(pd_, getattr(self, '_bp', 0.0)), getattr(self, '_bp', 0.0) + NPH * PHYS / T_BMIN)
             if gated_:                                                  # 狀態閘門：底盤到站、TCP 到預抓點 ⇒ 啟動抓取線
                 if self.flow:                                          # 照導航：偏航權重只增不減（經過抓取點後不轉回）；錯過偵測（已到站但底盤離開 0.45 m 仍未閉爪 ⇒ 退回收斂）
@@ -450,7 +453,7 @@ class TablePickCtrl(P.DoorPassCtrl):
                 if self._t_arr is None and float(math.hypot(q[0] - self._bg[0], q[1] - self._bg[1])) <= (FLOW_D1 if self.flow else APP_GATE_D1):
                     self._t_arr = self.t
                     self._ev('pick_base_arrived', el=round(el, 2))
-                if self._t_arr is not None and getattr(self, '_t_line0', None) is None and float(np.linalg.norm(Tc[:3, 3] - self._T_line(D_LINE)[:3, 3])) <= 0.01:
+                if self._t_arr is not None and getattr(self, '_t_line0', None) is None and float(np.linalg.norm(Tc[:3, 3] - self._T_line(D_LINE)[:3, 3])) <= (FLOW_LINE_TOL if self.flow else 0.01):
                     self._t_line0 = self.t
                     self._ev('pick_line_start', el=round(el, 2))
             if fy_ is not None and ((not gated_ and el >= self.T_app - T_SETTLE) or (gated_ and getattr(self, '_t_line0', None) is not None and ep < AIM_START_M) or (self.motm is not None and ep < AIM_START_M)):   # 瞄準補償（積分；移動中抓取窗短 ⇒ 誤差 <1 cm 即開始累積）：Isaac 手臂穩態誤差約 3 mm（第三十五趟 approach_not_reached 3.31 mm）⇒ 指令目標加上累積誤差，判定仍用真目標
@@ -646,7 +649,7 @@ class TablePickCtrl(P.DoorPassCtrl):
                     Tg_ = self.T_grasp.copy(); Tg_[:3, 3] = Tg_[:3, 3] + self.aim_off   # 把手閉爪：沿用瞄準補償（凍結）
                 Ts = [Tg_] * (XO.N + 1)
             arm = dict(mode='active', K=K, tcp='link_tcp', q_arm=qp[3:], s_arm=sp, u_arm_prev=self.u_prev[3:], model=self.cfg.arm_model, T_seq=np.array(Ts),
-                       w_p=C0.W_NEAR if self.phase != 'APPROACH' else C0.W_FAR, lo=XO.LITE6_SAFE.lower, hi=XO.LITE6_SAFE.upper,
+                       w_p=C0.W_NEAR if (self.phase != 'APPROACH' or (self.flow and getattr(self, '_t_arr', None) is not None)) else C0.W_FAR, lo=XO.LITE6_SAFE.lower, hi=XO.LITE6_SAFE.upper,
                        tcp_rel_base=bool((self.motm is not None or self.flow) and self.phase in ('LIFT', 'VERIFY')), qp_solver='gi', **B.W_ARM)
             qpf = getattr(self, 'app_qpost', None)                       # 選用：接近段關節姿態引導（抽屜把手；圓柱流程不設 ⇒ 不變）
             if qpf is not None and self.phase == 'APPROACH':
