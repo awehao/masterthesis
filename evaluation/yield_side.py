@@ -104,6 +104,7 @@ def _interval(gp, n, q_xy=None):
     return sc - R_MIN, sc + R_MIN
 
 
+NO_BACK = os.environ.get('YS_NO_BACK', '1') == '1'
 ALONG_PAD = float(os.environ.get('YS_ALONG_PAD', '0.10'))
 ALONG_COS = math.cos(math.radians(float(__import__('os').environ.get('YS_ALONG_DEG', '30'))))
 
@@ -204,7 +205,7 @@ class YieldSide:
         v_al = d_ref / float(np.linalg.norm(d_ref)) * max(float(np.linalg.norm(v_b)), 0.06) if float(np.linalg.norm(d_ref)) > 0.10 else np.zeros(2)
         self._d_ref = d_ref
         al = self._alongside(q, v_al, obs)
-        if al is not None or getattr(self, 'along', None) is not None:   # 同向並行（s113d：相對速度≈0 ⇒ 最近接近預測不觸發，被行人帶著走 30 s）
+        if self.lock is None and (al is not None or getattr(self, 'along', None) is not None):   # s153d：橫越選邊鎖定中又進並行（選邊互相矛盾）⇒ 鎖定時不進並行   # 同向並行（s113d：相對速度≈0 ⇒ 最近接近預測不觸發，被行人帶著走 30 s）
             return self._apply_along(t, q, X, al)
         c = self._conflict(q, v_b, obs, any_ds=self.lock is not None)
         if c is not None and self.lock is None:
@@ -221,7 +222,7 @@ class YieldSide:
             if cands:
                 cands.sort()
                 _, _, sg, s_t, cl = cands[0]
-                self.lock = dict(n=n, sg=sg, s_t=s_t, t0=t)
+                self.lock = dict(n=n, sg=sg, s_t=s_t, t0=t, lo=lo, hi=hi)
                 self.off = 0.0
                 self.log.append(dict(t=round(t, 2), what='yield_lock', side=sg, s_now=round(s_now, 3), s_tgt=round(s_t, 3), lo=round(lo, 3), hi=round(hi, 3), ts=round(ts, 2), ds=round(ds, 3), n_cand=len(cands), clear=round(cl, 2)))
             else:
@@ -255,13 +256,17 @@ class YieldSide:
                 if float(n @ L['n']) < 0.0:                          # 法向翻轉（速度方向估計反向）⇒ 換到同一參考
                     n, lo, hi = -n, -hi, -lo
                 L['s_t'] = (hi + R_BASE + PAD) if L['sg'] > 0 else (lo - R_BASE - PAD)
-                L['n'] = n
+                L['n'], L['lo'], L['hi'] = n, lo, hi
                 self.off = min(self.off + RATE * dt, 1.5)
             n, sg = L['n'], L['sg']
+            s_now_ = float(q[:2] @ n)
+            s_t_ = L['s_t']
+            if NO_BACK and sg * (s_t_ - s_now_) > 0.0 and sg * (s_now_ - 0.5 * (L.get('lo', s_now_) + L.get('hi', s_now_))) > 0.0:
+                s_t_ = s_now_                                         # Howard 11/21「倒退閃避」：已在選定側但比安全距離近 ⇒ 停在目前側向位置等行人過，不往回退
             shift = 0.0
             for Xk in X:                                              # 各參考點側向座標至少達 s_t（鎖定側），平移量上限＝爬升量 off
                 s_k = float(np.array([Xk[0, 2], Xk[1, 2]]) @ n)
-                d_k = min(max(0.0, sg * (L['s_t'] - s_k)), self.off)
+                d_k = min(max(0.0, sg * (s_t_ - s_k)), self.off)
                 Xk[0, 2] += sg * d_k * n[0]
                 Xk[1, 2] += sg * d_k * n[1]
                 shift = max(shift, d_k)
