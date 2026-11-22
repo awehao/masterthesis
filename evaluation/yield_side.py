@@ -117,6 +117,7 @@ CROSS_LOOK = float(os.environ.get('YS_CROSS_LOOK', '8.0'))
 CROSS_BEHIND_PAD = float(os.environ.get('YS_CROSS_BEHIND_PAD', '0.10'))   # 行人已過交點後從它後面過的餘裕（m）
 CROSS_STOP_PAD = float(os.environ.get('YS_CROSS_STOP_PAD', '0.20'))   # 等待停止線＝need＋此值（s168d：0.05 時 CBF 仍推）
 PIN_AHEAD = os.environ.get('YS_PIN_AHEAD', '1') == '1'
+V_WIN = float(os.environ.get('YS_V_WIN', '1.0'))                    # 行人速度＝群中心位移的時間窗（s）
 V_TAU = float(os.environ.get('YS_V_TAU', '0.6'))                    # 行人群速度平滑時間常數（s）
 CROSS_SLOW = os.environ.get('YS_CROSS_SLOW', '1') == '1'             # 橫越：可算出行人通過時刻 ⇒ 減速使抵達停止線時剛好清空，不先衝到線再停
 CROSS_REL_S = float(os.environ.get('YS_CROSS_REL_S', '0.5'))         # 橫越等待：衝突消失多久放行（原 1.0）
@@ -145,9 +146,13 @@ class YieldSide:
                 d_ = float(np.linalg.norm(tr['m'] + tr['v'] * dt_ - m_))
                 if d_ < bd:
                     best, bd = tr, d_
-            v_ = gp['v'] if best is None else best['v'] + a_ * (gp['v'] - best['v'])
+            h_ = ([] if best is None else [x for x in best['h'] if float(t) - x[0] <= V_WIN + 0.5]) + [(float(t), m_)]
+            v_m = gp['v']
+            if float(t) - h_[0][0] >= 0.8 * V_WIN:                     # s178d：移動中感測時追蹤速度 0.525（真值 0.19）⇒ 改用群中心在 V_WIN 秒內的位移（世界座標，與機器人運動無關）
+                v_m = (m_ - h_[0][1]) / (float(t) - h_[0][0])
+            v_ = v_m if best is None else best['v'] + a_ * (v_m - best['v'])
             gp['v_raw'] = gp['v']; gp['v'] = v_
-            new.append(dict(m=m_, v=v_))
+            new.append(dict(m=m_, v=v_, h=h_))
         self._trk, self._G, self._t_G = new, G, float(t)
 
     def _conflict(self, q, v_b, obs, any_ds=False):
@@ -176,7 +181,7 @@ class YieldSide:
             if vv < 1e-6:
                 continue
             ts = -float(p @ vr) / vv
-            if not (0.0 < ts < T_LOOK):
+            if not (0.0 < ts < T_LOOK + (2.0 if any_ds else 0.0)):   # s178d：鎖定中 ts 在 4.5–5.0 s 邊界上 ⇒ 每 0.1 s 鎖／放；鎖定後預測窗延長 2 s（遲滯）
                 continue
             ds = float(np.linalg.norm(p + vr * ts))
             need = R_BASE + rad + PAD
