@@ -1,0 +1,213 @@
+% !TeX program = xelatex
+% 第三章開頭與 3.1 完整初稿，接在第二章之後。
+% 章、節及公式均由 LaTeX 自動編號，不手動寫入數字。
+% 需要 amsmath、amssymb（學姐範本已有），不新增自訂數學巨集。
+% 引用鍵：tang2024gmpc（第一章共用）、sola2018micro（本次新增）。
+
+\chapter{研究方法與全身模型預測控制器設計}
+\label{c:methodology}
+
+本章以 Tang 等人\cite{tang2024gmpc}提出之幾何模型預測控制為基礎，針對動態室內環境中的自主移動機械臂，設計結合命令執行模型之全身預測控制器。控制器依據底盤與手臂狀態、導航參考、視覺目標及障礙資訊，共同求解底盤速度與手臂位置設定點變化率，以協調導航、目標接近及受約束操作。
+
+本章首先建立底盤與手臂運動學，以及描述手臂位置命令追蹤特性的增廣預測模型，接著定義控制目標與限制條件，再說明動態避障、視覺導引及受約束操作之整合，最後介紹命令執行動態補償與整體控制流程。
+
+\section{底盤幾何運動與全身運動學}
+\label{sec:wholebody_kinematics}
+
+移動機械臂之末端運動同時受到底盤位姿與手臂構型影響。本節以底盤的三個平面運動自由度及手臂的六個旋轉關節建立全身運動學，作為導航與操作共同預測的基礎。夾爪開合則依抓持階段另外處理，不納入本節的九維運動學變數。
+
+% 3.1.1 座標系定義與位姿表示
+\subsection{座標系定義與位姿表示}
+\label{subsec:frames_pose_representation}
+
+定義世界座標系 $\mathcal{F}_{W}$、底盤平面座標系 $\mathcal{F}_{B}$、手臂基座座標系 $\mathcal{F}_{A}$，以及末端工具中心點（Tool Center Point, TCP）座標系 $\mathcal{F}_{E}$。底盤座標系之 $x$ 軸指向前方、$y$ 軸指向左方、$z$ 軸朝上，航向角 $\theta_B$ 依右手定則繞 $z$ 軸定義。底盤平面座標原點位於平面運動基準，底盤高度及手臂安裝偏移納入底盤至手臂基座的固定變換。
+
+以 ${}^{i}T_{j}$ 表示將座標系 $\mathcal{F}_{j}$ 中的點轉換至 $\mathcal{F}_{i}$ 的齊次變換。底盤在世界座標中的平面位姿表示為
+\begin{equation}
+    X_B =
+    \begin{bmatrix}
+        R_B(\theta_B) & p_B \\
+        \mathbf{0}_{1\times 2} & 1
+    \end{bmatrix}
+    \in \mathrm{SE}(2),
+    \qquad
+    R_B(\theta_B) =
+    \begin{bmatrix}
+        \cos\theta_B & -\sin\theta_B \\
+        \sin\theta_B & \cos\theta_B
+    \end{bmatrix},
+    \label{eq:ch3_base_pose}
+\end{equation}
+其中 $p_B=[x_B,y_B]^{\top}$ 為底盤平面位置。透過特殊歐氏群 $\mathrm{SE}(2)$，可將平移與旋轉表示為同一剛體變換；相關指數映射、對數映射及局部擾動工具可參考 Sol\`a 等人\cite{sola2018micro}的整理。
+
+手臂關節角以 $q_a=[q_1,\ldots,q_6]^{\top}\in\mathbb{R}^{6}$ 表示。末端工具之世界位姿則以 ${}^{W}T_E\in\mathrm{SE}(3)$ 描述，包含三維位置 ${}^{W}p_E$ 與姿態 ${}^{W}R_E$。本研究使用的固定安裝變換、關節軸向與 TCP 偏移，由機器人模型的運動鏈取得。
+
+% 3.1.2 底盤 SE(2) 運動模型與追蹤誤差
+\subsection{底盤 SE(2) 運動模型與追蹤誤差}
+\label{subsec:base_se2_model_error}
+
+本研究之全向底盤可在平面內進行前後、側向及旋轉運動。定義底盤本體座標速度及其李代數矩陣為
+\begin{equation}
+    \xi_B =
+    \begin{bmatrix}
+        v_x^B & v_y^B & \omega_B
+    \end{bmatrix}^{\top},
+    \qquad
+    \widehat{\xi}_B =
+    \begin{bmatrix}
+        0 & -\omega_B & v_x^B \\
+        \omega_B & 0 & v_y^B \\
+        0 & 0 & 0
+    \end{bmatrix},
+    \label{eq:ch3_body_velocity_hat}
+\end{equation}
+其中 $v_x^B$、$v_y^B$ 為底盤座標中的平移速度，$\omega_B$ 為偏航角速度。底盤運動學可寫為
+\begin{equation}
+    \dot{X}_B = X_B\widehat{\xi}_B,
+    \qquad
+    \begin{bmatrix}
+        \dot{x}_B \\
+        \dot{y}_B \\
+        \dot{\theta}_B
+    \end{bmatrix}
+    =
+    \begin{bmatrix}
+        \cos\theta_B & -\sin\theta_B & 0 \\
+        \sin\theta_B & \cos\theta_B & 0 \\
+        0 & 0 & 1
+    \end{bmatrix}
+    \xi_B.
+    \label{eq:ch3_base_kinematics}
+\end{equation}
+式\eqref{eq:ch3_base_kinematics}將本體座標速度轉換為世界座標的位置變化率，並保留底盤航向對平移方向的影響。
+
+底盤追蹤之幾何建模以 Tang 等人\cite{tang2024gmpc}提出的 GMPC 為基礎。令 $X_r(t)$ 為參考位姿，$\xi_r(t)$ 為其對應的本體座標速度，滿足 $\dot{X}_r=X_r\widehat{\xi}_r$。定義參考位姿至實際位姿之相對變換與局部誤差為
+\begin{equation}
+    E_B = X_r^{-1}X_B,
+    \qquad
+    e_B = \left(\log E_B\right)^{\vee}
+    =
+    \begin{bmatrix}
+        \rho_x & \rho_y & \varphi
+    \end{bmatrix}^{\top},
+    \label{eq:ch3_geometric_tracking_error}
+\end{equation}
+其中 $(\cdot)^{\vee}$ 為 $(\widehat{\cdot})$ 的反運算，$\rho_x$、$\rho_y$ 為相對變換經對數映射後的平移座標，$\varphi$ 為相對航向角。此平移座標包含相對旋轉的影響，並非直接採用世界座標的位置差。
+
+對 $E_B$ 微分並代入底盤與參考運動學，可得
+\begin{equation}
+    \dot{E}_B
+    = E_B\widehat{\xi}_B-\widehat{\xi}_rE_B.
+    \label{eq:ch3_exact_group_error_dynamics}
+\end{equation}
+令 $\delta\xi=\xi_B-\xi_r$，在 $E_B$ 接近單位矩陣時，以 $E_B\approx I+\widehat{e}_B$ 展開，並忽略誤差與輸入偏差之乘積高階項，可得局部一階模型
+\begin{equation}
+    \begin{aligned}
+        \dot{e}_B
+        &\approx -\operatorname{ad}(\xi_r)e_B+\delta\xi, \\
+        \operatorname{ad}(\xi_r)
+        &=
+        \begin{bmatrix}
+            0 & -\omega_r & v_{y,r} \\
+            \omega_r & 0 & -v_{x,r} \\
+            0 & 0 & 0
+        \end{bmatrix}.
+    \end{aligned}
+    \label{eq:ch3_local_error_dynamics}
+\end{equation}
+此處定義 $\operatorname{ad}(\xi)\eta=([\widehat{\xi},\widehat{\eta}])^{\vee}$，其中 $[A,B]=AB-BA$。因此，式\eqref{eq:ch3_local_error_dynamics}中誤差矩陣的正負號由上述交換子定義決定。
+
+以控制週期 $\Delta t$ 進行前向歐拉離散化，得到
+\begin{equation}
+    \begin{aligned}
+        e_{B,k+1}
+        &= A_{B,k}e_{B,k}+B_B\delta\xi_k, \\
+        A_{B,k}
+        &= I_3-\Delta t\operatorname{ad}(\xi_{r,k}),
+        \qquad B_B=\Delta t I_3.
+    \end{aligned}
+    \label{eq:ch3_discrete_base_error_model}
+\end{equation}
+其中 $k$ 為離散時間索引，$A_{B,k}$ 隨參考速度更新。此模型用於建立有限時域內的底盤誤差預測；對數映射採用主值，局部近似之適用性需配合相對位姿誤差及預測時域評估。
+
+% 3.1.3 移動機械臂正向運動學與全身雅可比矩陣
+\subsection{移動機械臂正向運動學與全身雅可比矩陣}
+\label{subsec:wholebody_fk_jacobian}
+
+為描述三維末端運動，將底盤平面位姿嵌入 $\mathrm{SE}(3)$，得到
+\begin{equation}
+    {}^{W}T_B=
+    \begin{bmatrix}
+        R_z(\theta_B) & t_B \\
+        \mathbf{0}_{1\times 3} & 1
+    \end{bmatrix},
+    \qquad
+    t_B=
+    \begin{bmatrix}
+        x_B & y_B & 0
+    \end{bmatrix}^{\top},
+    \label{eq:ch3_base_pose_se3}
+\end{equation}
+其中 $R_z(\theta_B)$ 為繞三維 $z$ 軸之旋轉矩陣。令 ${}^{B}T_A$ 為底盤至手臂基座的固定變換，${}^{A}T_E(q_a)$ 為包含 TCP 固定偏移的手臂正向運動學，則末端世界位姿為
+\begin{equation}
+    {}^{W}T_E
+    ={}^{W}T_B\,{}^{B}T_A\,{}^{A}T_E(q_a).
+    \label{eq:ch3_wholebody_forward_kinematics}
+\end{equation}
+式\eqref{eq:ch3_wholebody_forward_kinematics}表示相同末端目標可由底盤位姿與手臂構型共同達成，亦說明底盤移動時，手臂需要配合修正其相對構型。
+
+將末端線速度與角速度均表示於世界座標，定義六維幾何速度 ${}^{W}\nu_E$。其與底盤本體速度及實際關節速度之關係為
+\begin{equation}
+    {}^{W}\nu_E
+    =
+    \begin{bmatrix}
+        {}^{W}\dot{p}_E \\
+        {}^{W}\omega_E
+    \end{bmatrix}
+    =
+    \underbrace{
+    \begin{bmatrix}
+        {}^{W}J_B & {}^{W}J_A
+    \end{bmatrix}}_{{}^{W}J_{\mathrm{wb}}}
+    \begin{bmatrix}
+        \xi_B \\
+        \dot{q}_a
+    \end{bmatrix},
+    \label{eq:ch3_wholebody_geometric_velocity}
+\end{equation}
+其中 ${}^{W}J_{\mathrm{wb}}\in\mathbb{R}^{6\times 9}$ 為全身幾何雅可比矩陣，${}^{W}J_B\in\mathbb{R}^{6\times 3}$ 與 ${}^{W}J_A\in\mathbb{R}^{6\times 6}$ 分別描述底盤及手臂對末端運動的影響。此處線速度為 TCP 原點的速度，角速度為末端剛體角速度。
+
+令 ${}^{W}p_E=[x_E,y_E,z_E]^{\top}$，並定義 $r_x=x_E-x_B$、$r_y=y_E-y_B$。由底盤平移與偏航所造成的末端運動，可得
+\begin{equation}
+    {}^{W}J_B=
+    \begin{bmatrix}
+        \cos\theta_B & -\sin\theta_B & -r_y \\
+        \sin\theta_B & \cos\theta_B & r_x \\
+        0 & 0 & 0 \\
+        0 & 0 & 0 \\
+        0 & 0 & 0 \\
+        0 & 0 & 1
+    \end{bmatrix}.
+    \label{eq:ch3_base_geometric_jacobian}
+\end{equation}
+前兩欄將底盤本體座標的平移速度轉換至世界座標，第三欄則描述底盤繞自身原點旋轉所產生的末端線速度與角速度。
+
+對第 $i$ 個旋轉關節，令 ${}^{W}a_i$ 為其單位旋轉軸，${}^{W}o_i$ 為軸上一點，則手臂雅可比之第 $i$ 欄可寫為
+\begin{equation}
+    {}^{W}J_{A,i}=
+    \begin{bmatrix}
+        {}^{W}a_i\times\left({}^{W}p_E-{}^{W}o_i\right) \\
+        {}^{W}a_i
+    \end{bmatrix},
+    \qquad i=1,\ldots,6.
+    \label{eq:ch3_arm_geometric_jacobian_column}
+\end{equation}
+各關節軸與位置由當前運動鏈逐段轉換取得。若以廣義座標 $\chi=[x_B,y_B,\theta_B,q_a^{\top}]^{\top}$ 直接計算雅可比 $J_{\chi}$，則與式\eqref{eq:ch3_wholebody_geometric_velocity}的輸入表示具有下列關係：
+\begin{equation}
+    {}^{W}J_{\mathrm{wb}}
+    =J_{\chi}\operatorname{diag}\!\left(R_B(\theta_B),1,I_6\right).
+    \label{eq:ch3_jacobian_velocity_coordinate_mapping}
+\end{equation}
+因此，世界座標的位置變化率與底盤本體速度須經相應轉換，才能使用同一末端運動方程。
+
+上述運動學以實際關節速度 $\dot{q}_a$ 表示手臂運動。本研究採用位置命令介面，控制器產生的設定點變化率 $u_a$ 需經設定點積分及位置追蹤後才影響實際關節，兩者之關係將於下一節建立，以供全身預測模型使用。
