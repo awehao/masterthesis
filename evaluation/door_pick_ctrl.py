@@ -629,7 +629,7 @@ class TablePickCtrl(P.DoorPassCtrl):
                 Xn_.append(XO.from_xytheta(x_, y_, yaw_ + w_ * ((float(b0f_[2]) - yaw_ + math.pi) % (2 * math.pi) - math.pi)))
             X, xi = Xn_, xi_from_X(Xn_, DT)
             if src == 'nav':
-                P.yield_apply(self, qp, X, obs)
+                P.yield_apply(self, qp, X, obs, xi)
         if self.phase in ('RETURN', 'BIN_MOVE', 'BIN_STOW'):         # 診斷（s137d 回程兩次 9 s 參考不動）：參考視窗幾乎不動 ⇒ 記來源與前端狀態（節流 1 s）
             try:
                 mv_ = float(np.hypot(X[-1][0, 2] - X[0][0, 2], X[-1][1, 2] - X[0][1, 2]))
@@ -645,7 +645,7 @@ class TablePickCtrl(P.DoorPassCtrl):
                 h_ = _dr_handle_xy()                                     # Howard 11/20「朝向由物件與可見性決定」：位置留在導航到點處，偏航轉向櫃體把手估計位置（手腕相機收臂時朝前 ⇒ 把手落在視野中央）
                 self.app_prof = dict(base_goal=[float(qp[0]), float(qp[1]), math.atan2(h_[1] - float(qp[1]), h_[0] - float(qp[0]))] if h_ is not None else list(FACE_DR), door=None)   # s104d：導航到抽屜櫃前粗目標不看偏航（會車後偏 0.8 rad、相機看不到把手）⇒ 到點後同一控制器慢轉到粗目標朝向（只在前端停止更新後作用）
             if src == 'nav':                                          # 會車選邊（s92d：行人 walker_r1 正面迎來、牆側不夠 ⇒ 被推著倒退後接觸）
-                P.yield_apply(self, qp, X, obs)
+                P.yield_apply(self, qp, X, obs, xi)
         arm = dict(mode='hold')
         Xp = [(float(Xk[0, 2]), float(Xk[1, 2]), math.atan2(float(Xk[1, 0]), float(Xk[0, 0]))) for Xk in X]
         if self.phase in ('APPROACH', 'CLOSE', 'CONFIRM', 'LIFT', 'VERIFY'):
@@ -734,7 +734,7 @@ class TablePickCtrl(P.DoorPassCtrl):
         self.app_prof = None
         if BIN_MOVE and src == 'nav':                                   # s150d：放盒中底盤照導航（限速 0.15）沒接會車選邊 ⇒ 橫越行人從側後方追上撞到；同 RETURN 段接上
             X = list(X)
-            P.yield_apply(self, qp, X, obs)
+            P.yield_apply(self, qp, X, obs, xi)
         if not BIN_MOVE:
             X = [XO.from_xytheta(*self.b_anchor)] * (XO.N + 1)
             xi = [np.zeros(3)] * (XO.N + 1)

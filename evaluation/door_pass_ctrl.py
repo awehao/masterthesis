@@ -24,6 +24,7 @@ import numpy as np
 import door_motm_grasp_ctrl as G
 import yield_side as YS
 YS_DOOR_R = float(os.environ.get('YS_DOOR_R', '1.6'))                # 會車側移不作用的門區半徑（離鉸鏈；里程原點≈鉸鏈）
+YS_XI = os.environ.get('YS_XI', '1') == '1'
 if YS.ENABLE:
     YS._load_map()                                                    # 地圖距離場在匯入時建好（不在控制拍內）
 import door_clear_door_fast as CF
@@ -88,8 +89,9 @@ def _exp_R(w):
 
 
 
-def yield_apply(ctrl, qp, X, obs):
-    """會車選邊（yield_side；D2_YIELD_SIDE=1 才作用）：只平移導航參考視窗，事件進控制器紀錄。"""
+def yield_apply(ctrl, qp, X, obs, xi=None):
+    """會車選邊（yield_side；D2_YIELD_SIDE=1 才作用）：只平移導航參考視窗，事件進控制器紀錄。
+    xi（參考體速度，就地改）：參考被改過 ⇒ 依改後位姿重算（s168d：等待時位置釘住、速度前饋仍是導航 0.22 ⇒ 機器人照常前進穿過停止線、被行人帶走）。"""
     if not YS.ENABLE:
         return None
     if math.hypot(float(qp[0]), float(qp[1])) < YS_DOOR_R:              # s116d：門扇（開著、不在地圖）會被側移撞上 ⇒ 鉸鏈 1.6 m 內不做會車側移（門區有門專屬淨空，CBF 照常擋行人）
@@ -106,6 +108,13 @@ def yield_apply(ctrl, qp, X, obs):
     for e_ in ys.log[n0:]:
         e_ = dict(e_); w_ = e_.pop('what'); e_['t_ys'] = e_.pop('t', None)   # 控制器 _ev 自帶 t（s93d：重複關鍵字 ⇒ 工作程序例外）
         ctrl._ev(w_, **e_)
+    if info is not None and xi is not None and YS_XI:
+        X_ = list(X)
+        for k in range(len(X_) - 1):
+            T1 = np.linalg.inv(X_[k]) @ X_[k + 1]
+            xi[k] = np.array([T1[0, 2] / DT, T1[1, 2] / DT, math.atan2(T1[1, 0], T1[0, 0]) / DT])
+        if len(X_) > 1:
+            xi[len(X_) - 1] = np.array(xi[len(X_) - 2], float).copy()
     return info
 
 
@@ -270,7 +279,7 @@ class DoorPassCtrl:
             xi = [np.zeros(3)] * (XO.N + 1)
             umin0, src = float('nan'), 'anchor'
         if src == 'nav':                                              # 會車選邊（s92d）：行人正面迎來且側向不足 ⇒ 依地圖淨空選邊平移參考
-            yield_apply(self, qp, X, obs)
+            yield_apply(self, qp, X, obs, xi)
         arm = dict(mode='hold')
         if self.phase in ('RETREAT', 'STOW'):
             Ts = [self._rel_target(t_eff + k * DT) for k in range(XO.N + 1)]

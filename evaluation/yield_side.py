@@ -115,6 +115,7 @@ CROSS_MARGIN_S = float(os.environ.get('YS_CROSS_MARGIN_S', '1.0'))  # 先過／�
 CROSS_V = float(os.environ.get('YS_CROSS_V', '0.22'))                # 機器人通過行人帶的名目速度（導航名目）
 CROSS_LOOK = float(os.environ.get('YS_CROSS_LOOK', '8.0'))
 CROSS_BEHIND_PAD = float(os.environ.get('YS_CROSS_BEHIND_PAD', '0.10'))   # 行人已過交點後從它後面過的餘裕（m）
+CROSS_STOP_PAD = float(os.environ.get('YS_CROSS_STOP_PAD', '0.20'))   # 等待停止線＝need＋此值（s168d：0.05 時 CBF 仍推）
 PIN_AHEAD = os.environ.get('YS_PIN_AHEAD', '1') == '1'
 CROSS_MAX_S = float(os.environ.get('YS_CROSS_MAX_S', '15.0'))
 
@@ -221,18 +222,18 @@ class YieldSide:
             self.cross = None
             return None
         cr = C['cr']; n, c_lat, need, sg = cr['n'], cr['c_lat'], cr['need'], cr['sg']
+        stop_ = need + CROSS_STOP_PAD                                   # s168d：停止線 need＋0.05 太貼行人帶 ⇒ 行人經過時 CBF（0.38）把機器人沿行人方向推走；多留一點
         last = np.array([float(q[0]), float(q[1])])
-        if sg * (float(last @ n) - c_lat) < need + 0.05:                # 目前已比停止線近 ⇒ 停在目前位置
-            pin = last
-        else:
-            pin = None
+        pin = C.get('pin')                                            # s168d：已比停止線近時「停在目前位置」每拍重設 ⇒ 漂移被逐拍接受（棘輪）⇒ 停點只設一次
+        if pin is None and sg * (float(last @ n) - c_lat) < stop_:
+            pin = C['pin'] = last.copy()
         for Xk in X:
             p = np.array([Xk[0, 2], Xk[1, 2]])
-            if pin is None and sg * (float(p @ n) - c_lat) >= need + 0.05:
+            if pin is None and sg * (float(p @ n) - c_lat) >= stop_:
                 last = p
                 continue
             if pin is None:
-                pin = last
+                pin = C['pin'] = last.copy()
             Xk[0, 2], Xk[1, 2] = float(pin[0]), float(pin[1])
         return dict(off=0.0, cross_hold=True)
 
