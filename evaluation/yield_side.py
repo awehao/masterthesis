@@ -117,6 +117,10 @@ CROSS_LOOK = float(os.environ.get('YS_CROSS_LOOK', '8.0'))
 CROSS_BEHIND_PAD = float(os.environ.get('YS_CROSS_BEHIND_PAD', '0.10'))   # 行人已過交點後從它後面過的餘裕（m）
 CROSS_STOP_PAD = float(os.environ.get('YS_CROSS_STOP_PAD', '0.20'))   # 等待停止線＝need＋此值（s168d：0.05 時 CBF 仍推）
 PIN_AHEAD = os.environ.get('YS_PIN_AHEAD', '1') == '1'
+V_TAU = float(os.environ.get('YS_V_TAU', '0.6'))                    # 行人群速度平滑時間常數（s）
+CROSS_SLOW = os.environ.get('YS_CROSS_SLOW', '1') == '1'             # 橫越：可算出行人通過時刻 ⇒ 減速使抵達停止線時剛好清空，不先衝到線再停
+CROSS_REL_S = float(os.environ.get('YS_CROSS_REL_S', '0.5'))         # 橫越等待：衝突消失多久放行（原 1.0）
+AHEAD_SKIP = os.environ.get('YS_AHEAD_SKIP', '1') == '1'
 CROSS_MAX_S = float(os.environ.get('YS_CROSS_MAX_S', '15.0'))
 
 
@@ -125,11 +129,31 @@ class YieldSide:
         self.lock = None                                              # dict(name_key, n, s_tgt)
         self.off = 0.0                                                # 目前已套用的側移量（m，沿 lock['n']）
         self.log = []
+        self._trk, self._G, self._t_G, self.ref_dt = [], [], None, 0.1
+
+    def _smooth(self, obs, t):
+        """行人群速度跨拍平滑（s172d：追蹤速度 0.14–0.57 m/s 跳動，真值 0.15 ⇒ 等待／側移／放行 10 s 內切換二十餘次）：
+        以上一拍各群「位置＋速度×dt」最近者（＜0.6 m）配對，速度一階濾波（時間常數 V_TAU）；新群用原速度。只在本層用，不改追蹤器與 CBF。"""
+        if self._t_G == t:
+            return
+        G = _groups(obs); dt_ = 0.0 if self._t_G is None else max(0.0, float(t) - self._t_G)
+        a_ = 1.0 - math.exp(-dt_ / V_TAU) if V_TAU > 0 and dt_ > 0 else 1.0
+        new = []
+        for gp in G:
+            m_ = gp['P'].mean(axis=0); best, bd = None, 0.6
+            for tr in self._trk:
+                d_ = float(np.linalg.norm(tr['m'] + tr['v'] * dt_ - m_))
+                if d_ < bd:
+                    best, bd = tr, d_
+            v_ = gp['v'] if best is None else best['v'] + a_ * (gp['v'] - best['v'])
+            gp['v_raw'] = gp['v']; gp['v'] = v_
+            new.append(dict(m=m_, v=v_))
+        self._trk, self._G, self._t_G = new, G, float(t)
 
     def _conflict(self, q, v_b, obs, any_ds=False):
         """回 (群, t*, d*, need, n, (lo, hi)) 或 None。以群的保守區間中心當圓心、半寬當半徑做最近接近預測。"""
         best = None
-        for gp in _groups(obs):
+        for gp in self._G:
             vo = gp['v']; sp = float(np.linalg.norm(vo))
             if sp >= V_MIN:
                 u = vo / sp
@@ -140,6 +164,11 @@ class YieldSide:
                 u = vr_ / nr_
             n = np.array([-u[1], u[0]])
             lo, hi = _interval(gp, n, q[:2])
+            if AHEAD_SKIP and sp >= V_MIN:                            # 離線 isaac85：橫越等待放行（從後方過、間距 ≥need_b）後，最近接近預測（need 0.8）又判衝突 ⇒ 側移鎖定、跟在行人後面被帶走；行人在前方且機器人沿其方向追不上 ⇒ 間距只增不減，不算衝突
+                m_ = gp['P'].mean(axis=0); d_ = m_ - q[:2]; nd_ = float(np.linalg.norm(d_))
+                m_ = m_ + (R_MIN * d_ / nd_ if nd_ > 1e-6 else 0.0)
+                if float((m_ - q[:2]) @ u) >= R_BASE + R_MIN + CROSS_BEHIND_PAD and float(v_b @ u) <= sp:
+                    continue
             al = float((gp['P'] @ u).mean())
             c = al * u + 0.5 * (lo + hi) * n
             rad = 0.5 * (hi - lo)
@@ -158,7 +187,7 @@ class YieldSide:
     def _alongside(self, q, v_b, obs):
         """同向並行：行人在動、機器人朝同方向走、目前距離 < 安全距＋0.2 ⇒ 回 (u, n, 中心, 距離, need)。"""
         best = None
-        for gp in _groups(obs):
+        for gp in self._G:
             vo = gp['v']; sp = float(np.linalg.norm(vo))
             nb_ = float(np.linalg.norm(v_b))
             if sp < V_MIN or nb_ < 0.05 or float(np.dot(v_b / nb_, vo / sp)) < ALONG_COS:   # s147d：橫越的行人（夾角 45°）也被當同向並行 ⇒ 進度被釘、卡 10 s ⇒ 只在夾角 ≤30° 時算並行
@@ -178,7 +207,7 @@ class YieldSide:
         機器人在行人帶外、參考走向 e 朝帶內；以 CROSS_V 直線走過帶的期間，沿行人方向的間距（線性）兩端都夠大（從後面過 need_b）或都夠負（先過 need＋餘裕）才不算衝突
         （Isaac 85：斜向路徑與行人同向時，用中心線交點判會一直等交點被追上，改看實際間距）。"""
         best = None
-        for gp in _groups(obs):
+        for gp in self._G:
             vo = gp['v']; sp = float(np.linalg.norm(vo))
             if sp < V_MIN:
                 continue
@@ -206,7 +235,7 @@ class YieldSide:
             if min(g0, g1) >= need_b or max(g0, g1) <= -(need + sp * mg_):   # 從行人後面過／先過（間距線性 ⇒ 看兩端）
                 continue
             if best is None or tr0 < best['tr0']:
-                best = dict(n=n, c_lat=c_lat, need=need, sg=1.0 if s_q > 0 else -1.0, sig_in=sig_in, a=g0, g1=g1, sp=sp, tw0=tr0, tr0=tr0, tr1=tr1, u=u)
+                best = dict(en=en, n=n, c_lat=c_lat, need=need, sg=1.0 if s_q > 0 else -1.0, sig_in=sig_in, a=g0, g1=g1, sp=sp, tw0=tr0, tr0=tr0, tr1=tr1, u=u)
         return best
 
     def _apply_cross(self, t, q, X, cr):
@@ -217,12 +246,30 @@ class YieldSide:
                 self.log.append(dict(t=round(t, 2), what='yield_cross_hold', g0=round(cr['a'], 3), g1=round(cr['g1'], 3), tr0=round(cr['tr0'], 2), tr1=round(cr['tr1'], 2), sp=round(cr['sp'], 3), sig_in=round(cr['sig_in'], 3), need=round(cr['need'], 3)))
             self.cross.update(cr=cr, t_seen=t)
         C = self.cross
-        if t - C['t_seen'] > 1.0 or t - C['t0'] > CROSS_MAX_S:
+        if t - C['t_seen'] > CROSS_REL_S or t - C['t0'] > CROSS_MAX_S:
             self.log.append(dict(t=round(t, 2), what='yield_cross_release', held_s=round(t - C['t0'], 2)))
             self.cross = None
             return None
         cr = C['cr']; n, c_lat, need, sg = cr['n'], cr['c_lat'], cr['need'], cr['sg']
         stop_ = need + CROSS_STOP_PAD                                   # s168d：停止線 need＋0.05 太貼行人帶 ⇒ 行人經過時 CBF（0.38）把機器人沿行人方向推走；多留一點
+        if CROSS_SLOW and C.get('pin') is None:                       # 減速代替停車：行人還要前進 Δ＝need_b−min(g0,g1) 才清空 ⇒ 延後 τ＝Δ/sp；抵達停止線的時刻排在清空時刻
+            en_ = max(abs(float(cr.get('en', 1.0))), 0.2)
+            d_stop = max(0.0, float(cr['sig_in']) - CROSS_STOP_PAD / en_)  # 沿路徑到停止線的距離
+            dl_ = max(0.0, (need - PAD + CROSS_BEHIND_PAD) - min(float(cr['a']), float(cr['g1'])))
+            T_ = float(cr['tr0']) + dl_ / max(float(cr['sp']), 0.05)
+            v_app = d_stop / max(T_, 1e-3)
+            P_ = [np.array([float(Xk[0, 2]), float(Xk[1, 2])]) for Xk in X]
+            S_ = np.r_[0.0, np.cumsum([float(np.linalg.norm(P_[k + 1] - P_[k])) for k in range(len(P_) - 1)])]
+            v_nav = float(S_[-1]) / max((len(P_) - 1) * float(self.ref_dt), 1e-3)
+            rho = min(1.0, v_app / v_nav) if v_nav > 0.02 else 1.0
+            if rho < 0.98:
+                for k, Xk in enumerate(X):
+                    sk = rho * float(S_[k]); j = int(np.searchsorted(S_, sk, side='right')) - 1; j = min(max(j, 0), len(P_) - 2)
+                    w = (sk - S_[j]) / max(S_[j + 1] - S_[j], 1e-9); p_ = P_[j] + min(max(w, 0.0), 1.0) * (P_[j + 1] - P_[j])
+                    Xk[0, 2], Xk[1, 2] = float(p_[0]), float(p_[1])
+                if not C.get('slow_logged'):
+                    C['slow_logged'] = True
+                    self.log.append(dict(t=round(t, 2), what='yield_cross_slow', v_app=round(v_app, 3), v_nav=round(v_nav, 3), T=round(T_, 2), d_stop=round(d_stop, 2)))
         last = np.array([float(q[0]), float(q[1])])
         pin = C.get('pin')                                            # s168d：已比停止線近時「停在目前位置」每拍重設 ⇒ 漂移被逐拍接受（棘輪）⇒ 停點只設一次
         if pin is None and sg * (float(last @ n) - c_lat) < stop_:
@@ -276,6 +323,7 @@ class YieldSide:
         if not ENABLE:
             return None
         q = np.asarray(q, float); v_b = np.asarray(v_b, float)[:2]
+        self._smooth(obs, t)
         d_ref = np.array([float(X[-1][0, 2] - X[0][0, 2]), float(X[-1][1, 2] - X[0][1, 2])])   # s147d：以「要去的方向」（參考視窗走向）判並行，不用實際速度（被側移推向行人方向後又被當同向、被帶走 3 m）
         v_al = d_ref / float(np.linalg.norm(d_ref)) * max(float(np.linalg.norm(v_b)), 0.06) if float(np.linalg.norm(d_ref)) > 0.10 else np.zeros(2)
         self._d_ref = d_ref

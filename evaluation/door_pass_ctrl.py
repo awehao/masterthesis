@@ -102,6 +102,7 @@ def yield_apply(ctrl, qp, X, obs, xi=None):
     ys = getattr(ctrl, '_ys', None)
     if ys is None:
         ys = ctrl._ys = YS.YieldSide()
+    ys.ref_dt = DT
     c_, s_ = math.cos(float(qp[2])), math.sin(float(qp[2])); u_ = np.asarray(ctrl.u_prev[:2], float)
     n0 = len(ys.log)
     info = ys.apply(float(ctrl.t), np.asarray(qp[:3], float), np.array([c_ * u_[0] - s_ * u_[1], s_ * u_[0] + c_ * u_[1]]), X, obs, NPH * PHYS)
