@@ -219,7 +219,7 @@ class YieldSide:
             c_lat = 0.5 * (lo + hi); need = R_BASE + 0.5 * (hi - lo) + PAD
             s_q = float(q[:2] @ n) - c_lat
             en = float(e @ n)
-            if abs(s_q) < (need - 0.25 if sticky else need - 0.05) or en * s_q >= 0.0 or abs(en) < 0.2:   # 已在帶內／不朝帶走（等待中稍微滑進帶緣仍算：Isaac 85 等 2.1 s 後滑進 ⇒ 放行 ⇒ 側移被帶走）
+            if abs(s_q) < (need - 0.25) or en * s_q >= 0.0 or abs(en) < 0.2:   # 已在帶內／不朝帶走。初判也用 need−0.25（s175d：帶緣側距 0.8、行人並排 ⇒ 初判 need−0.05 不接手、衝突預測每 0.2 s 開關 ⇒ 沿行人方向被帶 3 m）
                 continue
             sig_in = (abs(s_q) - need) / abs(en); sig_out = (abs(s_q) + need) / abs(en)
             tr0, tr1 = max(sig_in, 0.0) / CROSS_V, sig_out / CROSS_V
