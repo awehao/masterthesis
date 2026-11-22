@@ -14,6 +14,8 @@ import math
 import os
 import sys
 import time
+import faulthandler as _fh, signal as _sig
+_fh.register(_sig.SIGUSR1, all_threads=True)                           # 診斷：kill -USR1 印所有執行緒堆疊（11/23 交接卡死；ptrace 受限無法附掛）
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
