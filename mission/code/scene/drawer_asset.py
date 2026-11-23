@@ -1,0 +1,1 @@
+../../../evaluation/drawer_asset.py

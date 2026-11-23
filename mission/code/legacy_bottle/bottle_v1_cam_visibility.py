@@ -1,0 +1,1 @@
+../../../evaluation/bottle_v1_cam_visibility.py

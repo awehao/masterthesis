@@ -1,0 +1,1 @@
+../../../evaluation/motm_dry/run_d2_stub.sh

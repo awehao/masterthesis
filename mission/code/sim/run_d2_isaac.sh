@@ -1,0 +1,1 @@
+../../../evaluation/run_d2_isaac.sh

@@ -1,0 +1,1 @@
+../../../evaluation/door_asset_v3.py

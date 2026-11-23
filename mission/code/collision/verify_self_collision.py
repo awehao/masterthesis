@@ -1,0 +1,1 @@
+../../../evaluation/verify_self_collision.py
