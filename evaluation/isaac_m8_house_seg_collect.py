@@ -222,9 +222,21 @@ def main():
             for tag, rw in variants:
                 key.GetIntensityAttr().Set(float(rng.uniform(900, 1800)))
                 dome.GetIntensityAttr().Set(float(rng.uniform(300, 650)))
-                for _ in range(3):
+                prev_, stable_ = None, 0                              # 試跑發現：語意標註比 RGB 晚一格更新 ⇒ 重複算圖到標註連續兩次相同（且至少 4 步）才讀
+                for k_ in range(12):
                     set_scene(rw, obp, dro, wk)
                     world.step(render=True)
+                    fr = cam.get_current_frame()
+                    seg = fr.get('semantic_segmentation') or {}
+                    sd_ = np.asarray(seg.get('data'))
+                    if prev_ is not None and sd_.shape == prev_.shape and np.array_equal(sd_, prev_):
+                        stable_ += 1
+                    else:
+                        stable_ = 0
+                    prev_ = sd_.copy() if sd_.ndim >= 2 else None
+                    if k_ >= 3 and stable_ >= 1:
+                        break
+                world.step(render=True)                               # 再一步讓 RGB／深度跟上同一姿態
                 fr = cam.get_current_frame()
                 rgba = np.asarray(cam.get_rgba())
                 dep = np.asarray(fr.get('distance_to_image_plane'))
