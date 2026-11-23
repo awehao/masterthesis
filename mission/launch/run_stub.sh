@@ -12,4 +12,5 @@ export DOOR_QP_DUMP_DIR=$D2OUT/${TAG}_qpfail
 cd "$WS"
 (setsid timeout 9000 bash evaluation/motm_dry/run_d2_stub.sh evaluation/results/motm_direct/d2/$TAG 900 > "$MISSION/logs/$TAG.out" 2>&1 < /dev/null &)
 (setsid bash "$MISSION/tools/stub_end_guard.sh" "$TAG" > "$MISSION/logs/$TAG.guard" 2>&1 < /dev/null &)
+(setsid bash "$MISSION/tools/nav_watchdog.sh" "$TAG" 150 "$@" > "$MISSION/logs/$TAG.navwd" 2>&1 < /dev/null &)
 echo "$(date +%H:%M) 替身 $TAG 已起跑；看進度：tail -f $D2OUT/$TAG.sup.log"
