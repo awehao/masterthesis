@@ -98,6 +98,7 @@ def yield_apply(ctrl, qp, X, obs, xi=None):
         ys_ = getattr(ctrl, '_ys', None)
         if ys_ is not None:
             ys_.lock, ys_.along, ys_.off = None, None, 0.0
+            ys_.pchoice, ys_.p_off = None, 0.0
         return None
     ys = getattr(ctrl, '_ys', None)
     if ys is None:

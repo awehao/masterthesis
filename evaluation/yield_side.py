@@ -122,6 +122,15 @@ V_TAU = float(os.environ.get('YS_V_TAU', '0.6'))                    # 行人群�
 CROSS_SLOW = os.environ.get('YS_CROSS_SLOW', '1') == '1'             # 橫越：可算出行人通過時刻 ⇒ 減速使抵達停止線時剛好清空，不先衝到線再停
 CROSS_REL_S = float(os.environ.get('YS_CROSS_REL_S', '0.5'))         # 橫越等待：衝突消失多久放行（原 1.0）
 AHEAD_SKIP = os.environ.get('YS_AHEAD_SKIP', '1') == '1'
+PRED = os.environ.get('YS_PRED', '1') == '1'                         # Howard 11/23「停下來就沒意義、不是能預測障礙物之後位置」：以等速預測模擬候選動作（速度×側移）8 s，選損失時間最少且全程安全者；全不安全才停
+PRED_T = float(os.environ.get('YS_PRED_T', '8.0'))
+PRED_DT = float(os.environ.get('YS_PRED_DT', '0.25'))
+PRED_R = float(os.environ.get('YS_PRED_R', '6.0'))                    # 只看這距離內、移動中的行人
+PRED_VMAX = float(os.environ.get('YS_PRED_VMAX', '0.26'))            # 加速上限（輪速硬體上限 95%，同導航名目上限）
+PRED_SWITCH = float(os.environ.get('YS_PRED_SWITCH', '1.0'))         # 換選擇的代價（s），防來回跳
+PRED_BEHIND = [float(x) for x in os.environ.get('YS_PRED_BEHIND', '0.6,1.0').split(',') if x]   # 往行人背後偏的量（m）
+PRED_HYST = float(os.environ.get('YS_PRED_HYST', '0.10'))
+PRED_LAT_W = float(os.environ.get('YS_PRED_LAT_W', '1.0'))           # 側移代價（s／m）
 CROSS_MAX_S = float(os.environ.get('YS_CROSS_MAX_S', '15.0'))
 
 
@@ -131,6 +140,7 @@ class YieldSide:
         self.off = 0.0                                                # 目前已套用的側移量（m，沿 lock['n']）
         self.log = []
         self._trk, self._G, self._t_G, self.ref_dt = [], [], None, 0.1
+        self.pchoice, self.p_off = None, 0.0
 
     def _smooth(self, obs, t):
         """行人群速度跨拍平滑（s172d：追蹤速度 0.14–0.57 m/s 跳動，真值 0.15 ⇒ 等待／側移／放行 10 s 內切換二十餘次）：
@@ -323,6 +333,129 @@ class YieldSide:
             Xk[0, 2], Xk[1, 2] = float(p[0]), float(p[1])
         return dict(off=0.0, along=True)
 
+    def _pred_choose(self, t, q, X, obs):
+        """預測選動作：候選＝速度比 ρ × 側移（無／左右到行人帶外／再外 0.3 m）。機器人沿參考走向 e 等速直線（ρ·v_nav），側移以 RATE 爬升到目標側向座標（同 lock 公式）；
+        行人等速預測。有效＝PRED_T 內離每位行人中心 ≥ need；側移點離地圖障礙 ≥R_BASE＋WALL_PAD、離靜態未知點 ≥R_BASE＋0.12（直線近似本身已入障礙的時刻不判）。
+        代價＝時間損失（PRED_T − 沿 e 前進量／v_nav）＋側移量×PRED_LAT_W＋換選擇代價。全無效 ⇒ 取最小距離最大者。回 dict 或 None（名目即可）。"""
+        P_ = [np.array([float(Xk[0, 2]), float(Xk[1, 2])]) for Xk in X]
+        L_ = float(sum(np.linalg.norm(P_[k + 1] - P_[k]) for k in range(len(P_) - 1)))
+        v_nav = L_ / max((len(P_) - 1) * float(self.ref_dt), 1e-3)
+        if v_nav < 0.05:
+            return None
+        e = (P_[-1] - P_[0]) / max(float(np.linalg.norm(P_[-1] - P_[0])), 1e-6)
+        G = []
+        for gp in self._G:
+            vo = gp['v']; sp = float(np.linalg.norm(vo))
+            m_ = gp['P'].mean(axis=0); d_ = m_ - q[:2]; nd_ = float(np.linalg.norm(d_))
+            if sp < V_MIN or nd_ > PRED_R:
+                continue
+            m_ = m_ + (R_MIN * d_ / nd_ if nd_ > 1e-6 else 0.0)
+            G.append((m_, vo, R_BASE + R_MIN + PAD))
+        if not G:
+            return None
+        stat = np.array([[float(o['x']), float(o['y'])] for o in (obs or []) if o.get('static')]).reshape(-1, 2)
+        taus = np.arange(PRED_DT, PRED_T + 1e-9, PRED_DT)
+        W = [(m_ + np.outer(taus, vo), nd) for m_, vo, nd in G]
+        # 側移方向：以最近衝突行人的行進法向（同 lock）
+        dmin_nom, k_ = 9.0, 0
+        base_nom = q[:2] + np.outer(taus, e) * v_nav
+        for i, (Wp, nd) in enumerate(W):
+            dd = float(np.min(np.linalg.norm(base_nom - Wp, axis=1)) - nd)
+            if dd < dmin_nom:
+                dmin_nom, k_ = dd, i
+        if dmin_nom >= 0.0 and getattr(self, 'pchoice', None) is None:
+            return None
+        vo = G[k_][1]; spk = float(np.linalg.norm(vo)); u = vo / spk; n = np.array([-u[1], u[0]])
+        sc = float(G[k_][0] @ n); need_l = R_BASE + PAD + R_MIN
+        rmax = min(PRED_VMAX / v_nav, 1.2)
+        rhos = sorted(set([round(rmax, 3), 1.0, 0.8, 0.6, 0.4, 0.2, 0.0]), reverse=True)
+        lats = [(0.0, None)] + [(sg, sc + sg * (need_l + ex)) for sg in (1.0, -1.0) for ex in (0.0, 0.3)] + [(2.0, float(q[:2] @ u) - dl) for dl in PRED_BEHIND]   # sg=2：往行人來的方向（−u）偏 dl（絕對座標線：沿 u 座標 ≤ 目前−dl），從它背後繞過
+        prev = getattr(self, 'pchoice', None); off0 = self.p_off
+        best = None
+        for rho in rhos:
+            base = q[:2] + np.outer(taus, e) * v_nav * rho
+            for sg, st in lats:
+                P = base.copy()
+                if sg == 2.0:
+                    sh = np.minimum(np.maximum(0.0, P @ u - st), off0 + RATE * taus); P = P - np.outer(sh, u)
+                elif sg != 0.0:
+                    sb = P @ n; sh = sg * np.minimum(np.maximum(0.0, sg * (st - sb)), off0 + RATE * taus)
+                    P = P + np.outer(sh, n)
+                if sg != 0.0:
+                    ok_map = True
+                    for j in range(1, len(taus), 2):
+                        if abs(sh[j]) > 0.05 and clearance(*base[j]) >= R_BASE + WALL_PAD and clearance(*P[j]) < R_BASE + WALL_PAD:
+                            ok_map = False; break
+                        if abs(sh[j]) > 0.05 and len(stat) and float(np.min(np.linalg.norm(stat - P[j], axis=1))) < R_BASE + 0.12:
+                            ok_map = False; break
+                    if not ok_map:
+                        continue
+                    lat_m = float(np.max(np.abs(sh)))
+                else:
+                    lat_m = 0.0
+                Pa = np.vstack([q[:2], P]); sg_ = np.linalg.norm(np.diff(Pa, axis=0), axis=1); arc_i = np.cumsum(sg_)   # 合成速度上限 PRED_VMAX（前進＋側移不可超過輪速上限）：沿理想路徑以受限弧長重新取時
+                arc_a = np.minimum(arc_i, PRED_VMAX * taus)
+                for j in range(1, len(arc_a)):
+                    arc_a[j] = min(arc_a[j], arc_a[j - 1] + PRED_VMAX * PRED_DT)
+                if float(np.max(arc_i - arc_a)) > 1e-4:
+                    cum = np.r_[0.0, arc_i]; idx = np.clip(np.searchsorted(cum, arc_a, side='right') - 1, 0, len(cum) - 2)
+                    w_ = (arc_a - cum[idx]) / np.maximum(cum[idx + 1] - cum[idx], 1e-9)
+                    P = Pa[idx] + w_[:, None] * (Pa[idx + 1] - Pa[idx])
+                dm = min(float(np.min(np.linalg.norm(P - Wp, axis=1)) - nd) for Wp, nd in W)
+                prog = float((P[-1] - q[:2]) @ e)
+                cost = (PRED_T - prog / v_nav) + PRED_LAT_W * lat_m + (PRED_SWITCH if prev is not None and (abs(prev['rho'] - rho) > 1e-6 or prev['sg'] != sg) else 0.0)
+                same_ = prev is not None and abs(prev['rho'] - rho) < 1e-6 and prev['sg'] == sg
+                ok_ = dm >= (0.0 if (same_ or prev is None) else PRED_HYST)       # 換成別的選擇要多 PRED_HYST 安全餘裕（離線 isaac84：搶先過走到一半翻成等待 ⇒ 撞）
+                key = (0 if ok_ else 1, cost if ok_ else -dm)
+                if best is None or key < best[0]:
+                    best = (key, dict(rho=rho, sg=sg, st=st, n=n, u=u, dm=round(dm, 3), cost=round(cost, 2), v_nav=round(v_nav, 3)))
+        return None if best is None else best[1]
+
+    def _apply_pred(self, t, q, X, obs, dt):
+        c = self._pred_choose(t, q, X, obs)
+        prev = getattr(self, 'pchoice', None)
+        if c is None or (c['rho'] >= 0.999 and c['sg'] == 0.0):
+            if prev is not None and self.p_off <= 1e-4:
+                self.log.append(dict(t=round(t, 2), what='yield_pred_release'))
+                self.pchoice = None
+            if prev is None:
+                return None
+            c = dict(rho=1.0, sg=prev['sg'], st=prev['st'], n=prev['n'], u=prev['u'], dm=None, cost=None, v_nav=None, fade=True)
+            self.p_off = max(0.0, self.p_off - RATE * dt)
+        else:
+            if prev is None or abs(prev['rho'] - c['rho']) > 1e-6 or prev['sg'] != c['sg']:
+                self.log.append(dict(t=round(t, 2), what='yield_pred', rho=c['rho'], side=c['sg'], dm=c['dm'], cost=c['cost'], v_nav=c['v_nav']))
+            self.pchoice = c
+            self.p_off = min(self.p_off + RATE * dt, 1.5) if c['sg'] != 0.0 else max(0.0, self.p_off - RATE * dt)
+        rho = c['rho']
+        P_ = [np.array([float(Xk[0, 2]), float(Xk[1, 2])]) for Xk in X]
+        S_ = np.r_[0.0, np.cumsum([float(np.linalg.norm(P_[k + 1] - P_[k])) for k in range(len(P_) - 1)])]
+        if abs(rho - 1.0) > 1e-3:                                     # 時間縮放（ρ＞1 時沿最後一段外推）
+            d_end = (P_[-1] - P_[-2]) / max(S_[-1] - S_[-2], 1e-9) if len(P_) > 1 else np.zeros(2)
+            for k, Xk in enumerate(X):
+                sk = rho * float(S_[k])
+                if sk >= S_[-1]:
+                    p_ = P_[-1] + (sk - S_[-1]) * d_end
+                else:
+                    j = min(max(int(np.searchsorted(S_, sk, side='right')) - 1, 0), len(P_) - 2)
+                    w = (sk - S_[j]) / max(S_[j + 1] - S_[j], 1e-9); p_ = P_[j] + w * (P_[j + 1] - P_[j])
+                Xk[0, 2], Xk[1, 2] = float(p_[0]), float(p_[1])
+        shift = 0.0
+        if c['sg'] == 2.0 and self.p_off > 0.0:                      # 往行人背後偏：整個視窗沿 −u 平移 min(dl, 爬升量)
+            u_ = c['u']
+            for Xk in X:
+                d_k = min(max(0.0, float(np.array([Xk[0, 2], Xk[1, 2]]) @ u_) - c['st']), self.p_off)
+                Xk[0, 2] -= d_k * u_[0]; Xk[1, 2] -= d_k * u_[1]
+                shift = max(shift, d_k)
+        elif c['sg'] != 0.0 and self.p_off > 0.0:
+            n, sg, st = c['n'], c['sg'], c['st']
+            for Xk in X:
+                s_k = float(np.array([Xk[0, 2], Xk[1, 2]]) @ n)
+                d_k = min(max(0.0, sg * (st - s_k)), self.p_off)
+                Xk[0, 2] += sg * d_k * n[0]; Xk[1, 2] += sg * d_k * n[1]
+                shift = max(shift, d_k)
+        return dict(off=round(shift, 3), pred=True, rho=rho, side=c['sg'])
+
     def apply(self, t, q, v_b, X, obs, dt):
         """X：參考視窗（3×3 SE2 串列，就地修改）。側向座標＝點與 n 的內積（絕對）；目標＝保守區間外 R_BASE＋PAD。"""
         if not ENABLE:
@@ -332,6 +465,8 @@ class YieldSide:
         d_ref = np.array([float(X[-1][0, 2] - X[0][0, 2]), float(X[-1][1, 2] - X[0][1, 2])])   # s147d：以「要去的方向」（參考視窗走向）判並行，不用實際速度（被側移推向行人方向後又被當同向、被帶走 3 m）
         v_al = d_ref / float(np.linalg.norm(d_ref)) * max(float(np.linalg.norm(v_b)), 0.06) if float(np.linalg.norm(d_ref)) > 0.10 else np.zeros(2)
         self._d_ref = d_ref
+        if PRED:
+            return self._apply_pred(t, q, X, obs, dt)
         if CROSS and self.lock is None and getattr(self, 'along', None) is None and float(np.linalg.norm(d_ref)) > 0.10:   # 橫越：路徑上等（優先於側移選邊；側移中／並行中不切換）
             cr = self._crossing(q, d_ref / float(np.linalg.norm(d_ref)), obs, sticky=getattr(self, 'cross', None) is not None)
             if cr is not None or getattr(self, 'cross', None) is not None:
