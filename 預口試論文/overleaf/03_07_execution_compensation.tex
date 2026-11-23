@@ -1,0 +1,165 @@
+% !TeX program = xelatex
+% 接在 3.6 之後；不需要新增演算法排版套件。
+
+% ==================================================
+% 3.7 執行動態補償與控制實現
+% ==================================================
+\section{執行動態補償與控制實現}
+\label{sec:execution_compensation}
+
+前述最佳化以指定初始狀態與未來參考建立控制序列，實際運動則受到命令延遲、設定點追蹤與執行端修正影響。本節整合在途命令前推、模型偏置估測及末端目標補償，並說明控制段放行、非阻塞計算與停止備援，使預測所用狀態與實際執行順序相互對應。
+
+
+% ==================================================
+% 3.7.1 在途命令與實際放行輸入之預測整合
+% ==================================================
+\subsection{在途命令與實際放行輸入之預測整合}
+\label{subsec:queued_applied_command_prediction}
+
+令 $z_k^{\mathrm{ex}}=[\chi_k^{\top},s_{a,k}^{\top}]^{\top}$ 為執行端狀態，包含底盤位姿、實際關節位置與位置設定點。定義完整命令 $v=[\xi_B^{\top},u_a^{\top}]^{\top}$，其底盤分量為實際速度命令，與最佳化中的速度偏差 $\delta\xi$ 分別表示。
+
+新命令生效前，已提交的控制段與通訊管線仍會繼續作用。令 $D_k$ 為新控制段生效前已排定的物理步數，$\mathcal Q_k=\{v_{0|k}^{\mathrm{fix}},\ldots,v_{D_k-1|k}^{\mathrm{fix}}\}$ 為該區間的既定命令。以物理步模型 $f_p$ 依序前推：
+\begin{equation}
+    \begin{aligned}
+        z_{0|k}^{\mathrm{ex}}&=z_k^{\mathrm{ex}},\\
+        z_{\ell+1|k}^{\mathrm{ex}}
+        &=f_p(z_{\ell|k}^{\mathrm{ex}},v_{\ell|k}^{\mathrm{fix}}),
+          \quad \ell=0,\ldots,D_k-1,\\
+        t_k^{\mathrm{eff}}&=t_k+D_k\Delta t_p.
+    \end{aligned}
+    \label{eq:ch3_queued_command_forward_prediction}
+\end{equation}
+其中 $f_p$ 結合底盤本體速度運動與式\eqref{eq:ch3_physics_step_arm_model}的設定點追蹤關係；既定命令需包含該區間已排定的平滑、斜坡及限制處理。若未來修正尚未知，則於實際放行後以回報命令及新狀態修正下一次預測。
+
+由前推結果建立求解初始狀態：
+\begin{equation}
+    \zeta_{0|k}=
+    \begin{bmatrix}
+        \left[
+          \log\left(X_r(t_k^{\mathrm{eff}})^{-1}
+                    X_{B,D_k|k}\right)
+        \right]^{\vee}\\
+        q_{a,D_k|k}\\
+        s_{a,D_k|k}
+    \end{bmatrix}.
+    \label{eq:ch3_delay_compensated_initial_state}
+\end{equation}
+任務參考亦由 $t_k^{\mathrm{eff}}$ 起算，首步命令差分使用該起點之前的生效命令。如此可保留在途命令尚未作用完畢的影響，避免以目前狀態搭配未來生效時刻的命令進行不一致的預測。
+
+底盤命令經防護與輪級限制後，執行端回報最終放行值；手臂則回報實際位置設定點與關節位置。前者更新命令差分及執行紀錄，後者維持增廣模型中 $q_a$ 與 $s_a$ 的區分。各資料以來源時間與序號管理，障礙及視覺資訊另依其有效時間判定。
+
+
+% ==================================================
+% 3.7.2 模型偏置估測與末端追蹤補償
+% ==================================================
+\subsection{模型偏置估測與末端追蹤補償}
+\label{subsec:model_bias_tcp_compensation}
+
+手臂模型中的每步偏置 $b_a$ 可表示為 $b_a=D_\alpha d_a$，其中 $d_a$ 為等效關節偏移。令 $B_\ell=\operatorname{diag}(\beta_1^\ell,\ldots,\beta_6^\ell)$，$\Lambda_m=I_6-B_m$。對包含 $m$ 個物理步的完整量測區間，使用更新前的估計 $\hat d_a^{-}$ 與逐步實際生效設定點 $\tilde s_a^{j+\ell}$ 預測：
+\begin{equation}
+    \hat q_a^{j+m,-}
+    =B_m q_a^j
+     +\sum_{\ell=0}^{m-1}
+       B_{m-1-\ell}D_\alpha\tilde s_a^{j+\ell}
+     +\Lambda_m\hat d_a^{-}.
+    \label{eq:ch3_interval_offset_prediction}
+\end{equation}
+其中 $\tilde s_a$ 依其實際作用區間重新對齊，與第 3.2 節的取樣定義一致，不能只依訊息到達順序配對。
+
+由區間終點殘差得到偏移觀測與平滑更新：
+\begin{equation}
+    \begin{aligned}
+        d_a^{\mathrm{obs}}
+        &=\hat d_a^{-}
+          +\Lambda_m^{-1}
+            (q_a^{j+m}-\hat q_a^{j+m,-}),\\
+        \hat d_a^{+}
+        &=\Pi_{\mathcal D}
+          \left[
+             \hat d_a^{-}
+             +\lambda_d(d_a^{\mathrm{obs}}-\hat d_a^{-})
+          \right],\\
+        \lambda_d&=\frac{m\Delta t_p}{\tau_d},
+        \qquad 0<\lambda_d\leq1,\\
+        \hat b_a&=D_\alpha\hat d_a^{+}.
+    \end{aligned}
+    \label{eq:ch3_interval_offset_update}
+\end{equation}
+其中 $\Pi_{\mathcal D}$ 為容許範圍投影，包含絕對偏移及相對初始值的修正上限。僅在資料完整、數值有限及區間長度符合設定時更新，同一快照只使用一次。評估殘差以更新前估計計算，保留其對後續預測的檢驗意義。
+
+啟用此估測的接近階段，在閉爪開始後凍結估計，並依配置承接至機構操作。更新後的偏置由 QP 預測、在途命令前推與停止軌跡核對共用。此偏移描述指定區間內的等效追蹤差異，其物理來源可能包含負載、伺服追蹤與模型近似。
+
+此外，接近末段可對 TCP 的持續位置誤差施加有界積分補償。令 $\iota_k$ 為目標修正量，在符合接近進度、誤差及低 TCP 速度條件時，更新
+\begin{equation}
+    \begin{aligned}
+        e_{p,k}&=p_{E,k}^{d}-p_{E,k},\\
+        \iota_{k+1}
+        &=\operatorname{clip}
+          (\iota_k+K_I^{d}e_{p,k},-\bar\iota,\bar\iota),\\
+        p_{E,k}^{d,\mathrm{cmd}}
+        &=p_{E,k}^{d}+\iota_k.
+    \end{aligned}
+    \label{eq:ch3_bounded_tcp_target_compensation}
+\end{equation}
+其中 $K_I^{d}$ 為每次更新的離散增益，$\bar\iota$ 為逐軸修正上限。未滿足更新條件時保持補償量，閉爪與確認期間依配置凍結。控制器使用修正後目標產生命令，完成與否仍對原始幾何目標判定。
+
+模型偏置估測改變關節狀態轉移，TCP 補償則改變追蹤目標，兩者的作用位置、啟用階段及消融比較分別記錄。
+
+
+% ==================================================
+% 3.7.3 命令放行、停止軌跡檢查與逾時處置
+% ==================================================
+\subsection{命令放行、停止軌跡檢查與逾時處置}
+\label{subsec:command_acceptance_stopping}
+
+控制計算與平台更新採非阻塞方式執行。求解端根據狀態快照產生帶有版本、預定生效步與控制段的候選封包，平台在計算期間繼續執行已接受的控制段。新結果須在對應期限內到達，並於指定生效步通過版本、狀態及交接檢查後才放行。
+
+候選命令除接受 QP 與命令界限核對外，另沿同一套可執行停止策略前推。停止預測保留在途命令、底盤命令斜坡、輪級變化限制及手臂設定點動態，並依任務納入門角、抽屜開度及持物幾何。對選定取樣步 $\mathcal I_{\mathrm{stop}}$，核對
+\begin{equation}
+    \begin{aligned}
+        q_{\min}&\leq q_{a,\ell}^{\mathrm{stop}}\leq q_{\max},\\
+        s_{\min}&\leq s_{a,\ell}^{\mathrm{stop}}\leq s_{\max},\\
+        d_{\mathrm{geom},\ell}&\geq d_{\min},\\
+        \mathcal G_{\mathrm{contact},\ell}&=1,
+        \qquad \ell\in\mathcal I_{\mathrm{stop}}.
+    \end{aligned}
+    \label{eq:ch3_stopping_trajectory_checks}
+\end{equation}
+其中 $d_{\mathrm{geom},\ell}$ 包含啟用的環境、自碰撞及持物淨空，$\mathcal G_{\mathrm{contact},\ell}$ 為該階段需要維持的機構或抓持條件；無對應接觸任務時取一。取樣密度、外形近似與容許量依實驗配置揭露。
+
+命令接受條件可概括為
+\begin{equation}
+    \mathcal G_{\mathrm{accept}}
+    =\mathcal G_{\mathrm{ver}}
+     \land\mathcal G_{\mathrm{time}}
+     \land\mathcal G_{\mathrm{QP}}
+     \land\mathcal G_{\mathrm{geom}}
+     \land\mathcal G_{\mathrm{handover}},
+    \label{eq:ch3_control_packet_acceptance}
+\end{equation}
+分別表示版本、生效時序與期限、求解及數值檢查、候選與停止軌跡核對，以及適用的任務交接條件。
+
+若候選晚到、求解失敗或未通過檢查，則拒絕該控制段，依已接受的停止尾段減速或進入工程中止。手臂即使令設定點變化率為零，仍可能因 $q_a$ 與 $s_a$ 的差異繼續運動，因此停止核對須前推至設定的停穩條件。新舊控制段的起始狀態、參考與命令亦須檢查接續一致性。
+
+計算池及幾何檢查加速只改變執行方式，各工作使用相同幾何快照與判準。控制期限、牆鐘耗時及模擬時間分別統計，並於第四章分析接受率、逾時原因與適用限制。
+
+
+% ==================================================
+% 3.7.4 整體控制流程與演算法
+% ==================================================
+\subsection{整體控制流程與演算法}
+\label{subsec:overall_control_algorithm}
+
+整體方法以任務階段更新參考與限制，以共用模型預測底盤及手臂運動，再由執行端核對與回授形成閉迴路。每一控制週期的運作如下：
+
+\begin{enumerate}
+    \item 取得機器人位姿、關節位置、位置設定點、障礙與視覺資料，保留來源時間及序號，檢查資料有效性。
+    \item 使用完整量測區間更新允許啟用的模型偏置估測，再依已排定命令前推至新控制段的生效起點。
+    \item 更新任務階段、操作目標與可行底盤候選；依導航路徑產生接近、抓持、機構操作或持物參考。
+    \item 預測動態障礙並評估速度與偏移候選，更新導航參考及對應速度；依任務啟用範圍處理門區與操作限制。
+    \item 建立增廣預測、末端局部近似及目標函數，加入命令、關節、輪級、CBF 與適用的機構限制後求解。
+    \item 核對求解結果、候選控制段及停止尾段，將合格結果連同版本與生效步提交執行端。
+    \item 於指定時刻判定是否接受新控制段；執行後回報最終放行命令、設定點及任務事件，未通過時沿既定停止策略處理。
+\end{enumerate}
+
+透過上述流程，導航參考、操作目標與執行模型可在同一控制迴圈中更新。第三章建立各方法及其實現關係；實際使用的版本、參數、比較條件與結果，於第四章依模型預測、動態導航、協同操作及整合任務分別驗證。

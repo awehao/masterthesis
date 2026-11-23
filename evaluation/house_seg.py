@@ -127,7 +127,7 @@ class DS:
             tgt = dict(boxes=torch.tensor(boxes, dtype=torch.float32), labels=torch.tensor(ls, dtype=torch.int64), masks=torch.from_numpy(M.astype(np.uint8)))
         else:
             tgt = dict(boxes=torch.zeros((0, 4), dtype=torch.float32), labels=torch.zeros((0,), dtype=torch.int64), masks=torch.zeros((0,) + lab.shape, dtype=torch.uint8))
-        return torch.from_numpy(rgb.transpose(2, 0, 1).copy()), tgt, lab
+        return torch.from_numpy(np.ascontiguousarray(rgb.transpose(2, 0, 1), dtype=np.float32)), tgt, lab
 
 
 def collate(b):

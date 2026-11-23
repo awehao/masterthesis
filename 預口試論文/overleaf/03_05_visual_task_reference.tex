@@ -1,0 +1,127 @@
+% !TeX program = xelatex
+% 接在 3.4 之後，沿用 amsmath、amssymb 與既有論文主檔。
+
+% ==================================================
+% 3.5 視覺目標估測與任務參考生成
+% ==================================================
+\section{視覺目標估測與任務參考生成}
+\label{sec:visual_task_reference}
+
+移動操作所需的參考包含物件位置、抓取方向、底盤接近位置及操作進度。Mittal 等人\cite{mittal2022articulated}將 RGB-D 感知、物件操作規劃與全身控制整合，呈現感知資訊與操作模型銜接的重要性。本研究以已知類型的門把手、抽屜把手、圓柱及筆狀代理物為對象，利用深度幾何估測更新操作目標，再依導航可達性與手臂構型產生控制參考。
+
+
+% ==================================================
+% 3.5.1 任務目標之視覺定位與幾何估測
+% ==================================================
+\subsection{任務目標之視覺定位與幾何估測}
+\label{subsec:visual_geometric_estimation}
+
+令深度影像中像素座標為 $(u,v)$，其光軸深度為 $z(u,v)$，相機內參矩陣為 $K_C$。有效深度點在相機座標中的位置為
+\begin{equation}
+    {}^{C}p(u,v)
+    =z(u,v)K_C^{-1}
+      \begin{bmatrix}u&v&1\end{bmatrix}^{\top}.
+    \label{eq:ch3_depth_backprojection}
+\end{equation}
+量測先經距離與任務區域篩選，再依目標類型估計幾何。家具登錄位置用於限制搜尋範圍，精確操作目標由當次有效觀測修正；物件尺寸、家具外形與機構軸向等已知資訊則作為先驗。
+
+抽屜把手以面板點群估計櫃面方向，再由面板前方的橫桿點群取得桿心與高度。門扇開度則由鉸鏈附近的點群主方向估計，並核對可見長度及擬合直線與鉸鏈的距離。筆狀物件以點群主成分取得長軸方向，再利用長寬條件與頂面點估計中心。
+
+對已知半徑 $r_o$ 的直立圓柱，令 $P_\ell^{xy}$ 為候選側面點的水平投影，以可見點群中心及半徑補償建立初值，再求解
+\begin{equation}
+    \hat c_o=
+    \underset{c\in\mathbb R^2}{\operatorname{arg\,min}}
+    \sum_{\ell}
+    \left(\|P_\ell^{xy}-c\|-r_o\right)^2.
+    \label{eq:ch3_known_radius_object_fit}
+\end{equation}
+式中以高斯牛頓法由初值迭代取得局部解。圓柱中心高度依桌面高度與已知物件高度建立，繞對稱軸的方向則由抓取需求選擇。筆狀物件的主軸具有 $\pi$ 方向歧義，需由可行抓取構型選擇對應方向。上述估測只輸出各物件可觀測且任務所需的幾何量，其餘分量由已知模型與操作條件決定。
+
+
+% ==================================================
+% 3.5.2 影像、機器人狀態與座標轉換之時間對齊
+% ==================================================
+\subsection{影像、機器人狀態與座標轉換之時間對齊}
+\label{subsec:visual_state_time_alignment}
+
+機器人在影像取得與控制求解之間可能持續移動，因此，目標轉換須使用影像觀測時刻的相機位姿。令 $t_o$ 為觀測時間，世界座標中的量測點為
+\begin{equation}
+    \begin{bmatrix}{}^{W}p\\1\end{bmatrix}
+    ={}^{W}T_C(t_o)
+      \begin{bmatrix}{}^{C}p\\1\end{bmatrix},
+    \qquad
+    {}^{W}T_C(t_o)
+    ={}^{W}T_B(t_o)\,{}^{B}T_C(q_a(t_o)).
+    \label{eq:ch3_visual_timestamp_transform}
+\end{equation}
+對固定於底盤的相機，$ {}^{B}T_C$ 為固定外參；對手腕相機，則包含手臂運動鏈與相機安裝偏移。使用平台狀態與模型外參時，須保留其座標定義及來源時間。
+
+目標封包保留觀測時間、座標系、估計幾何與有效性資訊。影像處理完成後仍沿用原觀測時間，並在接近或抓持前檢查資料新鮮度、可見點數與幾何一致性。對暫時遮蔽的目標，可在既定有效時間內保留估計；超過條件時重新觀測或停止該階段的推進。
+
+底盤相機與手腕相機依可見性及任務階段提供觀測。當次實驗使用的來源、更新時機及保留策略分別記錄，避免將不同來源的結果視為同一時刻的量測。
+
+
+% ==================================================
+% 3.5.3 可行操作區域與底盤目標選擇
+% ==================================================
+\subsection{可行操作區域與底盤目標選擇}
+\label{subsec:feasible_operation_base_selection}
+
+操作目標確定後，需選擇可由導航到達、且手臂能完成接近與抓持的底盤位置。候選由目標與家具幾何生成，再檢查底盤淨空、最新未知障礙點、關節限制、預抓與抓取構型，以及相關路段的可達性。
+
+以圓柱物件的候選評分為例，令 $\mathcal F_k$ 為本次通過檢查的有限候選集合，採用
+\begin{equation}
+    (b^{*},q_a^{*})
+    =\underset{(b,q_a)\in\mathcal F_k}{\operatorname{arg\,min}}
+      \left[
+        w_L L_{\mathrm{route}}(b)
+        +\frac{w_\sigma}
+         {\max(\sigma_{\min}(J_{\mathrm{sel}}(q_a)),\epsilon_\sigma)}
+      \right],
+    \label{eq:ch3_operation_base_selection}
+\end{equation}
+其中 $b=[x_B,y_B,\theta_B]^{\top}$，$L_{\mathrm{route}}$ 為路線長度估計，$J_{\mathrm{sel}}$ 為選位評估使用的手臂雅可比，$\epsilon_\sigma>0$ 用於避免分母接近零。啟用格點路線評估時，由已知家具及未知回波建立可行域，並以 Dijkstra 最短路徑方法\cite{dijkstra1959note}取得路線成本。不同任務可依後續目標及朝向增加評分項。
+
+選定候選提供導航目標、操作朝向與可用構型，實際接近路徑仍由導航前端更新。候選區域與路線需配合新觀測重新核對；式\eqref{eq:ch3_operation_base_selection}的選擇範圍為當次已生成且已檢查的候選集合。
+
+
+% ==================================================
+% 3.5.4 導航路徑下之朝向與末端參考生成
+% ==================================================
+\subsection{導航路徑下之朝向與末端參考生成}
+\label{subsec:navigation_manipulation_reference}
+
+移動中接近時，底盤平移參考沿用導航前端提供的路徑，操作端依剩餘距離調整朝向、速度上限與末端展開進度。令 $\theta_{\mathrm{nav},i}$ 為導航朝向，$\theta_g$ 為操作朝向，則以距離權重 $w_i\in[0,1]$ 建立
+\begin{equation}
+    \theta_{r,i}
+    =\theta_{\mathrm{nav},i}
+     +w_i\operatorname{wrap}
+       (\theta_g-\theta_{\mathrm{nav},i}),
+    \label{eq:ch3_operation_heading_reference}
+\end{equation}
+其中 $\operatorname{wrap}(\cdot)$ 將角度差映射至 $(-\pi,\pi]$。接近操作區域時逐步增加 $w_i$，物件抬升並離開抓取階段後，再依任務條件交回導航朝向。
+
+末端展開採用五次平滑函數 $\psi(\nu)=10\nu^3-15\nu^4+6\nu^5$；此函數對應固定端點且端點速度與加速度為零的最小急動軌跡\cite{flash1985coordination}。令 $d_i$ 為參考底盤至操作位置的距離，定義
+\begin{equation}
+    \nu_i=
+    \operatorname{clip}
+      \left(\frac{d_{\mathrm{out}}-d_i}
+      {d_{\mathrm{out}}-d_{\mathrm{in}}},0,1\right),
+    \qquad \beta_i=\psi(\nu_i).
+    \label{eq:ch3_distance_based_arm_progress}
+\end{equation}
+預測進度另依目前進度與最短展開時間限制其增加速度。令 $(p_{\mathrm{rel},i},R_{\mathrm{rel},i})$ 為起始相對構型隨底盤移動所形成的世界位姿，$(p_{\mathrm{line},i},R_{\mathrm{line},i})$ 為預抓或抓取接近線上的目標，則
+\begin{equation}
+    \begin{aligned}
+        p_{E,i}^{d}
+        &=(1-\beta_i)p_{\mathrm{rel},i}
+          +\beta_i p_{\mathrm{line},i},\\
+        R_{E,i}^{d}
+        &=R_{\mathrm{rel},i}
+          \exp\!\left(
+            \beta_i\log(R_{\mathrm{rel},i}^{\top}R_{\mathrm{line},i})
+          \right).
+    \end{aligned}
+    \label{eq:ch3_continuous_approach_reference}
+\end{equation}
+最後接近線的推進另由底盤位置與 TCP 到位狀態觸發。若導航因避障而改變進度，手臂展開亦隨距離與狀態更新。朝向或位置參考變更後，依式\eqref{eq:ch3_reference_velocity_reconstruction}重新計算底盤參考速度，再建立末端追蹤與命令限制。
