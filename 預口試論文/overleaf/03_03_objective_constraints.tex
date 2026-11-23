@@ -135,7 +135,7 @@
 \subsection{最佳化問題建構與數值求解}
 \label{subsec:wholebody_qp_formulation}
 
-由式\eqref{eq:ch3_condensed_augmented_prediction}，預測狀態為控制序列 $\mathbf{U}_k$ 的仿射函數。末端正向運動學則具有非線性，因此，需沿名目控制序列 $\bar{\mathbf{U}}_k$ 及其預測狀態建立局部近似。
+由式\eqref{eq:ch3_condensed_augmented_prediction}，預測狀態為控制序列 $\mathbf{U}_k$ 的仿射函數。由於末端正向運動學具有非線性，先由給定的控制序列 $\bar{\mathbf{U}}_k$ 計算各步的預測狀態，再於這些狀態建立局部近似。
 
 令 $\Gamma_{i,k}$ 為預測矩陣 $\Gamma_k$ 中對應第 $i$ 步狀態的列區塊，$C_i$ 為底盤幾何誤差至平面位姿座標 $[x_B,y_B,\theta_B]^{\top}$ 的局部微分。以 $J_{\chi,B,i}$ 與 $J_{\chi,A,i}$ 表示前節廣義座標雅可比的底盤及手臂區塊，則末端幾何位移對增廣狀態的局部映射為
 \begin{equation}
@@ -145,9 +145,9 @@
     \end{bmatrix}.
     \label{eq:ch3_tcp_augmented_geometric_jacobian}
 \end{equation}
-各矩陣皆於名目預測狀態計算。設定點不直接改變當前末端位姿，其作用經由 $\Gamma_{i,k}$ 中的關節追蹤預測傳遞。
+各矩陣均於上述預測狀態計算。設定點不直接改變當前末端位姿，其作用經由 $\Gamma_{i,k}$ 中的關節追蹤預測傳遞。
 
-在名目構型擾動與末端姿態誤差皆較小的條件下，姿態項採小誤差近似，末端殘差可整理為
+當構型變化與末端姿態誤差均較小時，姿態項採小誤差近似，末端殘差可整理為
 \begin{equation}
     \begin{aligned}
         r_{E,i|k}
@@ -161,7 +161,7 @@
     \end{aligned}
     \label{eq:ch3_tcp_affine_residual}
 \end{equation}
-其中 $\bar{r}_{E,i|k}$ 為名目末端殘差。底盤與手臂的控制分量共同出現在 $L_{i,k}$ 中，故末端追蹤成本可產生底盤與手臂之間的交叉項，使兩者在同一問題中協調運動。
+其中 $\bar{r}_{E,i|k}$ 為使用 $\bar{\mathbf{U}}_k$ 計算的末端殘差。底盤與手臂的控制分量共同出現在 $L_{i,k}$ 中，故末端追蹤成本可產生底盤與手臂之間的交叉項，使兩者在同一問題中協調運動。
 
 堆疊各步的底盤誤差、末端殘差與完整命令差分，可分別寫成
 \begin{equation}
@@ -200,7 +200,7 @@
     \end{aligned}
     \label{eq:ch3_wholebody_qp_cost_matrices}
 \end{equation}
-限制矩陣及上下界由前述命令、位置與輪級限制代入仿射預測後建立。當名目軌跡固定且權重為半正定時，形成凸二次規劃；若輸入權重為正定，則 $H_k$ 為正定，在限制集合非空時具有唯一最小解。此凸性是固定局部近似下的性質，末端運動學仍需隨狀態更新。
+限制矩陣及上下界由前述命令、位置與輪級限制代入仿射預測後建立。當線性化矩陣固定且權重為半正定時，形成凸二次規劃；若輸入權重為正定，則 $H_k$ 為正定，在限制集合非空時具有唯一最小解。此凸性是固定局部近似下的性質，末端運動學仍需隨狀態更新。
 
 本研究的全身耦合問題採用 Goldfarb 與 Idnani\cite{goldfarb1983dual}之對偶作用集法進行數值求解；未取得通過驗證的解時，再以 Stellato 等人\cite{stellato2020osqp}提出之 OSQP 求解相同問題。作用集法所得解以原始問題檢查可行性與 Karush--Kuhn--Tucker（KKT）條件。接受全身控制解前，另檢查命令有限值、預測關節與設定點之限制殘差，以及輸出命令與求解序列的一致性。未通過接受條件時，交由既定的保持或減速機制處理，相關流程於執行動態補償與控制實現一節說明。
 

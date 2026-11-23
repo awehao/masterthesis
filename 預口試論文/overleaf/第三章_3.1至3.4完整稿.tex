@@ -1,0 +1,831 @@
+% !TeX program = xelatex
+% 第三章開頭與 3.1 至 3.4 整併稿；以本稿取代相同範圍，避免重複標籤。
+% 沿用論文主檔與 amsmath、amssymb，不加入 document 環境。
+
+% ==================================================
+% 第三章 研究方法與全身模型預測控制器設計
+% ==================================================
+\chapter{研究方法與全身模型預測控制器設計}
+\label{c:methodology}
+
+本章以 Tang 等人\cite{tang2024gmpc}提出之幾何模型預測控制為基礎，針對動態室內環境中的自主移動機械臂，設計結合命令執行模型之全身預測控制器。控制器依據底盤與手臂狀態、導航參考、視覺目標及障礙資訊，共同求解底盤速度與手臂位置設定點變化率，以協調導航、目標接近及受約束操作。
+
+本章首先建立底盤與手臂運動學，以及描述手臂位置命令追蹤特性的增廣預測模型，接著定義控制目標與限制條件，再說明動態避障、視覺導引及受約束操作之整合，最後介紹命令執行動態補償與整體控制流程。
+
+% ==================================================
+% 3.1 底盤幾何運動與全身運動學
+% ==================================================
+\section{底盤幾何運動與全身運動學}
+\label{sec:wholebody_kinematics}
+
+移動機械臂之末端運動同時受到底盤位姿與手臂構型影響。本節以底盤的三個平面運動自由度及手臂的六個旋轉關節建立全身運動學，作為導航與操作共同預測的基礎。夾爪開合則依抓持階段另外處理，不納入本節的九維運動學變數。
+
+% ==================================================
+% 3.1.1 座標系定義與位姿表示
+% ==================================================
+\subsection{座標系定義與位姿表示}
+\label{subsec:frames_pose_representation}
+
+定義世界座標系 $\mathcal{F}_{W}$、底盤平面座標系 $\mathcal{F}_{B}$、手臂基座座標系 $\mathcal{F}_{A}$，以及末端工具中心點（Tool Center Point, TCP）座標系 $\mathcal{F}_{E}$。底盤座標系之 $x$ 軸指向前方、$y$ 軸指向左方、$z$ 軸朝上，航向角 $\theta_B$ 依右手定則繞 $z$ 軸定義。底盤平面座標原點位於平面運動基準，底盤高度及手臂安裝偏移納入底盤至手臂基座的固定變換。
+
+以 ${}^{i}T_{j}$ 表示將座標系 $\mathcal{F}_{j}$ 中的點轉換至 $\mathcal{F}_{i}$ 的齊次變換。底盤在世界座標中的平面位姿表示為
+\begin{equation}
+    X_B =
+    \begin{bmatrix}
+        R_B(\theta_B) & p_B \\
+        \mathbf{0}_{1\times 2} & 1
+    \end{bmatrix}
+    \in \mathrm{SE}(2),
+    \qquad
+    R_B(\theta_B) =
+    \begin{bmatrix}
+        \cos\theta_B & -\sin\theta_B \\
+        \sin\theta_B & \cos\theta_B
+    \end{bmatrix},
+    \label{eq:ch3_base_pose}
+\end{equation}
+其中 $p_B=[x_B,y_B]^{\top}$ 為底盤平面位置。本節以李群與李代數描述底盤位姿及其局部誤差，其中指數映射、對數映射與局部擾動之數學定義，參照 Sol\`a 等人\cite{sola2018micro}之整理。
+
+手臂關節角以 $q_a=[q_1,\ldots,q_6]^{\top}\in\mathbb{R}^{6}$ 表示。末端工具之世界位姿則以 ${}^{W}T_E\in\mathrm{SE}(3)$ 描述，包含三維位置 ${}^{W}p_E$ 與姿態 ${}^{W}R_E$。本研究使用的固定安裝變換、關節軸向與 TCP 偏移，由機器人模型的運動鏈取得。
+
+% ==================================================
+% 3.1.2 底盤 SE(2) 運動模型與追蹤誤差
+% ==================================================
+\subsection{底盤 SE(2) 運動模型與追蹤誤差}
+\label{subsec:base_se2_model_error}
+
+本研究之全向底盤可在平面內進行前後、側向及旋轉運動。定義底盤本體座標速度及其李代數矩陣為
+\begin{equation}
+    \xi_B =
+    \begin{bmatrix}
+        v_x^B & v_y^B & \omega_B
+    \end{bmatrix}^{\top},
+    \qquad
+    \widehat{\xi}_B =
+    \begin{bmatrix}
+        0 & -\omega_B & v_x^B \\
+        \omega_B & 0 & v_y^B \\
+        0 & 0 & 0
+    \end{bmatrix},
+    \label{eq:ch3_body_velocity_hat}
+\end{equation}
+其中 $v_x^B$、$v_y^B$ 為底盤座標中的平移速度，$\omega_B$ 為偏航角速度。底盤運動學可寫為
+\begin{equation}
+    \dot{X}_B = X_B\widehat{\xi}_B,
+    \qquad
+    \begin{bmatrix}
+        \dot{x}_B \\
+        \dot{y}_B \\
+        \dot{\theta}_B
+    \end{bmatrix}
+    =
+    \begin{bmatrix}
+        \cos\theta_B & -\sin\theta_B & 0 \\
+        \sin\theta_B & \cos\theta_B & 0 \\
+        0 & 0 & 1
+    \end{bmatrix}
+    \xi_B.
+    \label{eq:ch3_base_kinematics}
+\end{equation}
+式\eqref{eq:ch3_base_kinematics}將本體座標速度轉換為世界座標的位置變化率，並保留底盤航向對平移方向的影響。
+
+底盤追蹤之幾何建模以 Tang 等人\cite{tang2024gmpc}提出的 GMPC 為基礎。令 $X_r(t)$ 為參考位姿，$\xi_r(t)$ 為其對應的本體座標速度，滿足 $\dot{X}_r=X_r\widehat{\xi}_r$。定義參考位姿至實際位姿之相對變換與局部誤差為
+\begin{equation}
+    E_B = X_r^{-1}X_B,
+    \qquad
+    e_B = \left(\log E_B\right)^{\vee}
+    =
+    \begin{bmatrix}
+        \rho_x & \rho_y & \varphi
+    \end{bmatrix}^{\top},
+    \label{eq:ch3_geometric_tracking_error}
+\end{equation}
+其中 $(\cdot)^{\vee}$ 為 $(\widehat{\cdot})$ 的反運算，$\rho_x$、$\rho_y$ 為相對變換經對數映射後的平移座標，$\varphi$ 為相對航向角。此平移座標包含相對旋轉的影響，並非直接採用世界座標的位置差。
+
+對 $E_B$ 微分並代入底盤與參考運動學，可得
+\begin{equation}
+    \dot{E}_B
+    = E_B\widehat{\xi}_B-\widehat{\xi}_rE_B.
+    \label{eq:ch3_exact_group_error_dynamics}
+\end{equation}
+令 $\delta\xi=\xi_B-\xi_r$，在 $E_B$ 接近單位矩陣時，以 $E_B\approx I+\widehat{e}_B$ 展開，並忽略誤差與輸入偏差之乘積高階項，可得局部一階模型
+\begin{equation}
+    \begin{aligned}
+        \dot{e}_B
+        &\approx -\operatorname{ad}(\xi_r)e_B+\delta\xi, \\
+        \operatorname{ad}(\xi_r)
+        &=
+        \begin{bmatrix}
+            0 & -\omega_r & v_{y,r} \\
+            \omega_r & 0 & -v_{x,r} \\
+            0 & 0 & 0
+        \end{bmatrix}.
+    \end{aligned}
+    \label{eq:ch3_local_error_dynamics}
+\end{equation}
+此處定義 $\operatorname{ad}(\xi)\eta=([\widehat{\xi},\widehat{\eta}])^{\vee}$，其中 $[A,B]=AB-BA$。因此，式\eqref{eq:ch3_local_error_dynamics}中誤差矩陣的正負號由上述交換子定義決定。
+
+以控制週期 $\Delta t$ 進行前向歐拉離散化，得到
+\begin{equation}
+    \begin{aligned}
+        e_{B,k+1}
+        &= A_{B,k}e_{B,k}+B_B\delta\xi_k, \\
+        A_{B,k}
+        &= I_3-\Delta t\operatorname{ad}(\xi_{r,k}),
+        \qquad B_B=\Delta t I_3.
+    \end{aligned}
+    \label{eq:ch3_discrete_base_error_model}
+\end{equation}
+其中 $k$ 為離散時間索引，$A_{B,k}$ 隨參考速度更新。此模型用於建立有限時域內的底盤誤差預測；對數映射採用主值，局部近似之適用性需配合相對位姿誤差及預測時域評估。
+
+% ==================================================
+% 3.1.3 移動機械臂正向運動學與全身雅可比矩陣
+% ==================================================
+\subsection{移動機械臂正向運動學與全身雅可比矩陣}
+\label{subsec:wholebody_fk_jacobian}
+
+為描述三維末端運動，將底盤平面位姿嵌入 $\mathrm{SE}(3)$，得到
+\begin{equation}
+    {}^{W}T_B=
+    \begin{bmatrix}
+        R_z(\theta_B) & t_B \\
+        \mathbf{0}_{1\times 3} & 1
+    \end{bmatrix},
+    \qquad
+    t_B=
+    \begin{bmatrix}
+        x_B & y_B & 0
+    \end{bmatrix}^{\top},
+    \label{eq:ch3_base_pose_se3}
+\end{equation}
+其中 $R_z(\theta_B)$ 為繞三維 $z$ 軸之旋轉矩陣。令 ${}^{B}T_A$ 為底盤至手臂基座的固定變換，${}^{A}T_E(q_a)$ 為包含 TCP 固定偏移的手臂正向運動學，則末端世界位姿為
+\begin{equation}
+    {}^{W}T_E
+    ={}^{W}T_B\,{}^{B}T_A\,{}^{A}T_E(q_a).
+    \label{eq:ch3_wholebody_forward_kinematics}
+\end{equation}
+式\eqref{eq:ch3_wholebody_forward_kinematics}表示相同末端目標可由底盤位姿與手臂構型共同達成，亦說明底盤移動時，手臂需要配合修正其相對構型。
+
+將末端線速度與角速度均表示於世界座標，定義六維幾何速度 ${}^{W}\nu_E$。其與底盤本體速度及實際關節速度之關係為
+\begin{equation}
+    {}^{W}\nu_E
+    =
+    \begin{bmatrix}
+        {}^{W}\dot{p}_E \\
+        {}^{W}\omega_E
+    \end{bmatrix}
+    =
+    \underbrace{
+    \begin{bmatrix}
+        {}^{W}J_B & {}^{W}J_A
+    \end{bmatrix}}_{{}^{W}J_{\mathrm{wb}}}
+    \begin{bmatrix}
+        \xi_B \\
+        \dot{q}_a
+    \end{bmatrix},
+    \label{eq:ch3_wholebody_geometric_velocity}
+\end{equation}
+其中 ${}^{W}J_{\mathrm{wb}}\in\mathbb{R}^{6\times 9}$ 為全身幾何雅可比矩陣，${}^{W}J_B\in\mathbb{R}^{6\times 3}$ 與 ${}^{W}J_A\in\mathbb{R}^{6\times 6}$ 分別描述底盤及手臂對末端運動的影響。此處線速度為 TCP 原點的速度，角速度為末端剛體角速度。
+
+令 ${}^{W}p_E=[x_E,y_E,z_E]^{\top}$，並定義 $r_x=x_E-x_B$、$r_y=y_E-y_B$。由底盤平移與偏航所造成的末端運動，可得
+\begin{equation}
+    {}^{W}J_B=
+    \begin{bmatrix}
+        \cos\theta_B & -\sin\theta_B & -r_y \\
+        \sin\theta_B & \cos\theta_B & r_x \\
+        0 & 0 & 0 \\
+        0 & 0 & 0 \\
+        0 & 0 & 0 \\
+        0 & 0 & 1
+    \end{bmatrix}.
+    \label{eq:ch3_base_geometric_jacobian}
+\end{equation}
+前兩欄將底盤本體座標的平移速度轉換至世界座標，第三欄則描述底盤繞自身原點旋轉所產生的末端線速度與角速度。
+
+對第 $i$ 個旋轉關節，令 ${}^{W}a_i$ 為其單位旋轉軸，${}^{W}o_i$ 為軸上一點，則手臂雅可比之第 $i$ 欄可寫為
+\begin{equation}
+    {}^{W}J_{A,i}=
+    \begin{bmatrix}
+        {}^{W}a_i\times\left({}^{W}p_E-{}^{W}o_i\right) \\
+        {}^{W}a_i
+    \end{bmatrix},
+    \qquad i=1,\ldots,6.
+    \label{eq:ch3_arm_geometric_jacobian_column}
+\end{equation}
+各關節軸與位置由當前運動鏈逐段轉換取得。若以廣義座標 $\chi=[x_B,y_B,\theta_B,q_a^{\top}]^{\top}$ 直接計算雅可比 $J_{\chi}$，則與式\eqref{eq:ch3_wholebody_geometric_velocity}的輸入表示具有下列關係：
+\begin{equation}
+    {}^{W}J_{\mathrm{wb}}
+    =J_{\chi}\operatorname{diag}\!\left(R_B(\theta_B),1,I_6\right).
+    \label{eq:ch3_jacobian_velocity_coordinate_mapping}
+\end{equation}
+因此，世界座標的位置變化率與底盤本體速度須經相應轉換，才能使用同一末端運動方程。
+
+上述運動學以實際關節速度 $\dot{q}_a$ 表示手臂運動。本研究採用位置命令介面，控制器產生的設定點變化率 $u_a$ 需經設定點積分及位置追蹤後才影響實際關節，兩者之關係將於下一節建立，以供全身預測模型使用。
+
+% ==================================================
+% 3.2 手臂設定點追蹤與增廣預測模型
+% ==================================================
+\section{手臂設定點追蹤與增廣預測模型}
+\label{sec:arm_augmented_prediction}
+
+前節建立了底盤與手臂的運動學關係，但控制器所產生的命令，仍需經過執行介面與關節位置控制器，才能形成實際運動。Grandia 等人\cite{grandia2019frequency}指出，未建模的致動器動態與頻寬限制，可能影響規劃運動的可執行性。針對本研究採用的手臂位置命令介面，本節建立設定點追蹤模型，並將實際關節位置與位置設定點共同納入預測狀態，使控制器能描述命令至關節運動之間的追蹤關係。
+
+% ==================================================
+% 3.2.1 手臂位置命令與伺服追蹤動態
+% ==================================================
+\subsection{手臂位置命令與伺服追蹤動態}
+\label{subsec:arm_setpoint_servo}
+
+令 $s_a\in\mathbb{R}^{6}$ 為手臂關節位置設定點，$u_a\in\mathbb{R}^{6}$ 為其變化率，單位分別為 rad 與 rad/s。執行端將 $u_a$ 積分為位置設定點，再由關節位置控制器追蹤。因此，$u_a$ 描述的是設定點的移動速率，與前節運動學中的實際關節速度 $\dot{q}_a$ 具有不同意義。
+
+以 $\Delta t_p$ 表示物理更新步長，$j$ 表示物理步索引。定義 $q_a^{j}$ 為該步量測的實際關節位置，$s_a^{j}$ 為該步完成寫入後、作用於下一物理區間的位置設定點。依此取樣時序，採用下列逐軸一階仿射模型：
+\begin{equation}
+    \begin{aligned}
+        q_a^{j+1}
+        &= (I_6-D_{\alpha})q_a^{j}
+           +D_{\alpha}s_a^{j}+b_a, \\
+        s_a^{j+1}
+        &= s_a^{j}+\Delta t_p u_a^{j},
+    \end{aligned}
+    \label{eq:ch3_physics_step_arm_model}
+\end{equation}
+其中 $D_{\alpha}=\operatorname{diag}(\alpha_1,\ldots,\alpha_6)$，$0<\alpha_i<1$ 為第 $i$ 軸的每物理步追蹤係數，$b_a\in\mathbb{R}^{6}$ 為每物理步的偏置項。$u_a^{j}$ 表示此更新關係中的設定點變化率，其對應的設定點增量為 $s_a^{j+1}-s_a^{j}$。第一式描述關節在目前已寫入設定點下的追蹤，第二式則描述下一步設定點的積分更新，兩者的時間索引須與執行端紀錄一致。
+
+若以一階系統解讀其衰減特性，追蹤係數可換算為等效時間常數
+\begin{equation}
+    \tau_i=-\frac{\Delta t_p}{\ln(1-\alpha_i)},
+    \qquad i=1,\ldots,6.
+    \label{eq:ch3_arm_equivalent_time_constant}
+\end{equation}
+當設定點固定且偏置不為零時，第 $i$ 軸的模型穩態偏差為 $(b_a)_i/\alpha_i$。因此，追蹤係數與偏置需共同估計，才能描述設定點與實際關節位置之間的關係。
+
+上述模型描述指定操作條件下的命令追蹤特性，未直接建立馬達力矩、關節慣量或接觸力的動力學。以下先考慮命令已生效，且於一個控制週期內保持固定的情形；命令延遲與在途命令之處理，將於執行動態補償一節另行說明。
+
+% ==================================================
+% 3.2.2 實際關節位置與設定點之增廣狀態
+% ==================================================
+\subsection{實際關節位置與設定點之增廣狀態}
+\label{subsec:augmented_arm_state}
+
+控制器更新週期通常與物理更新步長不同。令控制週期為 $\Delta t=m\Delta t_p$，其中 $m$ 為正整數，並以 $k$ 表示控制步索引。在第 $k$ 個控制週期內，令設定點變化率保持為 $u_{a,k}$。由式\eqref{eq:ch3_physics_step_arm_model}反覆代入 $m$ 次，可得控制步的手臂預測模型：
+\begin{equation}
+    \begin{aligned}
+        q_{a,k+1}
+        &= A_q q_{a,k}+A_s s_{a,k}
+           +B_a u_{a,k}+c_a, \\
+        s_{a,k+1}
+        &= s_{a,k}+\Delta t u_{a,k}.
+    \end{aligned}
+    \label{eq:ch3_control_step_arm_model}
+\end{equation}
+令 $\beta_i=1-\alpha_i$，各軸係數分別為
+\begin{equation}
+    \begin{aligned}
+        A_q
+        &=\operatorname{diag}(\beta_1^m,\ldots,\beta_6^m), \\
+        A_s
+        &=I_6-A_q, \\
+        B_a
+        &=\operatorname{diag}(g_1,\ldots,g_6), \\
+        g_i
+        &=\alpha_i\Delta t_p
+          \sum_{\ell=0}^{m-1}\ell\,\beta_i^{m-1-\ell}, \\
+        (c_a)_i
+        &=(b_a)_i\frac{1-\beta_i^m}{\alpha_i},
+        \qquad i=1,\ldots,6.
+    \end{aligned}
+    \label{eq:ch3_arm_composed_coefficients}
+\end{equation}
+其中 $A_q$ 與 $A_s$ 為無因次矩陣，$B_a$ 具有時間尺度，$c_a$ 為控制週期內累積的偏置。式\eqref{eq:ch3_arm_composed_coefficients}由既定取樣順序推導，因此 $B_a$ 一般不等於 $\Delta t I_6$。即使 $u_{a,k}=\mathbf{0}$，只要實際關節位置與設定點之間仍有差異，關節仍可能繼續朝設定點移動。
+
+為與底盤幾何誤差模型整合，定義增廣狀態與控制輸入為
+\begin{equation}
+    \zeta_k=
+    \begin{bmatrix}
+        e_{B,k} \\
+        q_{a,k} \\
+        s_{a,k}
+    \end{bmatrix}
+    \in\mathbb{R}^{15},
+    \qquad
+    u_k=
+    \begin{bmatrix}
+        \delta\xi_k \\
+        u_{a,k}
+    \end{bmatrix}
+    \in\mathbb{R}^{9},
+    \label{eq:ch3_augmented_state_input}
+\end{equation}
+其中 $e_{B,k}$ 與 $\delta\xi_k$ 沿用前節定義，實際底盤速度命令為 $\xi_{r,k}+\delta\xi_k$。六維設定點為執行模型的內部狀態，其增廣不改變機器人的九個運動自由度，也不增加控制輸入維度。
+
+結合式\eqref{eq:ch3_discrete_base_error_model}與式\eqref{eq:ch3_control_step_arm_model}，得到全身增廣預測模型
+\begin{equation}
+    \zeta_{k+1}=F_k\zeta_k+G u_k+d,
+    \label{eq:ch3_augmented_prediction_dynamics}
+\end{equation}
+其中
+\begin{equation}
+    F_k=
+    \begin{bmatrix}
+        A_{B,k} & \mathbf{0}_{3\times6} & \mathbf{0}_{3\times6} \\
+        \mathbf{0}_{6\times3} & A_q & A_s \\
+        \mathbf{0}_{6\times3} & \mathbf{0}_{6\times6} & I_6
+    \end{bmatrix}
+    \in\mathbb{R}^{15\times15},
+    \label{eq:ch3_augmented_state_matrix}
+\end{equation}
+\begin{equation}
+    G=
+    \begin{bmatrix}
+        B_B & \mathbf{0}_{3\times6} \\
+        \mathbf{0}_{6\times3} & B_a \\
+        \mathbf{0}_{6\times3} & \Delta t I_6
+    \end{bmatrix},
+    \qquad
+    d=
+    \begin{bmatrix}
+        \mathbf{0}_{3} \\
+        c_a \\
+        \mathbf{0}_{6}
+    \end{bmatrix},
+    \label{eq:ch3_augmented_input_bias}
+\end{equation}
+且 $G\in\mathbb{R}^{15\times9}$、$d\in\mathbb{R}^{15}$。在追蹤係數與偏置固定時，手臂區塊為仿射模型；底盤區塊則保留前節的局部一階近似。
+
+末端位姿仍由底盤位姿與實際關節位置決定。於預測時刻，先由幾何誤差還原底盤位姿，再依式\eqref{eq:ch3_wholebody_forward_kinematics}計算末端位姿：
+\begin{equation}
+    \begin{aligned}
+        X_{B,k}
+        &=X_{r,k}\exp\!\left(\widehat{e}_{B,k}\right), \\
+        {}^{W}T_{E,k}
+        &={}^{W}T_B(X_{B,k})\,{}^{B}T_A\,
+          {}^{A}T_E(q_{a,k}).
+    \end{aligned}
+    \label{eq:ch3_augmented_tcp_reconstruction}
+\end{equation}
+其中 ${}^{W}T_B(X_{B,k})$ 為平面位姿的三維嵌入。位置設定點 $s_{a,k}$ 經由追蹤模型影響後續的 $q_{a,k}$，不直接代入正向運動學。雖然底盤與手臂的狀態轉移以分塊形式表示，兩者仍透過共同的末端目標形成控制耦合，相關目標函數於下一節建立。
+
+% ==================================================
+% 3.2.3 多步預測模型建立與參數辨識
+% ==================================================
+\subsection{多步預測模型建立與參數辨識}
+\label{subsec:multistep_prediction_identification}
+
+令 $N$ 為預測步數，$i|k$ 表示在第 $k$ 個控制週期，對未來第 $i$ 步的預測。預測初始狀態 $\zeta_{0|k}$ 由對齊至相同取樣時刻的底盤位姿、實際關節位置及執行端設定點建立。設定點須使用執行端回報值，不能在每次求解時直接以實測關節位置取代，否則將消除模型欲描述的追蹤落後。
+
+有限時域內的狀態依下式遞推：
+\begin{equation}
+    \zeta_{i+1|k}
+    =F_{k+i}\zeta_{i|k}+G u_{i|k}+d,
+    \qquad i=0,\ldots,N-1.
+    \label{eq:ch3_horizon_state_recursion}
+\end{equation}
+將未來狀態與輸入堆疊為
+\begin{equation}
+    \mathbf{Z}_k=
+    \begin{bmatrix}
+        \zeta_{1|k} \\ \vdots \\ \zeta_{N|k}
+    \end{bmatrix},
+    \qquad
+    \mathbf{U}_k=
+    \begin{bmatrix}
+        u_{0|k} \\ \vdots \\ u_{N-1|k}
+    \end{bmatrix},
+    \label{eq:ch3_horizon_state_input_stack}
+\end{equation}
+則可整理為
+\begin{equation}
+    \mathbf{Z}_k
+    =\Phi_k\zeta_{0|k}+\Gamma_k\mathbf{U}_k+\eta_k,
+    \label{eq:ch3_condensed_augmented_prediction}
+\end{equation}
+其中 $\Phi_k\in\mathbb{R}^{15N\times15}$ 為初始狀態傳遞矩陣，$\Gamma_k\in\mathbb{R}^{15N\times9N}$ 為輸入影響矩陣，$\eta_k\in\mathbb{R}^{15N}$ 為偏置累積向量。各預測步的係數可由式\eqref{eq:ch3_horizon_state_recursion}依序建立；$\Gamma_k$ 具有分塊下三角結構，表示未來命令僅影響其作用後的預測狀態。此形式可將預測關節位置、設定點與底盤誤差表示為控制序列的仿射函數，供後續目標函數與限制條件使用。
+
+手臂模型參數由設定點與實際關節位置紀錄逐軸辨識。對第 $r$ 個關節，依相同物理步長及取樣順序形成資料對，定義關節位移 $\Delta q_r^{j}=q_r^{j+1}-q_r^{j}$ 與追蹤差 $\varepsilon_r^{j}=s_r^{j}-q_r^{j}$，並以最小平方法估計參數：
+\begin{equation}
+    \begin{aligned}
+        J_r(\alpha_r,b_r)
+        &=\sum_{j\in\mathcal{I}_{\mathrm{est}}}
+          \left(\Delta q_r^{j}-\alpha_r\varepsilon_r^{j}-b_r\right)^2, \\
+        (\hat{\alpha}_r,\hat{b}_r)
+        &=\underset{\alpha_r,b_r}{\operatorname{arg\,min}}\;
+          J_r(\alpha_r,b_r).
+    \end{aligned}
+    \label{eq:ch3_arm_parameter_identification}
+\end{equation}
+其中 $\mathcal{I}_{\mathrm{est}}$ 為參數估計資料的索引集合，$q_r^{j}$ 與 $s_r^{j}$ 分別為 $q_a^{j}$ 與 $s_a^{j}$ 的第 $r$ 個分量。估計後檢查 $0<\hat{\alpha}_r<1$，並以未參與估計的資料檢查單步與多步預測誤差。資料依時間先後區分為估計與驗證區段；多步驗證亦須區分是否使用已記錄的後續設定點或命令，避免將事後重播誤差視為線上預測效能。
+
+本研究以既有模擬紀錄建立初始模型參數，辨識設定、預測誤差及適用範圍於第四章說明。透過上述增廣模型，後續控制問題可同時考量實際關節位置與位置設定點，並保留兩者在追蹤動態及運動限制上的差異。
+
+% ==================================================
+% 3.3 全身預測控制之目標函數與限制條件
+% ==================================================
+\section{全身預測控制之目標函數與限制條件}
+\label{sec:wholebody_objective_constraints}
+
+本節以前述增廣預測模型為基礎，建立底盤與手臂共同求解的有限時域控制問題。目標函數同時考量底盤追蹤、末端位姿追蹤及命令平順性，並納入實際關節位置、位置設定點與底盤輪級運動限制。透過共同的末端追蹤目標，控制器可在可用運動範圍內分配底盤與手臂的運動，使導航參考與操作需求共同影響控制輸出。本節先建立基本控制問題，障礙與受約束操作之附加條件於後續各節說明。
+
+% ==================================================
+% 3.3.1 底盤與末端位姿追蹤目標
+% ==================================================
+\subsection{底盤與末端位姿追蹤目標}
+\label{subsec:wholebody_tracking_objective}
+
+沿用前節的預測索引，令 $e_{B,i|k}$ 為底盤幾何追蹤誤差。以 $\|x\|_Q^2=x^{\top}Qx$ 表示加權平方範數，底盤追蹤成本定義為
+\begin{equation}
+    J_B=
+    \sum_{i=1}^{N-1}\|e_{B,i|k}\|_{Q_B}^{2}
+    +\|e_{B,N|k}\|_{Q_{B,f}}^{2},
+    \label{eq:ch3_base_tracking_cost}
+\end{equation}
+其中 $Q_B$ 為階段權重，$Q_{B,f}$ 為終端權重，分別調整預測時域內及末端時刻的追蹤需求。
+
+令 $p_{E,i|k}$ 與 $R_{E,i|k}$ 為預測末端在世界座標中的位置及姿態，$p_{E,i|k}^{d}$ 與 $R_{E,i|k}^{d}$ 為對應目標。定義末端位姿殘差為
+\begin{equation}
+    r_{E,i|k}=
+    \begin{bmatrix}
+        p_{E,i|k}^{d}-p_{E,i|k} \\
+        R_{E,i|k}
+        \left[\log\!\left(R_{E,i|k}^{\top}R_{E,i|k}^{d}\right)\right]^{\vee}
+    \end{bmatrix}
+    \in\mathbb{R}^{6}.
+    \label{eq:ch3_tcp_pose_residual}
+\end{equation}
+姿態殘差由相對旋轉的對數映射取得，並轉換至世界座標，使其與前節的末端幾何雅可比採用相同座標表示。末端追蹤成本為
+\begin{equation}
+    J_E=\sum_{i=1}^{N}\|r_{E,i|k}\|_{W_E}^{2},
+    \qquad
+    W_E=\operatorname{diag}(W_p,W_R),
+    \label{eq:ch3_tcp_tracking_cost}
+\end{equation}
+其中 $W_p$ 與 $W_R$ 分別為位置及姿態權重。底盤與手臂均會改變世界座標中的末端位姿，因此，此成本可形成兩者共同承擔操作目標的機制。本節先以世界座標目標說明；持物運送等採用底盤相對目標的情況，於任務參考與操作設計中另行定義。
+
+為限制控制輸入大小並抑制相鄰命令的急遽變化，另建立
+\begin{equation}
+    \begin{aligned}
+        J_U
+        &=\sum_{i=0}^{N-1}
+          \left(
+              \|\delta\xi_{i|k}\|_{R_{\xi}}^{2}
+              +\|u_{a,i|k}\|_{R_a}^{2}
+          \right), \\
+        J_{\Delta}
+        &=\sum_{i=0}^{N-1}
+          \left(
+              \|\Delta\xi_{B,i|k}\|_{S_{\xi}}^{2}
+              +\|\Delta u_{a,i|k}\|_{S_a}^{2}
+          \right),
+    \end{aligned}
+    \label{eq:ch3_input_smoothness_cost}
+\end{equation}
+其中底盤速度命令為 $\xi_{B,i|k}=\xi_{r,k+i}+\delta\xi_{i|k}$，命令差分定義為 $\Delta\xi_{B,i|k}=\xi_{B,i|k}-\xi_{B,i-1|k}$ 及 $\Delta u_{a,i|k}=u_{a,i|k}-u_{a,i-1|k}$。第一步差分以前一筆實際生效命令為基準；若預測起點經延遲補償前推，則使用該起點之前的生效命令。底盤平順性成本計算的是完整速度命令之差，須包含參考速度的變化。
+
+基本目標函數為 $J=J_B+J_E+J_U+J_{\Delta}$。各追蹤與平順性權重選為半正定矩陣，輸入權重則提供控制量的正則化。位置、角度及命令具有不同單位，其權重依容許尺度設定，實驗使用之數值於第四章說明。
+
+% ==================================================
+% 3.3.2 關節、命令變化與輪級運動限制
+% ==================================================
+\subsection{關節、命令變化與輪級運動限制}
+\label{subsec:joint_command_wheel_constraints}
+
+手臂位置設定點與實際關節位置具有不同的追蹤動態，因此，兩者皆需納入位置限制。令 $q_{\min}$、$q_{\max}$ 為關節位置界限，$\mu\in\mathbb{R}_{\geq0}^{6}$ 為限位餘量，則對 $i=1,\ldots,N$，施加
+\begin{equation}
+    \begin{aligned}
+        q_{\min}+\mu
+        &\leq q_{a,i|k}\leq q_{\max}-\mu, \\
+        q_{\min}+\mu
+        &\leq s_{a,i|k}\leq q_{\max}-\mu.
+    \end{aligned}
+    \label{eq:ch3_joint_setpoint_limits}
+\end{equation}
+上述不等式均依元素成立。當追蹤模型包含偏置或設定點與實際位置尚未一致時，兩組限制無法直接互相取代。
+
+底盤與手臂命令另需滿足
+\begin{equation}
+    \begin{aligned}
+        \xi_{\min}
+        &\leq\xi_{B,i|k}\leq\xi_{\max}, \\
+        -\bar{a}_B\Delta t
+        &\leq\Delta\xi_{B,i|k}\leq\bar{a}_B\Delta t, \\
+        -\bar{v}_s
+        &\leq u_{a,i|k}\leq\bar{v}_s, \\
+        -\bar{a}_s\Delta t
+        &\leq\Delta u_{a,i|k}\leq\bar{a}_s\Delta t,
+    \end{aligned}
+    \label{eq:ch3_command_rate_limits}
+\end{equation}
+其中 $i=0,\ldots,N-1$，$\bar{a}_B$ 為底盤速度命令的變化率上限，$\bar{v}_s$ 與 $\bar{a}_s$ 分別為手臂設定點變化率及其變化率的上限。手臂限制施加於命令介面，實際關節運動則由前節的追蹤模型預測，兩者須分別解讀。
+
+對四輪全向底盤，僅限制各軸速度，仍不足以描述平移與旋轉同時發生時的輪速需求。依本研究輪系之輪序及正方向，輪速命令可寫為
+\begin{equation}
+    \omega_{w,i|k}
+    =\frac{1}{r_w}W\xi_{B,i|k},
+    \qquad
+    W=
+    \begin{bmatrix}
+        0 & 1 & L \\
+        -1 & 0 & L \\
+        0 & -1 & L \\
+        1 & 0 & L
+    \end{bmatrix},
+    \label{eq:ch3_wheel_command_mapping}
+\end{equation}
+其中 $r_w$ 為輪半徑，$L$ 為底盤輪系的幾何參數，$\omega_{w,i|k}\in\mathbb{R}^{4}$ 為四輪轉速命令。輪級限制為
+\begin{equation}
+    \begin{aligned}
+        -\bar{\omega}_w
+        &\leq\omega_{w,i|k}\leq\bar{\omega}_w, \\
+        -\bar{\alpha}_w\Delta t
+        &\leq\omega_{w,i|k}-\omega_{w,i-1|k}
+          \leq\bar{\alpha}_w\Delta t,
+    \end{aligned}
+    \label{eq:ch3_wheel_speed_acceleration_limits}
+\end{equation}
+其中 $\bar{\omega}_w$ 與 $\bar{\alpha}_w$ 分別為輪速及輪速命令變化率上限。將此限制直接納入最佳化問題，可使底盤平移與旋轉共同使用輪系可用範圍；此處描述的是命令可行性，實際輪速追蹤與運動誤差仍由實驗評估。
+
+% ==================================================
+% 3.3.3 最佳化問題建構與數值求解
+% ==================================================
+\subsection{最佳化問題建構與數值求解}
+\label{subsec:wholebody_qp_formulation}
+
+由式\eqref{eq:ch3_condensed_augmented_prediction}，預測狀態為控制序列 $\mathbf{U}_k$ 的仿射函數。由於末端正向運動學具有非線性，先由給定的控制序列 $\bar{\mathbf{U}}_k$ 計算各步的預測狀態，再於這些狀態建立局部近似。
+
+令 $\Gamma_{i,k}$ 為預測矩陣 $\Gamma_k$ 中對應第 $i$ 步狀態的列區塊，$C_i$ 為底盤幾何誤差至平面位姿座標 $[x_B,y_B,\theta_B]^{\top}$ 的局部微分。以 $J_{\chi,B,i}$ 與 $J_{\chi,A,i}$ 表示前節廣義座標雅可比的底盤及手臂區塊，則末端幾何位移對增廣狀態的局部映射為
+\begin{equation}
+    \mathcal{J}_{E,i}=
+    \begin{bmatrix}
+        J_{\chi,B,i}C_i & J_{\chi,A,i} & \mathbf{0}_{6\times6}
+    \end{bmatrix}.
+    \label{eq:ch3_tcp_augmented_geometric_jacobian}
+\end{equation}
+各矩陣均於上述預測狀態計算。設定點不直接改變當前末端位姿，其作用經由 $\Gamma_{i,k}$ 中的關節追蹤預測傳遞。
+
+當構型變化與末端姿態誤差均較小時，姿態項採小誤差近似，末端殘差可整理為
+\begin{equation}
+    \begin{aligned}
+        r_{E,i|k}
+        &\approx\bar{r}_{E,i|k}
+          -L_{i,k}(\mathbf{U}_k-\bar{\mathbf{U}}_k) \\
+        &=r_{0,i|k}-L_{i,k}\mathbf{U}_k, \\
+        L_{i,k}
+        &=\mathcal{J}_{E,i}\Gamma_{i,k}, \\
+        r_{0,i|k}
+        &=\bar{r}_{E,i|k}+L_{i,k}\bar{\mathbf{U}}_k.
+    \end{aligned}
+    \label{eq:ch3_tcp_affine_residual}
+\end{equation}
+其中 $\bar{r}_{E,i|k}$ 為使用 $\bar{\mathbf{U}}_k$ 計算的末端殘差。底盤與手臂的控制分量共同出現在 $L_{i,k}$ 中，故末端追蹤成本可產生底盤與手臂之間的交叉項，使兩者在同一問題中協調運動。
+
+堆疊各步的底盤誤差、末端殘差與完整命令差分，可分別寫成
+\begin{equation}
+    \begin{aligned}
+        \mathbf{E}_{B,k}
+        &=M_{B,k}\mathbf{U}_k+c_{B,k}, \\
+        \mathbf{r}_{E,k}
+        &\approx\mathbf{r}_{0,k}-\mathcal{L}_k\mathbf{U}_k, \\
+        \Delta\mathbf{V}_k
+        &=D\mathbf{U}_k+c_{\Delta,k}.
+    \end{aligned}
+    \label{eq:ch3_stacked_objective_maps}
+\end{equation}
+其中 $M_{B,k}$ 與 $c_{B,k}$ 由增廣預測的底盤列取得，$\mathcal{L}_k$ 與 $\mathbf{r}_{0,k}$ 由式\eqref{eq:ch3_tcp_affine_residual}堆疊而成。$D$ 為相鄰控制輸入的一階差分矩陣，$c_{\Delta,k}$ 則收集參考速度變化及前一筆生效命令造成的常數項。$\Delta\mathbf{V}_k$ 的各步區塊為 $[\Delta\xi_{B,i|k}^{\top},\Delta u_{a,i|k}^{\top}]^{\top}$。
+
+以 $\bar{Q}_B$、$\bar{W}_E$、$\bar{R}$ 與 $\bar{S}$ 表示各預測步權重的分塊對角矩陣，其中 $\bar{Q}_B$ 的最後一塊為 $Q_{B,f}$，$\bar{R}$ 與 $\bar{S}$ 的各步區塊分別為 $\operatorname{diag}(R_{\xi},R_a)$ 與 $\operatorname{diag}(S_{\xi},S_a)$。代入目標函數後，可得二次規劃（Quadratic Programming, QP）問題
+\begin{equation}
+    \begin{aligned}
+        \underset{\mathbf{U}_k}{\operatorname{minimize}}\quad
+        &\frac{1}{2}\mathbf{U}_k^{\top}H_k\mathbf{U}_k
+          +g_k^{\top}\mathbf{U}_k \\
+        \operatorname{subject\ to}\quad
+        &\ell_k\leq A_{\mathrm{QP},k}\mathbf{U}_k\leq h_k,
+    \end{aligned}
+    \label{eq:ch3_wholebody_qp}
+\end{equation}
+其中，省略與決策變數無關的常數項後，成本矩陣與向量為
+\begin{equation}
+    \begin{aligned}
+        H_k=2\big(&M_{B,k}^{\top}\bar{Q}_B M_{B,k}
+             +\mathcal{L}_k^{\top}\bar{W}_E\mathcal{L}_k \\
+             &+\bar{R}+D^{\top}\bar{S}D\big), \\
+        g_k=2\big(&M_{B,k}^{\top}\bar{Q}_B c_{B,k}
+             -\mathcal{L}_k^{\top}\bar{W}_E\mathbf{r}_{0,k} \\
+             &+D^{\top}\bar{S}c_{\Delta,k}\big).
+    \end{aligned}
+    \label{eq:ch3_wholebody_qp_cost_matrices}
+\end{equation}
+限制矩陣及上下界由前述命令、位置與輪級限制代入仿射預測後建立。當線性化矩陣固定且權重為半正定時，形成凸二次規劃；若輸入權重為正定，則 $H_k$ 為正定，在限制集合非空時具有唯一最小解。此凸性是固定局部近似下的性質，末端運動學仍需隨狀態更新。
+
+本研究的全身耦合問題採用 Goldfarb 與 Idnani\cite{goldfarb1983dual}之對偶作用集法進行數值求解；未取得通過驗證的解時，再以 Stellato 等人\cite{stellato2020osqp}提出之 OSQP 求解相同問題。作用集法所得解以原始問題檢查可行性與 Karush--Kuhn--Tucker（KKT）條件。接受全身控制解前，另檢查命令有限值、預測關節與設定點之限制殘差，以及輸出命令與求解序列的一致性。未通過接受條件時，交由既定的保持或減速機制處理，相關流程於執行動態補償與控制實現一節說明。
+
+% ==================================================
+% 3.3.4 滾動時域控制原則
+% ==================================================
+\subsection{滾動時域控制原則}
+\label{subsec:wholebody_receding_horizon}
+
+控制器於每個控制週期取得新的機器人狀態與任務參考，依序更新增廣預測、末端局部近似及限制條件，再求解式\eqref{eq:ch3_wholebody_qp}。取得控制序列 $\mathbf{U}_k^{*}$ 後，僅執行首段控制輸入，對應的底盤速度及手臂設定點變化率為
+\begin{equation}
+    \xi_{B,k}^{\mathrm{cmd}}
+    =\xi_{r,k}+\delta\xi_{0|k}^{*},
+    \qquad
+    u_{a,k}^{\mathrm{cmd}}=u_{a,0|k}^{*}.
+    \label{eq:ch3_receding_horizon_command}
+\end{equation}
+底盤速度送入其執行介面，手臂命令則由執行端依物理步長積分為位置設定點。下一控制週期重新取得實際狀態及設定點後，再進行預測與求解，使追蹤誤差與新觀測能持續影響後續動作。
+
+上述方法以同一有限時域問題協調底盤與手臂，並以命令及狀態限制約束可用運動。後續將加入障礙運動預測與避障條件，進一步說明環境資訊如何轉換為控制問題中的限制。
+
+% ==================================================
+% 3.4 障礙運動預測與動態避障
+% ==================================================
+\section{障礙運動預測與動態避障}
+\label{sec:dynamic_obstacle_avoidance}
+
+動態室內環境中的障礙會隨時間改變可通行空間，僅追蹤既定路徑，可能無法及時因應人員或物件的接近。本節將障礙的幾何資訊與運動估計轉換為預測時域內的避障限制，並在底盤命令執行路徑加入直接使用雷射回波的防護機制。前者用於配合導航參考調整未來運動，後者用於處理未完整進入追蹤與分類流程的近距離回波。
+
+% ==================================================
+% 3.4.1 障礙物表示與運動預測
+% ==================================================
+\subsection{障礙物表示與運動預測}
+\label{subsec:obstacle_representation_prediction}
+
+雷射量測先經有效距離與自身回波篩選，再轉換至共同座標系。已知地圖提供固定牆面資訊，其餘候選回波則依掃描角度的相鄰關係形成群集，並與既有軌跡進行資料關聯。群集中心用於追蹤與速度估計；避障幾何則保留物件表面的量測樣本，使較長或不規則的障礙可由多個局部樣本描述。
+
+對第 $g$ 個追蹤物件，定義平面狀態 $x_g=[c_g^{\top},v_g^{\top}]^{\top}\in\mathbb{R}^{4}$，其中 $c_g$ 為追蹤中心，$v_g$ 為平面速度。採用等速度模型與卡爾曼濾波\cite{kalman1960filter}估計其狀態，模型表示為
+\begin{equation}
+    \begin{aligned}
+        x_g^{+}
+        &=F_o(\Delta\tau)x_g+w_g, \\
+        y_g
+        &=H_o x_g+n_g, \\
+        F_o(\Delta\tau)
+        &=\begin{bmatrix}
+            I_2 & \Delta\tau I_2 \\
+            \mathbf{0}_{2\times2} & I_2
+          \end{bmatrix}, \\
+        H_o
+        &=\begin{bmatrix}
+            I_2 & \mathbf{0}_{2\times2}
+          \end{bmatrix},
+    \end{aligned}
+    \label{eq:ch3_obstacle_tracking_model}
+\end{equation}
+其中 $\Delta\tau$ 為相鄰追蹤更新的時間間隔，$y_g$ 為群集中心量測，$w_g$ 與 $n_g$ 分別表示程序與量測雜訊。追蹤更新間隔與控制週期 $\Delta t$ 分別處理，避免將不同更新頻率視為相同。
+
+以 $\ell$ 表示送入控制器的障礙幾何樣本，令 $\hat{o}_{\ell,k}\in\mathbb{R}^{2}$ 為其目前估計位置，$\hat{v}_{\ell,k}\in\mathbb{R}^{2}$ 為所屬物件的速度估計。預測時域內的位置為
+\begin{equation}
+    o_{\ell,i|k}
+    =\hat{o}_{\ell,k}+i\Delta t\hat{v}_{\ell,k},
+    \qquad i=0,\ldots,N-1.
+    \label{eq:ch3_obstacle_cv_prediction}
+\end{equation}
+同一物件的表面樣本共用其平移速度；已知固定牆面則取零速度。若暫時缺少新觀測，保留的表面樣本依追蹤中心的估計位移平移，使幾何位置與速度對應至相同時刻。此近似未描述物件在遮蔽期間的旋轉與變形，其可保留時間及保護距離依實驗設定。
+
+對直接使用表面回波的樣本，不再重複加入完整物件半徑。若以物件中心及外形半徑表示障礙，則保留對應半徑。兩種表示皆以有效排除距離 $\rho_{\ell}$ 納入後續屏障函數，並透過樣本間距與數量上限控制問題規模。
+
+% ==================================================
+% 3.4.2 控制屏障函數與避障限制
+% ==================================================
+\subsection{控制屏障函數與避障限制}
+\label{subsec:cbf_obstacle_constraints}
+
+控制屏障函數（Control Barrier Function, CBF）可將集合維持需求轉換為控制輸入的條件，其基本理論與控制應用可參照 Ames 等人\cite{ames2019cbf}。本研究以底盤的平面圓盤近似建立距離型屏障函數：
+\begin{equation}
+    \begin{aligned}
+        h_{\ell}(p_B,t)
+        &=\|p_B-o_{\ell}(t)\|^2-\rho_{\ell}^{2}, \\
+        \rho_{\ell}
+        &=r_{\ell}+m_{\ell},
+    \end{aligned}
+    \label{eq:ch3_obstacle_barrier_function}
+\end{equation}
+其中 $r_{\ell}$ 為障礙樣本所代表的幾何半徑，$m_{\ell}$ 為包含底盤尺寸與額外間距的保護距離。表面樣本的幾何半徑可取零，其排除距離由保護距離構成。$h_{\ell}\geq0$ 表示底盤中心位於該樣本的排除區域之外。
+
+在保護距離固定、障礙採等速度預測時，沿底盤與障礙運動微分可得
+\begin{equation}
+    \dot{h}_{\ell}
+    =2(p_B-o_{\ell})^{\top}
+      \left(R_B(\theta_B)v_B-\hat{v}_{\ell,k}\right),
+    \label{eq:ch3_obstacle_barrier_derivative}
+\end{equation}
+其中 $v_B=[v_x^B,v_y^B]^{\top}$ 為底盤本體座標中的平移速度。選取 $\alpha_h>0$，採用速度型屏障條件
+\begin{equation}
+    \dot{h}_{\ell}+\alpha_h h_{\ell}
+    \geq-\varepsilon_{c(\ell),i|k},
+    \qquad \varepsilon_{c(\ell),i|k}\geq0,
+    \label{eq:ch3_velocity_cbf_condition}
+\end{equation}
+其中 $\varepsilon_{c(\ell),i|k}$ 為第 $i$ 個預測時刻的鬆弛變數，$c(\ell)$ 表示該樣本所屬的限制群組。依控制配置，樣本可共用同一組鬆弛，或區分固定幾何與移動障礙的鬆弛，以分別調整其懲罰。
+
+為建立線性限制，第零步使用目前實際底盤位姿，其後各步從底盤誤差模型採用的軌跡取得位置與方向，作為限制條件的評估點。令 $\bar{p}_{B,i|k}$ 與 $\bar{R}_{B,i|k}$ 為該評估點的位置及旋轉矩陣，並定義
+\begin{equation}
+    \begin{aligned}
+        \bar{d}_{\ell,i|k}
+        &=\bar{p}_{B,i|k}-o_{\ell,i|k}, \\
+        \bar{h}_{\ell,i|k}
+        &=\|\bar{d}_{\ell,i|k}\|^2-\rho_{\ell}^{2}, \\
+        a_{\ell,i|k}^{\top}
+        &=\begin{bmatrix}
+            2\bar{d}_{\ell,i|k}^{\top}\bar{R}_{B,i|k} & 0
+          \end{bmatrix}.
+    \end{aligned}
+    \label{eq:ch3_cbf_nominal_geometry}
+\end{equation}
+將底盤速度命令 $\xi_{B,i|k}=\xi_{r,k+i}+\delta\xi_{i|k}$ 代入，可將式\eqref{eq:ch3_velocity_cbf_condition}整理為
+\begin{equation}
+    \begin{aligned}
+        a_{\ell,i|k}^{\top}\delta\xi_{i|k}
+        +\varepsilon_{c(\ell),i|k}
+        \geq{}&2\bar{d}_{\ell,i|k}^{\top}\hat{v}_{\ell,k} \\
+               &-\alpha_h\bar{h}_{\ell,i|k}
+                -a_{\ell,i|k}^{\top}\xi_{r,k+i}.
+    \end{aligned}
+    \label{eq:ch3_cbf_affine_constraint}
+\end{equation}
+此限制直接作用於對應步的底盤速度偏差；在全身控制序列中，手臂命令欄補零。角速度欄為零，是因為圓盤距離的一階變化未直接包含偏航速度，底盤航向仍會影響後續運動方向與各步的幾何評估。
+
+將各障礙樣本及選定預測時刻的限制堆疊後，可加入前節的二次規劃問題。令 $\boldsymbol{\varepsilon}_k$ 為全部啟用的鬆弛變數，決策向量擴充為 $\mathbf{z}_{\mathrm{QP},k}=[\mathbf{U}_k^{\top},\boldsymbol{\varepsilon}_k^{\top}]^{\top}$，並於目標函數加入
+\begin{equation}
+    J_{\varepsilon}
+    =\sum_{c\in\mathcal{C}}\sum_{i=0}^{N-1}
+      w_{\varepsilon,c,i}\varepsilon_{c,i|k}^{2},
+    \qquad w_{\varepsilon,c,i}>0,
+    \label{eq:ch3_cbf_slack_cost}
+\end{equation}
+其中 $\mathcal{C}$ 為啟用的限制群組。當前步與未來步可採不同懲罰權重；提高權重仍屬軟限制，需同時記錄鬆弛量及原始屏障條件的殘差，才能判斷限制的實際滿足程度。
+
+上述限制會隨控制週期重新計算。由於涉及離散更新、幾何近似與鬆弛變數，其實際避障能力需由實驗驗證。本節的平面限制主要描述底盤與障礙的關係，伸展手臂與持物的三維幾何條件則另行處理。
+
+% ==================================================
+% 3.4.3 原始雷射掃描防護與命令處理
+% ==================================================
+\subsection{原始雷射掃描防護與命令處理}
+\label{subsec:raw_scan_command_protection}
+
+障礙回波可能因群集大小、資料關聯或運動分類條件而未進入預測控制器。為處理此類情況，底盤命令執行路徑另使用不依賴物件追蹤的雷射防護。此處使用不依賴追蹤物件分類結果的掃描回波，量測仍需進行有效距離、自身回波及必要的鄰點一致性篩選。
+
+令 $z_{\ell}^{B}\in\mathbb{R}^{2}$ 為轉換至底盤座標的有效回波，$R_{\mathrm{body}}$ 為底盤圓盤近似半徑，定義
+\begin{equation}
+    \begin{aligned}
+        n_{\ell}
+        &=\frac{z_{\ell}^{B}}{\|z_{\ell}^{B}\|}, \\
+        d_{\ell}
+        &=\|z_{\ell}^{B}\|-R_{\mathrm{body}}, \\
+        r_{\ell}^{B}
+        &=R_{\mathrm{body}}n_{\ell}.
+    \end{aligned}
+    \label{eq:ch3_scan_surface_geometry}
+\end{equation}
+其中 $n_{\ell}$ 指向回波，$d_{\ell}$ 為回波至底盤表面的近似間距，$r_{\ell}^{B}$ 為面向回波的底盤表面點。令 $J_2=\begin{bmatrix}0&-1\\1&0\end{bmatrix}$，表面點朝向回波的接近速度為
+\begin{equation}
+    \begin{aligned}
+        v_{n,\ell}
+        &=a_{\ell}^{\mathrm{sh}\,\top}\xi_B, \\
+        a_{\ell}^{\mathrm{sh}\,\top}
+        &=\begin{bmatrix}
+            n_{\ell}^{\top} & n_{\ell}^{\top}J_2r_{\ell}^{B}
+          \end{bmatrix}.
+    \end{aligned}
+    \label{eq:ch3_scan_approach_velocity}
+\end{equation}
+此處 $v_{n,\ell}>0$ 表示底盤表面朝向回波運動。採用圓盤近似時，$n_{\ell}^{\top}J_2r_{\ell}^{B}=0$；此幾何亦說明該防護未直接涵蓋伸展手臂的旋轉掃掠範圍。
+
+以進入防護層的底盤命令 $\xi_B^{\mathrm{in}}$ 計算各點的接近速度，建立所需保護間距：
+\begin{equation}
+    \begin{aligned}
+        v_{\mathrm{app},\ell}
+        &=\max\!\left(0,
+          a_{\ell}^{\mathrm{sh}\,\top}\xi_B^{\mathrm{in}}\right), \\
+        d_{\mathrm{stop},\ell}
+        &=d_0+v_{\mathrm{app},\ell}(\tau_0+t_{\mathrm{age}}) \\
+        &\quad+\frac{v_{\mathrm{app},\ell}^{2}}{2a_{\mathrm{brake}}}
+          +\epsilon_{\mathrm{scan}}+\epsilon_{\mathrm{body}}.
+    \end{aligned}
+    \label{eq:ch3_scan_stopping_distance}
+\end{equation}
+其中 $d_0$ 為低速時的基本間距，$\tau_0$ 為延遲裕度，$t_{\mathrm{age}}$ 為距最近一次有效掃描更新的時間，$a_{\mathrm{brake}}>0$ 為採用的減速能力參數，$\epsilon_{\mathrm{scan}}$ 與 $\epsilon_{\mathrm{body}}$ 分別為量測與外形近似裕度。保護間距依各回波方向的接近速度計算，避免以總平移速度將切向通行的間距一併放大。
+
+防護層對輸出命令施加
+\begin{equation}
+    a_{\ell}^{\mathrm{sh}\,\top}\xi_B^{\mathrm{out}}
+    \leq\alpha_{\mathrm{sh}}
+          (d_{\ell}-d_{\mathrm{stop},\ell}),
+    \qquad \alpha_{\mathrm{sh}}>0,
+    \label{eq:ch3_scan_protection_constraint}
+\end{equation}
+並與底盤速度框及啟用的輪級限制共同處理。將全部半空間限制寫成 $A_{\mathrm{sh}}\xi_B\leq b_{\mathrm{sh}}$，由輸入命令開始，反覆選取違反量最大的限制列進行投影。若該列為 $a_j^{\top}\xi_B\leq b_j$，則更新式為
+\begin{equation}
+    \xi_B^{(n+1)}
+    =\xi_B^{(n)}
+     -\frac{\left[a_j^{\top}\xi_B^{(n)}-b_j\right]_{+}}
+            {\|a_j\|^2}a_j,
+    \label{eq:ch3_scan_halfspace_projection}
+\end{equation}
+其中 $[x]_{+}=\max(x,0)$。投影採有限迭代預算，完成後檢查限制殘差；迭代次數本身不代表限制已全部滿足。
+
+若完整防護條件仍無法滿足，則先將要求主動退離的負上界放寬至零，形成該方向的非接近條件，再進行投影與殘差核對。若仍無法取得合格命令，則進入停止請求與輪級減速處理。當輪級命令變化限制同時作用時，零速度請求未必能立即執行，因此仍需核對最終放行命令。掃描更新逾時則進入低速退化處理，此時不能將缺少新回波解讀為環境無障礙。
+
+底盤命令依序經過速度平滑、雷射防護及最終輪級限制，再送至底盤執行介面。防護層以最近的最終放行命令作為輪級變化限制的基準，並記錄回退來源與命令修正量。若後處理改變原本的最佳化命令，其對底盤與末端預測的影響，需配合執行端回報於後續控制週期處理，相關方法於執行動態補償一節說明。
+
+上述雷射防護用於抑制機器人對可見回波的接近運動，未直接估測回波所屬障礙的速度，因此需與前述動態障礙預測配合。其效能與適用範圍，於第四章依避障距離、命令修正及任務表現進行評估。
