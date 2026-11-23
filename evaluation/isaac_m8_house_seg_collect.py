@@ -193,6 +193,9 @@ def main():
 
     for run_n in [int(x) for x in a.runs.split(',') if x]:
         RD = os.path.join(HERE, 'runs', f'm8house_d2_unified_{run_n}')
+        if not (os.path.exists(os.path.join(RD, 'log.npz')) and os.path.exists(os.path.join(RD, 'result.json'))):
+            print(f'[seg] 趟 {run_n} 缺 log.npz／result.json，略過', flush=True)
+            continue
         Dz = np.load(os.path.join(RD, 'log.npz')); Dc = [str(x) for x in Dz['cols']]; DL = Dz['L']
         g = lambda n: DL[:, Dc.index(n)]                              # noqa: E731
         T = g('t')
