@@ -20,6 +20,7 @@ PEN_HALF_FLAT = 0.013
 class SegClient:
     def __init__(self, weights, py=os.path.join(WS, '.venv-dl0', 'bin', 'python')):
         env = {k: v for k, v in os.environ.items() if k not in ('PYTHONPATH', 'PYTHONHOME', 'LD_PRELOAD')}
+        weights = weights if os.path.isabs(weights) else os.path.join(WS, weights)
         self.p = subprocess.Popen([py, os.path.join(HERE, 'house_seg_server.py'), weights], stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=env)
         ln = self.p.stdout.readline()
         if not ln.startswith(b'READY'):

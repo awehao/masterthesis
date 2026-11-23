@@ -15,6 +15,9 @@
 | Isaac 實跑 | `mission/launch/run_isaac.sh 88` | 20–25 分 |
 | 出俯視＋跟車影片 | `mission/launch/make_videos.sh 88 成功 "描述"` | 15–20 分 |
 | 收掉所有程序（中止、卡住時） | `mission/launch/stop_all.sh` | 秒 |
+| Mask R-CNN 收訓練資料（開 Isaac） | `mission/launch/seg_collect.sh evaluation/house_seg_data/v1 53,54,55` | 每趟約 1 分 |
+| Mask R-CNN 訓練（GPU，不和 Isaac 同時） | `mission/launch/seg_train.sh evaluation/house_seg_data/v1 evaluation/house_seg_ckpt/run1` | 約 30 分 |
+| Isaac 改用 Mask R-CNN 視覺 | `mission/launch/run_isaac.sh 89 D2_SEG=1` | 20–25 分 |
 
 規則：一次只能一個 Isaac（含重播）。`run_isaac.sh` 會等 CPU ≤55 °C 才起跑，92 °C 熱中止。改過程式後要重新 `register_isaac.sh`，否則起跑前雜湊核對會拒跑。
 
@@ -86,6 +89,8 @@
 | 筆 | `evaluation/marker_detect.py` |
 | 門扇角度 | `evaluation/door_leaf_detect.py` |
 | Mask R-CNN 訓練資料收集 | `evaluation/isaac_m8_house_seg_collect.py` |
+| Mask R-CNN 模型（訓練、評估、推論） | `evaluation/house_seg.py`；推論服務 `house_seg_server.py`（.venv-dl0 子程序） |
+| 遮罩＋深度 → 物體 3D 位置（`D2_SEG=1` 時取代上面各偵測器的搜尋範圍） | `evaluation/seg_vision.py` |
 
 ### 碰撞、淨空
 | 功能 | 檔案 |

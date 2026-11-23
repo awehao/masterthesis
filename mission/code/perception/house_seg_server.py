@@ -1,0 +1,1 @@
+../../../evaluation/house_seg_server.py

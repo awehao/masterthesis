@@ -55,6 +55,7 @@ PICK_FLOW = os.environ.get('PICK_FLOW', '0') == '1'                 # Howard 11/
 FLOW_V = float(os.environ.get('PICK_FLOW_V', '0.06'))                 # 抓取點附近底盤限速（m/s）
 FLOW_AHEAD = float(os.environ.get('PICK_FLOW_AHEAD', '0.35'))         # 途經點＝抓取點沿行進方向再往前（讓路徑穿過抓取點、不在抓取點停）
 DR_FLOW = PICK_FLOW and os.environ.get('DR_FLOW', '1') == '1'        # 抽屜把手（開、關）同樣照導航：邊走邊展開（早送封包），導航目標＝把手底盤位，近把手只轉偏航與限速，閉爪看狀態
+DR_OBS_PRE = os.environ.get('DR_OBS_PRE', '1') == '1'                # 抽屜觀察位背景先算
 DOOR_LINE = os.environ.get('B_DOOR_LINE', '0') == '1'               # Howard 11/21「門把要移動中抓」：沿門前走廊經過抓取（不收斂到站位）
 DOOR_LINE_PRE = float(os.environ.get('B_DOOR_LINE_PRE', '0.7'))       # 走廊起點＝抓取底盤位沿門往回（m）
 DOOR_LINE_SEND = float(os.environ.get('B_DOOR_LINE_SEND', '0.9'))
@@ -1393,9 +1394,17 @@ def main():
                               **(dict(flow=dict(b0=[float(x) for x in b1_[:3]], v_cap=FLOW_V, r_turn=1.3, r_in=0.4)) if DR_FLOW else {}))
                 dr['stage'] = 'closing'
                 self.event('dr_close_sent', q_open=round(qo_, 4), base=[round(float(x), 4) for x in b1_])
+            elif st == 'wait_release' and 'pick_dr_released' not in dr and DR_OBS_PRE and dr.get('pre_obs') is None and dr.get('sel') is not None:
+                dr['pre_obs'] = self._dr_thread(R_.select_observe, float(R_.OPEN_M), np.asarray(dr['sel']['base'], float).copy(), bool(dr['sel']['flip']))   # 即時化（Howard 11/23）：觀察位在拉抽屜時就以名目開度背景先算（Isaac 85：放開後才算 2.6 s，底盤近停）
+                self.event('dr_observe_precompute_start')
             elif st == 'wait_release' and 'pick_dr_released' in dr:
                 dr['q_open'] = float(dr['pick_dr_released'].get('q_open', R_.OPEN_M))
-                dr['box'] = self._dr_thread(R_.select_observe, dr['q_open'], self.b_od_now.copy(), bool(dr['sel']['flip']))
+                pre_ = dr.get('pre_obs')
+                if pre_ is not None and abs(dr['q_open'] - float(R_.OPEN_M)) <= 0.01 and not (pre_['done'] and pre_.get('sel') is None):
+                    dr['box'] = pre_                                  # 實際開度與名目差 ≤1 cm ⇒ 用先算結果（未算完就等它）
+                    self.event('dr_observe_precompute_used', done=bool(pre_['done']), q_open=round(dr['q_open'], 4))
+                else:
+                    dr['box'] = self._dr_thread(R_.select_observe, dr['q_open'], self.b_od_now.copy(), bool(dr['sel']['flip']))
                 dr['stage'] = 'obs_sel'
                 self.event('dr_observe_select_start', q_open=dr['q_open'])
             elif st == 'obs_sel' and dr['box']['done']:
