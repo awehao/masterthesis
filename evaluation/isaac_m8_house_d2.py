@@ -60,14 +60,26 @@ def _det_worker(conn, fdir):
     import numpy as np_
     import door_far_link as FL_
     obs_ = FL_.HandleObs()
+    SEG_ = None
+    if os.environ.get('D2_SEG') == '1':                               # Howard 11/23「視覺幫我用 maskrcnn」：Mask R-CNN 遮罩＋深度（推論服務在 .venv-dl0 子程序）；開了就只用遮罩，不退回幾何搜尋
+        import seg_vision as SV_
+        SEG_ = SV_.SegClient(os.environ['D2_SEG_W'])
     conn.send(('ready', None))
     while True:
         m_ = conn.recv()
         if m_ is None:
             break
         w0_ = time.perf_counter()
+        seg_ = None
+        if SEG_ is not None:
+            try:
+                seg_ = SEG_.predict(m_['rgb'])
+            except Exception as e_:                                  # noqa: BLE001
+                seg_ = dict(_err=repr(e_)[:200])
+        _sm = lambda c_: (seg_ or {}).get(c_, {}).get('mask') if isinstance((seg_ or {}).get(c_), dict) else None   # noqa: E731
         try:
-            T_est_, info_ = obs_.intake(dict(dep=m_['dep'], K=m_['K'], T_cam=m_['T_cam'], t_obs=m_['t_obs'], q=m_['q'], t_state=m_['t_obs'], pose_source='fk_at_render_time', frame_id='map', fk_vs_render_m=m_['fk_vs_render_m']), m_['t_obs'])
+            dep_h_ = m_['dep'] if SEG_ is None else (SV_.masked_depth(m_['dep'], _sm('door_handle')) if _sm('door_handle') is not None else np_.full_like(np_.asarray(m_['dep'], float), np_.nan))
+            T_est_, info_ = obs_.intake(dict(dep=dep_h_, K=m_['K'], T_cam=m_['T_cam'], t_obs=m_['t_obs'], q=m_['q'], t_state=m_['t_obs'], pose_source='fk_at_render_time', frame_id='map', fk_vs_render_m=m_['fk_vs_render_m']), m_['t_obs'])
             err_ = None
         except Exception as e_:                                  # noqa: BLE001
             T_est_, info_, err_ = None, dict(cls='exception', why='exception'), repr(e_)[:200]
@@ -75,14 +87,20 @@ def _det_worker(conn, fdir):
         if m_.get('dbox') is not None:                                 # 抽屜內筆深度偵測（幾何法；範圍＝已知家具＋控制器開度估計）
             try:
                 import marker_detect as MD_
-                p_c, y_c, i_c = MD_.detect(m_['dep'], m_['K'], m_['T_cam'], m_['dbox'])
+                if SEG_ is not None:
+                    p_c, y_c, i_c = SV_.pen(m_['dep'], m_['K'], m_['T_cam'], _sm('pen')) if _sm('pen') is not None else (None, None, dict(why='no_mask', src='seg'))
+                else:
+                    p_c, y_c, i_c = MD_.detect(m_['dep'], m_['K'], m_['T_cam'], m_['dbox'])
                 cyl_ = dict(p=None if p_c is None else np_.asarray(p_c, float), yaw=y_c, info=i_c)
             except Exception as e_:                              # noqa: BLE001
                 cyl_ = dict(p=None, yaw=None, info=dict(why='exception', err=repr(e_)[:200]))
         elif m_.get('table') is not None:                                # 茶几圓柱體深度偵測（同一張影格；幾何法、不讀真值）
             try:
                 import cyl_detect as CD_
-                p_c, i_c = CD_.detect(m_['dep'], m_['K'], m_['T_cam'], m_['table'])
+                if SEG_ is not None:
+                    p_c, i_c = SV_.cyl(m_['dep'], m_['K'], m_['T_cam'], _sm('cylinder')) if _sm('cylinder') is not None else (None, dict(why='no_mask', src='seg'))
+                else:
+                    p_c, i_c = CD_.detect(m_['dep'], m_['K'], m_['T_cam'], m_['table'])
                 cyl_ = dict(p=None if p_c is None else np_.asarray(p_c, float), info=i_c)
             except Exception as e_:                              # noqa: BLE001
                 cyl_ = dict(p=None, info=dict(why='exception', err=repr(e_)[:200]))
@@ -90,7 +108,10 @@ def _det_worker(conn, fdir):
         if m_.get('leafdet'):                                          # 門扇開度深度偵測（door_leaf_detect；門局部＝世界座標）
             try:
                 import door_leaf_detect as DL_
-                ph_, il_ = DL_.detect(m_['dep'], m_['K'], m_['T_cam'])
+                if SEG_ is not None:
+                    ph_, il_ = SV_.door_leaf(m_['dep'], m_['K'], m_['T_cam'], _sm('door_leaf')) if _sm('door_leaf') is not None else (None, dict(why='no_mask', src='seg'))
+                else:
+                    ph_, il_ = DL_.detect(m_['dep'], m_['K'], m_['T_cam'])
                 leaf_ = dict(phi=ph_, info=il_)
             except Exception as e_:                              # noqa: BLE001
                 leaf_ = dict(phi=None, info=dict(why='exception', err=repr(e_)[:200]))
@@ -101,7 +122,10 @@ def _det_worker(conn, fdir):
                 import yaml as yaml_h_
                 if not hasattr(HD_, '_SPEC'):
                     HD_._SPEC = yaml_h_.safe_load(open(m_['hspec']))
-                r_h, i_h = HD_.detect(m_['dep'], m_['K'], m_['T_cam'], m_['hprior'], HD_._SPEC)
+                if SEG_ is not None:
+                    r_h, i_h = SV_.drawer_handle(m_['dep'], m_['K'], m_['T_cam'], _sm('drawer_handle'), _sm('drawer_front'), m_['hprior'], HD_._SPEC) if _sm('drawer_handle') is not None else (None, dict(why='no_mask', src='seg'))
+                else:
+                    r_h, i_h = HD_.detect(m_['dep'], m_['K'], m_['T_cam'], m_['hprior'], HD_._SPEC)
                 hdl_ = dict(origin=None if r_h is None else np_.asarray(r_h['origin'], float), yaw=None if r_h is None else float(r_h['yaw']), info=i_h)
             except Exception as e_:                              # noqa: BLE001
                 hdl_ = dict(origin=None, yaw=None, info=dict(why='exception', err=repr(e_)[:200]))
@@ -113,7 +137,8 @@ def _det_worker(conn, fdir):
             save_ = True
         except Exception:                                        # noqa: BLE001
             save_ = False
-        conn.send(('det', dict(seq=m_['seq'], T_est=None if T_est_ is None else np_.asarray(T_est_, float), info=info_, ms=ms_, err=err_, saved=save_, cyl=cyl_, hdl=hdl_, leaf=leaf_)))
+        seg_info_ = None if seg_ is None else dict(ms=seg_.get('_ms'), err=seg_.get('_err'), cls={c_: round(v_['score'], 3) for c_, v_ in seg_.items() if isinstance(v_, dict)})
+        conn.send(('det', dict(seq=m_['seq'], T_est=None if T_est_ is None else np_.asarray(T_est_, float), info=info_, ms=ms_, err=err_, saved=save_, cyl=cyl_, hdl=hdl_, leaf=leaf_, seg=seg_info_)))
 
 
 os.makedirs(os.path.join(a.out, 'frames'), exist_ok=True)
@@ -1092,6 +1117,9 @@ def main():
                                    odom_base_at_capture=[float(v) for v in f['q'][:3]], map_odom_latest_at_capture=f['map_odom'], fk_vs_render_m=f['fk_vs_render_m'], detect_ms=round(ms, 1), valid=T_est is not None, info=info,
                                    T_base_handle=None if T_bh is None else T_bh.tolist(), rendering_frame=[int(v) if v is not None else None for v in f['rf']] if isinstance(f['rf'], tuple) else f['rf'],
                                    eval_only=dict(err_pos_mm=None if T_est is None else round(float(np.linalg.norm(np.asarray(T_est)[:3, 3] - Th[:3, 3])) * 1e3, 2), range_m=round(float(np.linalg.norm(f['T_cam'][:3, 3] - Th[:3, 3])), 3))))
+                if rr.get('seg') is not None:                          # Mask R-CNN：推論耗時、各類別最高分數
+                    frames[-1]['seg'] = rr['seg']
+                    cam_stat.setdefault('seg_ms', []).append(rr['seg'].get('ms'))
                 node.p_obs.publish(Float64MultiArray(data=[float(seq_r), float(f['t_obs']), 1.0 if T_est is not None else 0.0, *[float(v) for v in f['q'][:3]], *([float(v) for v in T_bh.reshape(-1)] if T_bh is not None else [float('nan')] * 16), float(t)]))
                 if rr.get('leaf') is not None:                         # 門扇開度觀測（rad）
                     l_ = rr['leaf']
