@@ -89,6 +89,27 @@ def _exp_R(w):
 
 
 
+
+FB_TICKS = int(os.environ.get('WG_FB_TICKS', '3'))                  # W-GMPC「底盤後處理改動」備援：連續至多幾拍可執行備援命令（0＝原行為：一律停）
+
+
+def wg_result(ctrl, r, src):
+    """全身求解結果 → (命令, 來源) 或 (None, 原因)。Isaac 93：回程關門展開第一拍底盤後處理改動（seq_consistent 不成立）即停整趟；
+    求解器的備援＝hold 底盤解＋已驗證限制的手臂減速序列（arm_decel_valid）⇒ 連續 ≤FB_TICKS 拍照備援命令執行、下一拍照常重解（候選命令仍經執行器停止尾段核對），超過才停。"""
+    ck = dict(r.arm_check or {})
+    if not (ck.get('fallback') or ck.get('failed') or not ck.get('seq_consistent', False) or r.u_arm_seq is None or r.status != 'solved'):
+        ctrl._fb_run = 0
+        return np.r_[np.asarray(r.u_opt, float), np.asarray(r.u_arm_seq[0], float)], src
+    if (FB_TICKS > 0 and ck.get('fallback') == 'base_postprocess_changed' and not ck.get('failed') and ck.get('arm_decel_valid')
+            and r.u_arm_seq is not None and np.isfinite(np.asarray(r.u_opt, float)).all() and np.isfinite(np.asarray(r.u_arm_seq[0], float)).all()):
+        ctrl._fb_run = getattr(ctrl, '_fb_run', 0) + 1
+        if ctrl._fb_run <= FB_TICKS:
+            ctrl.n_fb_ticks = getattr(ctrl, 'n_fb_ticks', 0) + 1
+            if ctrl._fb_run == 1 and hasattr(ctrl, '_ev'):
+                ctrl._ev('wgmpc_fallback_tick', why=ck.get('fallback'), n_total=ctrl.n_fb_ticks)
+            return np.r_[np.asarray(r.u_opt, float), np.asarray(r.u_arm_seq[0], float)], src + '_fb'
+    return None, 'wgmpc:%s/%s/%s' % (r.status, ck.get('fallback'), ck.get('failed'))
+
 def yield_apply(ctrl, qp, X, obs, xi=None, manip=False):
     """會車選邊（yield_side；D2_YIELD_SIDE=1 才作用）：只平移導航參考視窗，事件進控制器紀錄。
     xi（參考體速度，就地改）：參考被改過 ⇒ 依改後位姿重算（s168d：等待時位置釘住、速度前饋仍是導航 0.22 ⇒ 機器人照常前進穿過停止線、被行人帶走）。"""
@@ -314,10 +335,7 @@ class DoorPassCtrl:
             return None, 'wgmpc_nonfinite'
         if arm['mode'] == 'hold':
             return np.r_[np.asarray(r.u_opt, float), np.zeros(6)], src
-        ck = dict(r.arm_check or {})
-        if ck.get('fallback') or ck.get('failed') or not ck.get('seq_consistent', False) or r.u_arm_seq is None or r.status != 'solved':
-            return None, 'wgmpc:%s/%s/%s' % (r.status, ck.get('fallback'), ck.get('failed'))
-        return np.r_[np.asarray(r.u_opt, float), np.asarray(r.u_arm_seq[0], float)], src
+        return wg_result(self, r, src)
 
     def _advance(self, q):
         """實測完成條件推進階段（q＝本拍預測構型；門角、手指＝實測）。"""

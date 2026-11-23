@@ -164,6 +164,8 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                 ctrl.frames, ctrl.T_est, ctrl.est_ver = {}, None, None
             phi = float(snap.get('phi', phi0))
             fm = snap.get('finger', finger0)
+            if ctrl is not None:
+                ctrl._q_meas = np.asarray(q, float).copy()            # 實測狀態（預測前）：固定橫桿閉爪門檻／瞄準補償用（預測模型無重力下垂；Isaac 86／94 把手閉爪時實測 TCP 低 5 mm）
             if mode == 'open' and fm is not None and np.isfinite(np.asarray(fm, float)).all():   # 開門段：兩指實測開度同步進淨空／候選／停止尾段核對（Codex 第十趟）
                 import door_wbopt as _WB
                 _WB.FINGER_Q = (float(fm[0]), float(fm[1]))

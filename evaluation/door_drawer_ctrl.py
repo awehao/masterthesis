@@ -410,10 +410,7 @@ class DrawerCtrl(PK.TablePickCtrl):
         self.wg_log.append((round(self.t, 3), self.task + ':' + self.phase, round((time.perf_counter() - w0) * 1e3, 2), str(r.status), src, len(obs), int(r.cbf_active)))
         if not np.isfinite(np.asarray(r.u_opt, float)).all():
             return None, 'wgmpc_nonfinite'
-        ck = dict(r.arm_check or {})
-        if ck.get('fallback') or ck.get('failed') or not ck.get('seq_consistent', False) or r.u_arm_seq is None or r.status != 'solved':
-            return None, 'wgmpc:%s/%s/%s' % (r.status, ck.get('fallback'), ck.get('failed'))
-        return np.r_[np.asarray(r.u_opt, float), np.asarray(r.u_arm_seq[0], float)], src
+        return P.wg_result(self, r, src)
 
 
     def step(self, t, q, phi_meas, finger_meas=None, finger_force=None):

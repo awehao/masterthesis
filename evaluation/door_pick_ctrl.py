@@ -46,6 +46,7 @@ APP_GATE_CAP_S = 30.0
 FLOW_D0, FLOW_LINE_TOL = float(os.environ.get('PICK_FLOW_D0', '1.2')), float(os.environ.get('PICK_FLOW_LINE_TOL', '0.02'))
 FLOW_D1, FLOW_MISS_R = float(os.environ.get('PICK_FLOW_D1', '0.30')), float(os.environ.get('PICK_FLOW_MISS_R', '0.50'))   # 照導航移動中夾取：到站半徑（路徑不一定正好穿過抓取點）、錯過判定                                                 # 狀態閘門下的總安全逾時（名目時長之後）
 FLOW_HDL_DZ = float(os.environ.get('PICK_FLOW_HDL_DZ', '0.004'))     # 照導航抓把手：抓取線起始高度差上限（m；收斂趟 Isaac 82/80 線起點約 −3 mm）
+MEAS_GATE = os.environ.get('PICK_MEAS_GATE', '1') == '1'          # 固定橫桿閉爪門檻用實測 TCP
 LIM_PAD = float(os.environ.get('PICK_LIM_PAD', '0.02'))               # 手臂關節位置界限內縮（rad）：s162d 茶几照導航接近 j3 名目 2.87、界限 2.936，在途命令積分越界 ⇒ setpoint_limit 停
 
 
@@ -436,6 +437,8 @@ class TablePickCtrl(P.DoorPassCtrl):
             self._ev('pick_motm_start', s0=round(self.m_s0, 4), T_app=round(self.T_app, 3), v_g=self.motm['v_g'])
         if self.phase == 'APPROACH':
             Tc = K.fk(q, 'link_tcp')
+            qm_ = getattr(self, '_q_meas', None)
+            Tcm = K.fk(qm_, 'link_tcp') if (MEAS_GATE and qm_ is not None and getattr(self, 'app_tol_fy', None) is not None) else Tc   # 固定橫桿：開合軸門檻與瞄準補償看實測 TCP（預測狀態不含手臂重力下垂）
             ep = float(np.linalg.norm(Tc[:3, 3] - self.T_grasp[:3, 3]))
             er = math.degrees(float(np.linalg.norm(_log_R(self.T_grasp[:3, :3].T @ Tc[:3, :3]))))
             tz_ = getattr(self, 'app_tol_z', APP_TOL_Z)
@@ -461,19 +464,19 @@ class TablePickCtrl(P.DoorPassCtrl):
                 if self._t_arr is None and float(math.hypot(q[0] - self._bg[0], q[1] - self._bg[1])) <= (FLOW_D1 if self.flow else APP_GATE_D1):
                     self._t_arr = self.t
                     self._ev('pick_base_arrived', el=round(el, 2))
-                if self._t_arr is not None and getattr(self, '_t_line0', None) is None and float(np.linalg.norm(Tc[:3, 3] - self._T_line(D_LINE)[:3, 3])) <= (FLOW_LINE_TOL if (self.flow and getattr(self, 'app_tol_fy', None) is None) else 0.01) and not (self.flow and getattr(self, 'app_tol_fy', None) is not None and abs(float(Tc[2, 3] - self._T_line(D_LINE)[2, 3])) > FLOW_HDL_DZ):   # 照導航抓把手另要求高度差 ≤ FLOW_HDL_DZ（底盤在動時手臂下垂）；把手（橫桿窄）維持 1 cm（Isaac 83：2 cm 放行時 z 下垂 −8 mm ⇒ 手指撞桿 42 N 鎖存）
+                if self._t_arr is not None and getattr(self, '_t_line0', None) is None and float(np.linalg.norm(Tc[:3, 3] - self._T_line(D_LINE)[:3, 3])) <= (FLOW_LINE_TOL if (self.flow and getattr(self, 'app_tol_fy', None) is None) else 0.01) and not (self.flow and getattr(self, 'app_tol_fy', None) is not None and abs(float(Tcm[2, 3] - self._T_line(D_LINE)[2, 3])) > FLOW_HDL_DZ):   # 照導航抓把手另要求高度差 ≤ FLOW_HDL_DZ（底盤在動時手臂下垂）；把手（橫桿窄）維持 1 cm（Isaac 83：2 cm 放行時 z 下垂 −8 mm ⇒ 手指撞桿 42 N 鎖存）
                     self._t_line0 = self.t
                     self._ev('pick_line_start', el=round(el, 2))
             if (fy_ is not None and ((not gated_ and el >= self.T_app - T_SETTLE) or (gated_ and getattr(self, '_t_line0', None) is not None and ep < AIM_START_M) or (self.motm is not None and ep < AIM_START_M))) or (self.flow and getattr(self, '_t_line0', None) is not None and self.t - self._t_line0 >= T_LINE_S and ep < 0.03 and getattr(self, '_vtcp_last', 9.0) <= 0.02):   # 照導航夾取：底盤在動，手臂追蹤穩態偏差（s159d 13 mm）⇒ 同把手的積分瞄準補償   # 瞄準補償（積分；移動中抓取窗短 ⇒ 誤差 <1 cm 即開始累積）：Isaac 手臂穩態誤差約 3 mm（第三十五趟 approach_not_reached 3.31 mm）⇒ 指令目標加上累積誤差，判定仍用真目標   # s163d：抓取線還在走（暫態落後 20 mm）就積分 ⇒ 補償飽和 +15 mm、過衝夾空 ⇒ 抓取線走完且 TCP 幾乎不動（穩態偏差）才積分
                 ao_ = getattr(self, 'aim_off', np.zeros(3))
-                self.aim_off = np.clip(ao_ + AIM_K * (self.T_grasp[:3, 3] - Tc[:3, 3]), -(0.02 if self.flow else AIM_MAX), (0.02 if self.flow else AIM_MAX))
+                self.aim_off = np.clip(ao_ + AIM_K * (self.T_grasp[:3, 3] - Tcm[:3, 3]), -(0.02 if self.flow else AIM_MAX), (0.02 if self.flow else AIM_MAX))
             elif self.flow and fy_ is not None and gated_ and self._t_arr is not None and getattr(self, '_t_line0', None) is None and getattr(self, '_vtcp_last', 9.0) <= 0.02:   # 照導航抓把手：停在預抓點時的穩態下垂（Isaac 84 z −9.9 mm 持續 5 s）⇒ 對預抓點積分同一瞄準補償，抓取線沿用
                 Tpre_ = self._T_line(D_LINE)[:3, 3]
-                if float(np.linalg.norm(Tc[:3, 3] - Tpre_)) < 0.02 + float(np.abs(getattr(self, 'aim_off', np.zeros(3))).max()):
+                if float(np.linalg.norm(Tcm[:3, 3] - Tpre_)) < 0.02 + float(np.abs(getattr(self, 'aim_off', np.zeros(3))).max()):
                     ao_ = getattr(self, 'aim_off', np.zeros(3))
-                    self.aim_off = np.clip(ao_ + AIM_K * (Tpre_ - Tc[:3, 3]), -0.02, 0.02)
+                    self.aim_off = np.clip(ao_ + AIM_K * (Tpre_ - Tcm[:3, 3]), -0.02, 0.02)
             if fy_ is not None:                                       # 固定橫桿（抽屜把手）：沿兩指開合軸（TCP y）誤差另設門檻（Isaac 33b／34b：5 mm 球內閉爪、開合軸偏 ~2 mm ⇒ 單指接觸、證據逾時）
-                ep_fy = abs(float((self.T_grasp[:3, :3].T @ (Tc[:3, 3] - self.T_grasp[:3, 3]))[1]))
+                ep_fy = abs(float((self.T_grasp[:3, :3].T @ (Tcm[:3, 3] - self.T_grasp[:3, 3]))[1]))
                 ep_ok = ep_ok and ep_fy <= fy_
             v_tcp = float(np.linalg.norm(Tc[:3, 3] - self._tc_prev)) / (NPH * PHYS) if getattr(self, '_tc_prev', None) is not None else 9.0
             self._tc_prev = Tc[:3, 3].copy()
@@ -719,10 +722,7 @@ class TablePickCtrl(P.DoorPassCtrl):
             return None, 'wgmpc_nonfinite'
         if arm['mode'] == 'hold':
             return np.r_[np.asarray(r.u_opt, float), np.zeros(6)], src
-        ck = dict(r.arm_check or {})
-        if ck.get('fallback') or ck.get('failed') or not ck.get('seq_consistent', False) or r.u_arm_seq is None or r.status != 'solved':
-            return None, 'wgmpc:%s/%s/%s' % (r.status, ck.get('fallback'), ck.get('failed'))
-        return np.r_[np.asarray(r.u_opt, float), np.asarray(r.u_arm_seq[0], float)], src
+        return P.wg_result(self, r, src)
 
     def _solve_bin(self, q):
         """放盒／收臂：手臂關節空間剖面（相對底盤，tcp_rel_base）；底盤照導航前端（限速框）或錨定。"""
@@ -763,10 +763,7 @@ class TablePickCtrl(P.DoorPassCtrl):
         self.wg_log.append((round(self.t, 3), self.phase, round((time.perf_counter() - w0) * 1e3, 2), str(r.status), src, len(obs), int(r.cbf_active), _obs_near(obs, qp)))
         if not np.isfinite(np.asarray(r.u_opt, float)).all():
             return None, 'wgmpc_nonfinite'
-        ck = dict(r.arm_check or {})
-        if ck.get('fallback') or ck.get('failed') or not ck.get('seq_consistent', False) or r.u_arm_seq is None or r.status != 'solved':
-            return None, 'wgmpc:%s/%s/%s' % (r.status, ck.get('fallback'), ck.get('failed'))
-        return np.r_[np.asarray(r.u_opt, float), np.asarray(r.u_arm_seq[0], float)], src
+        return P.wg_result(self, r, src)
 
     def step(self, t, q, phi_meas, finger_meas=None, finger_force=None):
         if finger_force is not None:
