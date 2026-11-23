@@ -89,7 +89,7 @@ def _exp_R(w):
 
 
 
-def yield_apply(ctrl, qp, X, obs, xi=None):
+def yield_apply(ctrl, qp, X, obs, xi=None, manip=False):
     """會車選邊（yield_side；D2_YIELD_SIDE=1 才作用）：只平移導航參考視窗，事件進控制器紀錄。
     xi（參考體速度，就地改）：參考被改過 ⇒ 依改後位姿重算（s168d：等待時位置釘住、速度前饋仍是導航 0.22 ⇒ 機器人照常前進穿過停止線、被行人帶走）。"""
     if not YS.ENABLE:
@@ -106,6 +106,7 @@ def yield_apply(ctrl, qp, X, obs, xi=None):
     ys.ref_dt = DT
     c_, s_ = math.cos(float(qp[2])), math.sin(float(qp[2])); u_ = np.asarray(ctrl.u_prev[:2], float)
     n0 = len(ys.log)
+    ys.manip = bool(manip)                                          # 抓取／操作中：預測選動作只可減速（s195d：加速 1.2 倍超過移動中抓取限速 ⇒ W-GMPC 底盤後處理改命令 ⇒ 停）
     info = ys.apply(float(ctrl.t), np.asarray(qp[:3], float), np.array([c_ * u_[0] - s_ * u_[1], s_ * u_[0] + c_ * u_[1]]), X, obs, NPH * PHYS)
     for e_ in ys.log[n0:]:
         e_ = dict(e_); w_ = e_.pop('what'); e_['t_ys'] = e_.pop('t', None)   # 控制器 _ev 自帶 t（s93d：重複關鍵字 ⇒ 工作程序例外）

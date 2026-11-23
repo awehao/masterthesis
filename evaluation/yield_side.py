@@ -129,6 +129,7 @@ PRED_R = float(os.environ.get('YS_PRED_R', '6.0'))                    # 只看�
 PRED_VMAX = float(os.environ.get('YS_PRED_VMAX', '0.26'))            # 加速上限（輪速硬體上限 95%，同導航名目上限）
 PRED_SWITCH = float(os.environ.get('YS_PRED_SWITCH', '1.0'))         # 換選擇的代價（s），防來回跳
 PRED_BEHIND = [float(x) for x in os.environ.get('YS_PRED_BEHIND', '0.6,1.0').split(',') if x]   # 往行人背後偏的量（m）
+PRED_V_FAST = float(os.environ.get('YS_PRED_V_FAST', '0.18'))
 PRED_HYST = float(os.environ.get('YS_PRED_HYST', '0.10'))
 PRED_LAT_W = float(os.environ.get('YS_PRED_LAT_W', '1.0'))           # 側移代價（s／m）
 CROSS_MAX_S = float(os.environ.get('YS_CROSS_MAX_S', '15.0'))
@@ -367,9 +368,10 @@ class YieldSide:
             return None
         vo = G[k_][1]; spk = float(np.linalg.norm(vo)); u = vo / spk; n = np.array([-u[1], u[0]])
         sc = float(G[k_][0] @ n); need_l = R_BASE + PAD + R_MIN
-        rmax = min(PRED_VMAX / v_nav, 1.2)
+        manip_ = bool(getattr(self, 'manip', False))
+        rmax = min(PRED_VMAX / v_nav, 1.2) if (v_nav >= PRED_V_FAST and not manip_) else 1.0   # 加速只在一般行駛（v_nav ≥ 0.18）且不在抓取中
         rhos = sorted(set([round(rmax, 3), 1.0, 0.8, 0.6, 0.4, 0.2, 0.0]), reverse=True)
-        lats = [(0.0, None)] + [(sg, sc + sg * (need_l + ex)) for sg in (1.0, -1.0) for ex in (0.0, 0.3)] + [(2.0, float(q[:2] @ u) - dl) for dl in PRED_BEHIND]   # sg=2：往行人來的方向（−u）偏 dl（絕對座標線：沿 u 座標 ≤ 目前−dl），從它背後繞過
+        lats = [(0.0, None)] if manip_ else [(0.0, None)] + [(sg, sc + sg * (need_l + ex)) for sg in (1.0, -1.0) for ex in (0.0, 0.3)] + [(2.0, float(q[:2] @ u) - dl) for dl in PRED_BEHIND]   # sg=2：往行人來的方向（−u）偏 dl（絕對座標線：沿 u 座標 ≤ 目前−dl），從它背後繞過
         prev = getattr(self, 'pchoice', None); off0 = self.p_off
         best = None
         for rho in rhos:

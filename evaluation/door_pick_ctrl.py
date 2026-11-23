@@ -629,7 +629,7 @@ class TablePickCtrl(P.DoorPassCtrl):
                 Xn_.append(XO.from_xytheta(x_, y_, yaw_ + w_ * ((float(b0f_[2]) - yaw_ + math.pi) % (2 * math.pi) - math.pi)))
             X, xi = Xn_, xi_from_X(Xn_, DT)
             if src == 'nav':
-                P.yield_apply(self, qp, X, obs, xi)
+                P.yield_apply(self, qp, X, obs, xi, manip=True)
         if self.phase in ('RETURN', 'BIN_MOVE', 'BIN_STOW'):         # 診斷（s137d 回程兩次 9 s 參考不動）：參考視窗幾乎不動 ⇒ 記來源與前端狀態（節流 1 s）
             try:
                 mv_ = float(np.hypot(X[-1][0, 2] - X[0][0, 2], X[-1][1, 2] - X[0][1, 2]))
