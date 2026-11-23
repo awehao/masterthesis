@@ -42,7 +42,7 @@ def shapes(q_open=0.0):
     return out
 
 
-TCP_BACK_M = float(os.environ.get('DR_TCP_BACK_M', '0.011'))      # 把手抓取深度往回拉（m）：Isaac 閉爪受控測試（isaac_handle_close_probe，固定底盤、實跑同手臂狀態）——資產檔頭的越過量 6.8 mm 使橫桿落在 L 形指根，
+TCP_BACK_M = float(os.environ.get('DR_TCP_BACK_M', '0.009'))      # 把手抓取深度往回拉（m）：Isaac 閉爪受控測試（isaac_handle_close_probe，固定底盤、實跑同手臂狀態）——資產檔頭的越過量 6.8 mm 使橫桿落在 L 形指根，  # Isaac 96：11 mm 時實跑閉到 0.85 mm（指尖）⇒ 9 mm
                                                                     # 兩指停在 7.9 mm（再深 4 mm 即 77 N）；拉回 11 mm 時垂直 ±3 mm 內都閉到 1.5–2.3 mm、受力 ≤9 N（Isaac 86／94 受力過大、95 閉不攏同一原因）
 
 
