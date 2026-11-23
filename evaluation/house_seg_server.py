@@ -27,6 +27,8 @@ def rd(f, n):
 
 
 def main():
+    import torch
+    torch.set_num_threads(int(os.environ.get('SEG_THREADS', '2')))      # 即時化：推論在 GPU，CPU 執行緒限 2（預設開滿所有核心會和控制伺服器搶 CPU）
     model = HS.load_model(sys.argv[1])
     fin, fout = sys.stdin.buffer, sys.stdout.buffer
     fout.write(b'READY\n'); fout.flush()
