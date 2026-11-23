@@ -151,6 +151,25 @@ def door_leaf(dep, K, T_cam, mask, min_pts=60, min_span=0.30, hinge_tol=0.05):
     return -math.atan2(a[1], a[0]), dict(n=int(len(P)), span=round(span, 3), hinge_dist=round(d_h, 4), src='seg')
 
 
+def roi_depth(dep, mask, fx=0.6, fy=1.5, min_px=40):
+    """門把：遮罩外框往外擴（寬 max(min_px, fx·w)、高 max(min_px, fy·h)）當搜尋視窗，視窗內深度全留（偵測器需要門板平面與橫桿端外背景），視窗外設 NaN。
+    （Isaac 88：只留遮罩外擴 4 px ⇒ 門板與端外背景被遮掉 ⇒ center_unobservable 卡在門前。）"""
+    m = np.asarray(mask, bool)
+    d = np.asarray(dep, float).copy()
+    ys, xs = np.nonzero(m)
+    if len(xs) == 0:
+        d[:] = np.nan
+        return d
+    x0, x1, y0, y1 = xs.min(), xs.max(), ys.min(), ys.max()
+    w, h = x1 - x0 + 1, y1 - y0 + 1
+    ex, ey = max(min_px, int(fx * w)), max(min_px, int(fy * h))
+    H, W = d.shape
+    keep = np.zeros_like(m)
+    keep[max(0, y0 - ey):min(H, y1 + ey + 1), max(0, x0 - ex):min(W, x1 + ex + 1)] = True
+    d[~keep] = np.nan
+    return d
+
+
 def masked_depth(dep, mask, grow=4):
     """門把：既有幾何偵測（d1_handle_detect_v2）只吃遮罩（外擴 grow 像素）內的深度，其他設 NaN。"""
     m = np.asarray(mask, bool)

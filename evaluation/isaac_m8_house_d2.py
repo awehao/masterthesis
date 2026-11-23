@@ -78,7 +78,7 @@ def _det_worker(conn, fdir):
                 seg_ = dict(_err=repr(e_)[:200])
         _sm = lambda c_: (seg_ or {}).get(c_, {}).get('mask') if isinstance((seg_ or {}).get(c_), dict) else None   # noqa: E731
         try:
-            dep_h_ = m_['dep'] if SEG_ is None else (SV_.masked_depth(m_['dep'], _sm('door_handle')) if _sm('door_handle') is not None else np_.full_like(np_.asarray(m_['dep'], float), np_.nan))
+            dep_h_ = m_['dep'] if SEG_ is None else (SV_.roi_depth(m_['dep'], _sm('door_handle')) if _sm('door_handle') is not None else np_.full_like(np_.asarray(m_['dep'], float), np_.nan))
             T_est_, info_ = obs_.intake(dict(dep=dep_h_, K=m_['K'], T_cam=m_['T_cam'], t_obs=m_['t_obs'], q=m_['q'], t_state=m_['t_obs'], pose_source='fk_at_render_time', frame_id='map', fk_vs_render_m=m_['fk_vs_render_m']), m_['t_obs'])
             err_ = None
         except Exception as e_:                                  # noqa: BLE001

@@ -1,0 +1,6 @@
+{
+ "run_id": "m8house_d2_unified_88",
+ "outcome": "失敗（中止於門前，模擬約 250 s）：Mask R-CNN 視覺（D2_SEG=1）時，門把幾何偵測只拿到遮罩外擴 4 px 內的深度 ⇒ 看不到門板平面與橫桿端外背景 ⇒ 每格 center_unobservable，機器人停在門把前 0.47 m",
+ "fix": "門把改用遮罩外框擴大視窗（seg_vision.roi_depth：寬 max(40, 0.6w)、高 max(40, 1.5h)）；離線 12 格：完整深度 4 格有中心、視窗版 3 格，中心差 0.6–3 mm",
+ "note": "手動中止（stop_all）；失敗原因是我的接線錯，不是模型"
+}
