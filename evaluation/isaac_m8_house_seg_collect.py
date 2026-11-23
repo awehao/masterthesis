@@ -27,6 +27,7 @@ ap.add_argument('--seed', type=int, default=0)
 ap.add_argument('--reg', default=os.path.join(HERE, 'experiments', '20261121_m8_house_r2w3_scene.json'))
 ap.add_argument('--urdf', default=os.path.join(WS, 'evaluation/models/omni_bot_manip.urdf'))
 a = ap.parse_args()
+os.environ['M8_SCENE_REG'] = os.path.basename(a.reg)                 # drawer_scene 等模組匯入時讀這個決定抽屜位置（第一版收資料漏設 ⇒ 抽屜櫃放到舊場景位置、筆浮空）
 
 from isaacsim import SimulationApp                               # noqa: E402
 sim_app = SimulationApp({'headless': False, 'width': 1280, 'height': 720})

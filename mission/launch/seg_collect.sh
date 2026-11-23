@@ -5,5 +5,6 @@
 source "$(dirname "$0")/_env.sh"
 OUT=${1:?輸出資料夾}; RUNS=${2:?趟號}; shift 2
 pgrep -f "[i]saac_m8_house" >/dev/null && { echo "已有 Isaac 在跑"; exit 1; }
+load_env task.env
 cd "$WS"
 ~/venvs/isaacsim-6.0.1/bin/python -u evaluation/isaac_m8_house_seg_collect.py --runs "$RUNS" --out "$OUT" "$@"
