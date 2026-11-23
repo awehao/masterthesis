@@ -42,6 +42,10 @@ def shapes(q_open=0.0):
     return out
 
 
+TCP_BACK_M = float(os.environ.get('DR_TCP_BACK_M', '0.011'))      # 把手抓取深度往回拉（m）：Isaac 閉爪受控測試（isaac_handle_close_probe，固定底盤、實跑同手臂狀態）——資產檔頭的越過量 6.8 mm 使橫桿落在 L 形指根，
+                                                                    # 兩指停在 7.9 mm（再深 4 mm 即 77 N）；拉回 11 mm 時垂直 ±3 mm 內都閉到 1.5–2.3 mm、受力 ≤9 N（Isaac 86／94 受力過大、95 閉不攏同一原因）
+
+
 def handle_T(q_open=0.0, flip=False):
     """把手抓取 TCP 位姿（世界）：工具 z 指向櫃內（−拉出方向）、手指沿上下（夾 26 mm 橫桿）；TCP 越過桿心 tcp_offset_along_tool_z。"""
     b = SPEC['drawer']['handle']['bar']
@@ -49,7 +53,7 @@ def handle_T(q_open=0.0, flip=False):
     z = -PULL
     y = np.array([0.0, 0.0, -1.0 if flip else 1.0])
     R = np.column_stack([np.cross(y, z), y, z])
-    T = np.eye(4); T[:3, :3] = R; T[:3, 3] = c + float(SPEC['grasp_surface']['tcp_offset_along_tool_z']) * z
+    T = np.eye(4); T[:3, :3] = R; T[:3, 3] = c + (float(SPEC['grasp_surface']['tcp_offset_along_tool_z']) - TCP_BACK_M) * z
     return T
 
 

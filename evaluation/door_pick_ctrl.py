@@ -46,7 +46,7 @@ APP_GATE_CAP_S = 30.0
 FLOW_D0, FLOW_LINE_TOL = float(os.environ.get('PICK_FLOW_D0', '1.2')), float(os.environ.get('PICK_FLOW_LINE_TOL', '0.02'))
 FLOW_D1, FLOW_MISS_R = float(os.environ.get('PICK_FLOW_D1', '0.30')), float(os.environ.get('PICK_FLOW_MISS_R', '0.50'))   # 照導航移動中夾取：到站半徑（路徑不一定正好穿過抓取點）、錯過判定                                                 # 狀態閘門下的總安全逾時（名目時長之後）
 FLOW_HDL_DZ = float(os.environ.get('PICK_FLOW_HDL_DZ', '0.004'))     # 照導航抓把手：抓取線起始高度差上限（m；收斂趟 Isaac 82/80 線起點約 −3 mm）
-MEAS_GATE = os.environ.get('PICK_MEAS_GATE', '1') == '1'          # 固定橫桿閉爪門檻用實測 TCP
+MEAS_GATE = os.environ.get('PICK_MEAS_GATE', '0') == '1'          # 固定橫桿閉爪門檻用實測 TCP（Isaac 95：實體橫桿比模型低約 5 mm，舊的預測狀態判斷在實體上才對準 ⇒ 預設關）
 LIM_PAD = float(os.environ.get('PICK_LIM_PAD', '0.02'))               # 手臂關節位置界限內縮（rad）：s162d 茶几照導航接近 j3 名目 2.87、界限 2.936，在途命令積分越界 ⇒ setpoint_limit 停
 
 
