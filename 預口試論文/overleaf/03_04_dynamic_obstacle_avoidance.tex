@@ -1,0 +1,198 @@
+% !TeX program = xelatex
+% 第三章 3.4：接在 03_03_objective_constraints.tex 之後。
+% 需要 amsmath、amssymb；章節與公式由 LaTeX 自動編號。
+% 引用鍵：kalman1960filter（新增）、ames2019cbf（沿用第一章）。
+
+% ==================================================
+% 3.4 障礙運動預測與動態避障
+% ==================================================
+\section{障礙運動預測與動態避障}
+\label{sec:dynamic_obstacle_avoidance}
+
+動態室內環境中的障礙會隨時間改變可通行空間，僅追蹤既定路徑，可能無法及時因應人員或物件的接近。本節將障礙的幾何資訊與運動估計轉換為預測時域內的避障限制，並在底盤命令執行路徑加入直接使用雷射回波的防護機制。前者用於配合導航參考調整未來運動，後者用於處理未完整進入追蹤與分類流程的近距離回波。
+
+% ==================================================
+% 3.4.1 障礙物表示與運動預測
+% ==================================================
+\subsection{障礙物表示與運動預測}
+\label{subsec:obstacle_representation_prediction}
+
+雷射量測先經有效距離與自身回波篩選，再轉換至共同座標系。已知地圖提供固定牆面資訊，其餘候選回波則依掃描角度的相鄰關係形成群集，並與既有軌跡進行資料關聯。群集中心用於追蹤與速度估計；避障幾何則保留物件表面的量測樣本，使較長或不規則的障礙可由多個局部樣本描述。
+
+對第 $g$ 個追蹤物件，定義平面狀態 $x_g=[c_g^{\top},v_g^{\top}]^{\top}\in\mathbb{R}^{4}$，其中 $c_g$ 為追蹤中心，$v_g$ 為平面速度。採用等速度模型與卡爾曼濾波\cite{kalman1960filter}估計其狀態，模型表示為
+\begin{equation}
+    \begin{aligned}
+        x_g^{+}
+        &=F_o(\Delta\tau)x_g+w_g, \\
+        y_g
+        &=H_o x_g+n_g, \\
+        F_o(\Delta\tau)
+        &=\begin{bmatrix}
+            I_2 & \Delta\tau I_2 \\
+            \mathbf{0}_{2\times2} & I_2
+          \end{bmatrix}, \\
+        H_o
+        &=\begin{bmatrix}
+            I_2 & \mathbf{0}_{2\times2}
+          \end{bmatrix},
+    \end{aligned}
+    \label{eq:ch3_obstacle_tracking_model}
+\end{equation}
+其中 $\Delta\tau$ 為相鄰追蹤更新的時間間隔，$y_g$ 為群集中心量測，$w_g$ 與 $n_g$ 分別表示程序與量測雜訊。追蹤更新間隔與控制週期 $\Delta t$ 分別處理，避免將不同更新頻率視為相同。
+
+以 $\ell$ 表示送入控制器的障礙幾何樣本，令 $\hat{o}_{\ell,k}\in\mathbb{R}^{2}$ 為其目前估計位置，$\hat{v}_{\ell,k}\in\mathbb{R}^{2}$ 為所屬物件的速度估計。預測時域內的位置為
+\begin{equation}
+    o_{\ell,i|k}
+    =\hat{o}_{\ell,k}+i\Delta t\hat{v}_{\ell,k},
+    \qquad i=0,\ldots,N-1.
+    \label{eq:ch3_obstacle_cv_prediction}
+\end{equation}
+同一物件的表面樣本共用其平移速度；已知固定牆面則取零速度。若暫時缺少新觀測，保留的表面樣本依追蹤中心的估計位移平移，使幾何位置與速度對應至相同時刻。此近似未描述物件在遮蔽期間的旋轉與變形，其可保留時間及保護距離依實驗設定。
+
+對直接使用表面回波的樣本，不再重複加入完整物件半徑。若以物件中心及外形半徑表示障礙，則保留對應半徑。兩種表示皆以有效排除距離 $\rho_{\ell}$ 納入後續屏障函數，並透過樣本間距與數量上限控制問題規模。
+
+% ==================================================
+% 3.4.2 控制屏障函數與避障限制
+% ==================================================
+\subsection{控制屏障函數與避障限制}
+\label{subsec:cbf_obstacle_constraints}
+
+控制屏障函數（Control Barrier Function, CBF）可將集合維持需求轉換為控制輸入的條件，其基本理論與控制應用可參照 Ames 等人\cite{ames2019cbf}。本研究以底盤的平面圓盤近似建立距離型屏障函數：
+\begin{equation}
+    \begin{aligned}
+        h_{\ell}(p_B,t)
+        &=\|p_B-o_{\ell}(t)\|^2-\rho_{\ell}^{2}, \\
+        \rho_{\ell}
+        &=r_{\ell}+m_{\ell},
+    \end{aligned}
+    \label{eq:ch3_obstacle_barrier_function}
+\end{equation}
+其中 $r_{\ell}$ 為障礙樣本所代表的幾何半徑，$m_{\ell}$ 為包含底盤尺寸與額外間距的保護距離。表面樣本的幾何半徑可取零，其排除距離由保護距離構成。$h_{\ell}\geq0$ 表示底盤中心位於該樣本的排除區域之外。
+
+在保護距離固定、障礙採等速度預測時，沿底盤與障礙運動微分可得
+\begin{equation}
+    \dot{h}_{\ell}
+    =2(p_B-o_{\ell})^{\top}
+      \left(R_B(\theta_B)v_B-\hat{v}_{\ell,k}\right),
+    \label{eq:ch3_obstacle_barrier_derivative}
+\end{equation}
+其中 $v_B=[v_x^B,v_y^B]^{\top}$ 為底盤本體座標中的平移速度。選取 $\alpha_h>0$，採用速度型屏障條件
+\begin{equation}
+    \dot{h}_{\ell}+\alpha_h h_{\ell}
+    \geq-\varepsilon_{c(\ell),i|k},
+    \qquad \varepsilon_{c(\ell),i|k}\geq0,
+    \label{eq:ch3_velocity_cbf_condition}
+\end{equation}
+其中 $\varepsilon_{c(\ell),i|k}$ 為第 $i$ 個預測時刻的鬆弛變數，$c(\ell)$ 表示該樣本所屬的限制群組。依控制配置，樣本可共用同一組鬆弛，或區分固定幾何與移動障礙的鬆弛，以分別調整其懲罰。
+
+為建立線性限制，第零步使用目前實際底盤位姿，其後各步使用參考或名目位姿作為幾何評估點。令 $\bar{p}_{B,i|k}$ 與 $\bar{R}_{B,i|k}$ 為該評估點的位置及旋轉矩陣，並定義
+\begin{equation}
+    \begin{aligned}
+        \bar{d}_{\ell,i|k}
+        &=\bar{p}_{B,i|k}-o_{\ell,i|k}, \\
+        \bar{h}_{\ell,i|k}
+        &=\|\bar{d}_{\ell,i|k}\|^2-\rho_{\ell}^{2}, \\
+        a_{\ell,i|k}^{\top}
+        &=\begin{bmatrix}
+            2\bar{d}_{\ell,i|k}^{\top}\bar{R}_{B,i|k} & 0
+          \end{bmatrix}.
+    \end{aligned}
+    \label{eq:ch3_cbf_nominal_geometry}
+\end{equation}
+將底盤速度命令 $\xi_{B,i|k}=\xi_{r,k+i}+\delta\xi_{i|k}$ 代入，可將式\eqref{eq:ch3_velocity_cbf_condition}整理為
+\begin{equation}
+    \begin{aligned}
+        a_{\ell,i|k}^{\top}\delta\xi_{i|k}
+        +\varepsilon_{c(\ell),i|k}
+        \geq{}&2\bar{d}_{\ell,i|k}^{\top}\hat{v}_{\ell,k} \\
+               &-\alpha_h\bar{h}_{\ell,i|k}
+                -a_{\ell,i|k}^{\top}\xi_{r,k+i}.
+    \end{aligned}
+    \label{eq:ch3_cbf_affine_constraint}
+\end{equation}
+此限制直接作用於對應步的底盤速度偏差；在全身控制序列中，手臂命令欄補零。角速度欄為零，是因為圓盤距離的一階變化未直接包含偏航速度，底盤航向仍會影響後續運動方向與各步的幾何評估。
+
+將各障礙樣本及選定預測時刻的限制堆疊後，可加入前節的二次規劃問題。令 $\boldsymbol{\varepsilon}_k$ 為全部啟用的鬆弛變數，決策向量擴充為 $\mathbf{z}_{\mathrm{QP},k}=[\mathbf{U}_k^{\top},\boldsymbol{\varepsilon}_k^{\top}]^{\top}$，並於目標函數加入
+\begin{equation}
+    J_{\varepsilon}
+    =\sum_{c\in\mathcal{C}}\sum_{i=0}^{N-1}
+      w_{\varepsilon,c,i}\varepsilon_{c,i|k}^{2},
+    \qquad w_{\varepsilon,c,i}>0,
+    \label{eq:ch3_cbf_slack_cost}
+\end{equation}
+其中 $\mathcal{C}$ 為啟用的限制群組。當前步與未來步可採不同懲罰權重；提高權重仍屬軟限制，需同時記錄鬆弛量及原始屏障條件的殘差，才能判斷限制的實際滿足程度。
+
+上述方法是在有限時域的名目幾何位置建立速度型屏障限制，並隨控制週期更新。由於涉及離散更新、幾何近似與鬆弛變數，其實際避障能力需由實驗驗證。本節的平面限制主要描述底盤與障礙的關係，伸展手臂與持物的三維幾何條件則另行處理。
+
+% ==================================================
+% 3.4.3 原始雷射掃描防護與命令處理
+% ==================================================
+\subsection{原始雷射掃描防護與命令處理}
+\label{subsec:raw_scan_command_protection}
+
+障礙回波可能因群集大小、資料關聯或運動分類條件而未進入預測控制器。為處理此類情況，底盤命令執行路徑另使用不依賴物件追蹤的雷射防護。此處使用不依賴追蹤物件分類結果的掃描回波，量測仍需進行有效距離、自身回波及必要的鄰點一致性篩選。
+
+令 $z_{\ell}^{B}\in\mathbb{R}^{2}$ 為轉換至底盤座標的有效回波，$R_{\mathrm{body}}$ 為底盤圓盤近似半徑，定義
+\begin{equation}
+    \begin{aligned}
+        n_{\ell}
+        &=\frac{z_{\ell}^{B}}{\|z_{\ell}^{B}\|}, \\
+        d_{\ell}
+        &=\|z_{\ell}^{B}\|-R_{\mathrm{body}}, \\
+        r_{\ell}^{B}
+        &=R_{\mathrm{body}}n_{\ell}.
+    \end{aligned}
+    \label{eq:ch3_scan_surface_geometry}
+\end{equation}
+其中 $n_{\ell}$ 指向回波，$d_{\ell}$ 為回波至底盤表面的近似間距，$r_{\ell}^{B}$ 為面向回波的底盤表面點。令 $J_2=\begin{bmatrix}0&-1\\1&0\end{bmatrix}$，表面點朝向回波的接近速度為
+\begin{equation}
+    \begin{aligned}
+        v_{n,\ell}
+        &=a_{\ell}^{\mathrm{sh}\,\top}\xi_B, \\
+        a_{\ell}^{\mathrm{sh}\,\top}
+        &=\begin{bmatrix}
+            n_{\ell}^{\top} & n_{\ell}^{\top}J_2r_{\ell}^{B}
+          \end{bmatrix}.
+    \end{aligned}
+    \label{eq:ch3_scan_approach_velocity}
+\end{equation}
+此處 $v_{n,\ell}>0$ 表示底盤表面朝向回波運動。採用圓盤近似時，$n_{\ell}^{\top}J_2r_{\ell}^{B}=0$；此幾何亦說明該防護未直接涵蓋伸展手臂的旋轉掃掠範圍。
+
+以進入防護層的底盤命令 $\xi_B^{\mathrm{in}}$ 計算各點的接近速度，建立所需保護間距：
+\begin{equation}
+    \begin{aligned}
+        v_{\mathrm{app},\ell}
+        &=\max\!\left(0,
+          a_{\ell}^{\mathrm{sh}\,\top}\xi_B^{\mathrm{in}}\right), \\
+        d_{\mathrm{stop},\ell}
+        &=d_0+v_{\mathrm{app},\ell}(\tau_0+t_{\mathrm{age}}) \\
+        &\quad+\frac{v_{\mathrm{app},\ell}^{2}}{2a_{\mathrm{brake}}}
+          +\epsilon_{\mathrm{scan}}+\epsilon_{\mathrm{body}}.
+    \end{aligned}
+    \label{eq:ch3_scan_stopping_distance}
+\end{equation}
+其中 $d_0$ 為低速時的基本間距，$\tau_0$ 為延遲裕度，$t_{\mathrm{age}}$ 為距最近一次有效掃描更新的時間，$a_{\mathrm{brake}}>0$ 為採用的減速能力參數，$\epsilon_{\mathrm{scan}}$ 與 $\epsilon_{\mathrm{body}}$ 分別為量測與外形近似裕度。保護間距依各回波方向的接近速度計算，避免以總平移速度將切向通行的間距一併放大。
+
+防護層對輸出命令施加
+\begin{equation}
+    a_{\ell}^{\mathrm{sh}\,\top}\xi_B^{\mathrm{out}}
+    \leq\alpha_{\mathrm{sh}}
+          (d_{\ell}-d_{\mathrm{stop},\ell}),
+    \qquad \alpha_{\mathrm{sh}}>0,
+    \label{eq:ch3_scan_protection_constraint}
+\end{equation}
+並與底盤速度框及啟用的輪級限制共同處理。將全部半空間限制寫成 $A_{\mathrm{sh}}\xi_B\leq b_{\mathrm{sh}}$，由輸入命令開始，反覆選取違反量最大的限制列進行投影。若該列為 $a_j^{\top}\xi_B\leq b_j$，則更新式為
+\begin{equation}
+    \xi_B^{(n+1)}
+    =\xi_B^{(n)}
+     -\frac{\left[a_j^{\top}\xi_B^{(n)}-b_j\right]_{+}}
+            {\|a_j\|^2}a_j,
+    \label{eq:ch3_scan_halfspace_projection}
+\end{equation}
+其中 $[x]_{+}=\max(x,0)$。投影採有限迭代預算，完成後檢查限制殘差；迭代次數本身不代表限制已全部滿足。
+
+若完整防護條件仍無法滿足，則先將要求主動退離的負上界放寬至零，形成該方向的非接近條件，再進行投影與殘差核對。若仍無法取得合格命令，則進入停止請求與輪級減速處理。當輪級命令變化限制同時作用時，零速度請求未必能立即執行，因此仍需核對最終放行命令。掃描更新逾時則進入低速退化處理，此時不能將缺少新回波解讀為環境無障礙。
+
+底盤命令依序經過速度平滑、雷射防護及最終輪級限制，再送至底盤執行介面。防護層以最近的最終放行命令作為輪級變化限制的基準，並記錄回退來源與命令修正量。若後處理改變原本的最佳化命令，其對底盤與末端預測的影響，需配合執行端回報於後續控制週期處理，相關方法於執行動態補償一節說明。
+
+上述雷射防護用於抑制機器人對可見回波的接近運動，未直接估測回波所屬障礙的速度，因此需與前述動態障礙預測配合。其效能與適用範圍，於第四章依避障距離、命令修正及任務表現進行評估。
