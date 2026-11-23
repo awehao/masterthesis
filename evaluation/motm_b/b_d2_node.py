@@ -56,6 +56,7 @@ FLOW_V = float(os.environ.get('PICK_FLOW_V', '0.06'))                 # 抓取�
 FLOW_AHEAD = float(os.environ.get('PICK_FLOW_AHEAD', '0.35'))         # 途經點＝抓取點沿行進方向再往前（讓路徑穿過抓取點、不在抓取點停）
 DR_FLOW = PICK_FLOW and os.environ.get('DR_FLOW', '1') == '1'        # 抽屜把手（開、關）同樣照導航：邊走邊展開（早送封包），導航目標＝把手底盤位，近把手只轉偏航與限速，閉爪看狀態
 DR_OBS_PRE = os.environ.get('DR_OBS_PRE', '1') == '1'                # 抽屜觀察位背景先算
+SEEK_FACE_LEAF = os.environ.get('B_SEEK_FACE_LEAF', '1') == '1'      # 回程找門扇：觀察位偏航朝門扇中段
 DOOR_LINE = os.environ.get('B_DOOR_LINE', '0') == '1'               # Howard 11/21「門把要移動中抓」：沿門前走廊經過抓取（不收斂到站位）
 DOOR_LINE_PRE = float(os.environ.get('B_DOOR_LINE_PRE', '0.7'))       # 走廊起點＝抓取底盤位沿門往回（m）
 DOOR_LINE_SEND = float(os.environ.get('B_DOOR_LINE_SEND', '0.9'))
@@ -931,11 +932,17 @@ def main():
                 if self.door_end is None:
                     self.event('door_close_no_end_state'); dc['stage'] = 'skip'; return False
                 dc.update(stage='seek', t0=t)
-                self.pick_goal, self.pass_t = self._dr_goal(self.door_end['b']), t
-                self.dr['goal_od'] = [float(x) for x in self.door_end['b']]   # 目標每拍重新換算用（否則沿用抽屜目標）
+                b_seek = np.asarray(self.door_end['b'], float).copy()
+                g_ = self._door_geom_od() if SEEK_FACE_LEAF else None
+                if g_ is not None:                                     # 朝向由物件與可見性決定（Howard 11/20）：觀察位偏航朝門扇中段（收臂相機朝前；沿用開門結束偏航時門扇遠端落在視野邊緣 ⇒ s198d／s208d 門扇未見）
+                    ph_ = float(self.door_end['phi']); d0_ = np.asarray(g_['dir'], float); c_, s_ = math.cos(-ph_), math.sin(-ph_)
+                    mid_ = np.asarray(g_['hinge'], float) + 0.55 * np.array([c_ * d0_[0] - s_ * d0_[1], s_ * d0_[0] + c_ * d0_[1]])
+                    b_seek[2] = math.atan2(mid_[1] - b_seek[1], mid_[0] - b_seek[0])
+                self.pick_goal, self.pass_t = self._dr_goal(b_seek), t
+                self.dr['goal_od'] = [float(x) for x in b_seek]           # 目標每拍重新換算用（否則沿用抽屜目標）
                 if PASS_CLEAR and self._clr_cli.service_is_ready():     # 回程穿門前清一次全域代價圖（同穿門、返回）
                     self._clr_fut, self._clr_t = self._clr_cli.call_async(self._clr_req()), t
-                self.event('door_close_seek', goal=[round(float(x), 4) for x in self.door_end['b']])
+                self.event('door_close_seek', goal=[round(float(x), 4) for x in b_seek], yaw_end=round(float(self.door_end['b'][2]), 4))
                 return True
             if dc['stage'] == 'seek':
                 ph = self._leaf_fuse(t)
