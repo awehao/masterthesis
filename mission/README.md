@@ -107,4 +107,9 @@
 | 影片重播 | `evaluation/isaac_m8_house_d2_replay.py` |
 
 ### 工具（`mission/tools/`）
+`tick_budget.py <d2w.npz> [50]`：各階段控制拍計算時間與超過預算的拍數（即時性檢查）；`nav_watchdog.sh`：替身 Nav2 啟動卡住自動重跑一次。
 `wait_clean.sh`（起跑前確認沒有殘留程序）、`kill_all.sh`（收整個行程群組）、`make_registration.py`（登錄＋凍結）、`compare_walkers.py`、`replay_walkers.py`（重播行人與機器人距離）。
+
+## 歸檔
+
+`evaluation/` 裡主線用不到的 1,158 個歷史 .py 已移到 `evaluation/archive/`（只搬不刪，說明見該資料夾 README）。
