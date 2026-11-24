@@ -271,7 +271,4 @@ class DoorCloseCtrl(PK.TablePickCtrl):
         self.wg_log.append((round(self.t, 3), 'door_close:' + self.phase, round((time.perf_counter() - w0) * 1e3, 2), str(r.status), src, len(obs), int(r.cbf_active), PK._obs_near(obs, qp), [round(float(X[0][0, 2] - qp[0]), 4), round(float(X[0][1, 2] - qp[1]), 4), round(float(math.atan2(X[0][1, 0], X[0][0, 0]) - qp[2] + math.pi) % (2 * math.pi) - math.pi, 4)]))   # 底盤參考誤差（x, y, 偏航）
         if not np.isfinite(np.asarray(r.u_opt, float)).all():
             return None, 'wgmpc_nonfinite'
-        ck = dict(r.arm_check or {})
-        if ck.get('fallback') or ck.get('failed') or not ck.get('seq_consistent', False) or r.u_arm_seq is None or r.status != 'solved':
-            return None, 'wgmpc:%s/%s/%s' % (r.status, ck.get('fallback'), ck.get('failed'))
-        return np.r_[np.asarray(r.u_opt, float), np.asarray(r.u_arm_seq[0], float)], src
+        return P.wg_result(self, r, src)
