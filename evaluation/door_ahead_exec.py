@@ -74,14 +74,25 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
     k_tick, k_open = 0, 0
     _prof_path = os.environ.get('D2_PROFILE')                        # 即時化剖析（替身用；預設關）：cProfile 累積、每 1000 則訊息覆寫一次
     _prof, _n_msg = None, 0
+    _prof_mode = os.environ.get('D2_PROFILE_MODE')                   # 只剖析指定模式（如 open）的訊息；其餘時段不開剖析器
+    _prof_on = False
     if _prof_path:
         import cProfile
-        _prof = cProfile.Profile(); _prof.enable()
+        _prof = cProfile.Profile()
+        if not _prof_mode:
+            _prof.enable(); _prof_on = True
     while True:
         msg = conn.recv()
         if _prof is not None:
             _n_msg += 1
-            if _n_msg % 1000 == 0:
+            if _prof_mode:
+                if mode == _prof_mode and not _prof_on:
+                    _prof.enable(); _prof_on = True
+                elif mode != _prof_mode and _prof_on:
+                    _prof.disable(); _prof_on = False; _prof.dump_stats(_prof_path)
+                if _prof_on and _n_msg % 200 == 0:
+                    _prof.disable(); _prof.dump_stats(_prof_path); _prof.enable()
+            elif _n_msg % 1000 == 0:
                 _prof.dump_stats(_prof_path); _prof.enable()
         if msg is None:
             break
@@ -142,7 +153,7 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                 ctrl._ev_sent = 0
             elif pa_ is not None and mode == 'pick' and pa_.get('kind') == 'path_ext' and hasattr(ctrl, 'path_ext'):   # 依導航路徑的移動中抓取：經過方向／速度（監督線上算）
                 ctrl.path_ext(pa_, float(t_next))
-            elif pa_ is not None and mode == 'pick' and pa_.get('kind') in ('observe', 'marker', 'dr_close') and hasattr(ctrl, 'next_app'):   # 抽屜任務下一段（觀察位／夾筆）
+            elif pa_ is not None and mode == 'pick' and pa_.get('kind') in ('observe', 'marker', 'dr_close', 'dr_close_vis') and hasattr(ctrl, 'next_app'):   # 抽屜任務下一段（觀察位／夾筆）
                 ctrl.next_app(pa_, float(t_next))
             if snap.get('obj_detached') and mode == 'pick' and getattr(ctrl, 'obj_release', False):   # 車尾收納盒：執行端解除夾爪↔物體連接的回報（只對發出請求的控制器）
                 ctrl.obj_detached = True

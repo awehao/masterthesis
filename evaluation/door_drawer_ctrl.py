@@ -38,7 +38,9 @@ CLOSE_UNF_ANCHOR = os.environ.get('DR_CLOSE_UNF_ANCHOR', '1') == '1'
 REGRASP_HOLD = os.environ.get('DR_REGRASP_HOLD', '1') == '1'
 CLOSE_UNF_V = float(os.environ.get('DR_CLOSE_UNF_V', '0.15'))        # 關抽屜展開段退到關抽屜站位的參考速度（m/s）
 REGRASP_MAX = int(os.environ.get('DR_REGRASP_MAX', '2'))
-REGRASP_DZ = float(os.environ.get('DR_REGRASP_DZ', '0.002'))           # 每次重夾沿工具軸再深（m）
+REGRASP_DZ = float(os.environ.get('DR_REGRASP_DZ', '0.006'))           # 每次重夾沿工具軸再深（m）；第 110 趟：第一次夾空時手指把抽屜推進 12.6 mm，2 mm 步長兩次重試追不上 ⇒ 6 mm
+REGRASP_DEEP = float(os.environ.get('DR_REGRASP_DEEP', '0.004'))       # 關抽屜再夾：沿工具軸預先再深（m）。放手退開會使抽屜漂移（第 105 趟拖出 7.3 mm 仍夾到、第 110 趟推進 3.1 mm ⇒ 淺 3 mm 夾空）；
+                                                                      #   抽屜半開可滑動，夾深只會把抽屜往關的方向推（不像第一次抓時抽屜頂住限位會卡指根）⇒ 偏深是安全側
 OBS_QD = float(os.environ.get('DR_OBS_QD', '0.6'))                    # 俯視關節空間移動峰速上限（rad/s）
 UNF_QD = float(os.environ.get('DR_UNF_QD', '1.2'))                    # 展開關節空間峰速（rad/s）：Howard「依照硬體限制」，Lite 6 手冊 180°/s＝3.14 rad/s，取 38%（原沿用俯視 0.6 ⇒ 展開 7.25 s，照導航接近時底盤已到站等手臂）
 W_Q_OBS = float(os.environ.get('DR_W_Q_OBS', '5.0'))
@@ -103,6 +105,17 @@ class DrawerCtrl(PK.TablePickCtrl):
     # ---- 監督送的下一段封包（observe／marker）
     def next_app(self, app, t0):
         kind = app.get('kind')
+        if kind == 'dr_close_vis':                                   # 11/24：關抽屜重抓前的視覺開度更新（展開／接近段、抓取線開始前才採用；不重設其他狀態）
+            if getattr(self, 'close_mode', False) and self.task == 'handle' and self.phase in ('RETURN', 'UNFOLD', 'APPROACH') and getattr(self, '_t_line0', None) is None and not getattr(self, '_vis_applied', False):
+                pv_ = np.r_[np.asarray(app['pull'], float)[:2], 0.0]; pv_ = pv_ / max(float(np.linalg.norm(pv_)), 1e-9)
+                dq_ = float(app['q_vis']) - float(app['q_open'])
+                self.T_grasp = self.T_grasp.copy(); self.T_grasp[:3, 3] = self.T_grasp[:3, 3] + dq_ * pv_
+                self.open0 = float(app['q_vis']); self.open_m = max(0.0, self.open0 - CLOSE_LEAVE_M)
+                self._vis_applied = True
+                self._ev('pick_dr_regrasp_vis', dq_mm=round(dq_ * 1e3, 2), q_vis=round(float(app['q_vis']), 4), phase=self.phase)
+            else:
+                self._ev('pick_dr_vis_ignored', phase=self.phase, task=self.task, line=getattr(self, '_t_line0', None) is not None)
+            return
         self.aim_off = np.zeros(3)                                    # 瞄準補償換段歸零（新目標重新收斂）
         self.app_qpost = None                                         # 把手接近的姿態引導只用在把手段
         if kind == 'observe' and self.task == 'handle' and self.phase == 'WAIT':
@@ -126,10 +139,20 @@ class DrawerCtrl(PK.TablePickCtrl):
                 dd_ = float(np.dot(Tb_[:3, 3] - self.T_grasp[:3, 3], pu_))   # 只取沿拉出（＝接近深度）軸的差：深度重現第一次抓（第 103 趟成敗差在深度 3.1 vs 1.3 mm），側向／高度仍用名目中心（替身 s217d：整個位姿照搬 ⇒ 側向偏移帶過去、超出 6 mm）
                 self._ev('pick_dr_regrasp_hold', d_mm=round(float(np.linalg.norm(Tb_[:3, 3] - self.T_grasp[:3, 3])) * 1e3, 2), d_pull_mm=round(dd_ * 1e3, 2))
                 self.T_grasp = self.T_grasp.copy(); self.T_grasp[:3, 3] = self.T_grasp[:3, 3] + dd_ * pu_
+            if app.get('q_vis') is not None:                           # 11/24：視覺量到的實際開度（放手退開後抽屜漂移）⇒ 目標沿拉出方向平移（第一次抓的相對深度照舊）
+                pv_ = np.r_[np.asarray(app['pull'], float)[:2], 0.0]; pv_ = pv_ / max(float(np.linalg.norm(pv_)), 1e-9)
+                dq_ = float(app['q_vis']) - float(app.get('q_open', self.open0))
+                self.T_grasp = self.T_grasp.copy(); self.T_grasp[:3, 3] = self.T_grasp[:3, 3] + dq_ * pv_
+                self.open0 = float(app['q_vis']); self.open_m = max(0.0, self.open0 - CLOSE_LEAVE_M)
+                self._ev('pick_dr_regrasp_vis', dq_mm=round(dq_ * 1e3, 2), q_vis=round(float(app['q_vis']), 4))
+            if REGRASP_DEEP > 0.0:
+                self.T_grasp = self.T_grasp.copy(); self.T_grasp[:3, 3] = self.T_grasp[:3, 3] + REGRASP_DEEP * self.T_grasp[:3, 2]
+                self._ev('pick_dr_regrasp_deep', mm=round(REGRASP_DEEP * 1e3, 1))
             self.dr_attach, self.dr_release, self.dr_unbound = False, False, False
             self.T_p0, self.b_p0, self.T_rel_r0, self.dvec_b, self.n_ev, self.T_hold = None, None, None, None, 0, None   # T_hold 必清（s80：確認段保持舊退出位姿 ⇒ 手臂抬走、證據逾時）
             self.finger_cmd = P.FINGER_OPEN
             self.q_unf0, self.b_unf, self.regrasp_n, self._reopen_t = None, None, 0, None
+            self._vis_applied = app.get('q_vis') is not None
             self.app_prof = dict(base_goal=list(app['base_goal']), door=None)
             self.T_app, self.T_b, self.t_l0 = float(app['T']), float(app['T_b']), float(app['t_l0'])
             self._bg, self._t_arr, self._t_line0, self._bp = np.asarray(app['base_goal'], float)[:2].copy(), None, None, 0.0   # 關抽屜把手也走狀態閘門

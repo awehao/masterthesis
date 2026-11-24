@@ -96,6 +96,10 @@ from world_ahead_node import leaf_cast                               # noqa: E40
 
 START = np.array([float(x) for x in os.environ.get('D2_START', '1.5,-2.8,1.5708,-0.0128,-0.0519,0.086,0.0116,-1.6249,-0.0018').split(',')], float)
 RTF = float(os.environ.get('D2_RTF', '0.3'))
+PACE = {}                                                            # Howard 11/24「試試看能不能到 RTF 1」：依控制模式／階段要求 Isaac 改目標 RTF（D2_PACE='open=0.6,grasp:CONFIRM=0.6'；預設空＝不變）
+for _it in os.environ.get('D2_PACE', '').split(','):
+    if '=' in _it:
+        PACE[_it.split('=')[0].strip()] = float(_it.split('=')[1])
 OBS_NOISE = (float(os.environ.get('D2_OBS_NOISE_MM', '1.0')) * 1e-3, math.radians(float(os.environ.get('D2_OBS_NOISE_DEG', '0.2'))))
 Kc = np.array([[465.6028747558594, 0.0, 320.0], [0.0, 465.60284423828125, 240.0], [0.0, 0.0, 1.0]])
 W_ = P2.WB
@@ -407,6 +411,9 @@ class WorldD2(Node):
 
     def _step(self):
         w = time.perf_counter()
+        if getattr(self, '_gc_refreeze', False) and self.n % 1000 == 999:
+            import gc as _gc
+            _gc.freeze()
         if self.w0 is None:
             self.w0, self.w_prev, self.max_gap = w, w, 0.0
         else:
@@ -496,6 +503,12 @@ class WorldD2(Node):
                 else:
                     was = runner.mode
                     rec = runner.tick_boundary(self.q, self.t - self.t_h + NPH * PHYS, k, phi=self.phi, finger=self.fing if ISAAC else None)
+                    if ISAAC and PACE and rec.get('mode') is not None:    # 配速閥：本拍結果的模式／階段 ⇒ 目標 RTF（只改模擬推進速度，不改任何控制判定）
+                        want_ = PACE.get('%s:%s' % (rec.get('mode'), rec.get('phase')), PACE.get(str(rec.get('mode')), RTF))
+                        if want_ != getattr(self, 'pace_now', RTF):
+                            self.pace_now = want_
+                            self.ctl('pace', rtf=want_)
+                            self.ev('pace', rtf=want_, mode=rec.get('mode'), phase=rec.get('phase'))
                     if rec.get('commit'):
                         self.pub_seg()
                         if rec.get('commit_step', k) >= k:
@@ -804,12 +817,24 @@ class WorldD2(Node):
 def main():
     rclpy.init()
     w = WorldD2()
+    if os.environ.get('D2W_GC_FREEZE', '1') == '1':                  # 11/24 RTF 1：第 121 趟控制伺服器處理拍首慢約 14 ms（快照送出後 35.9 ms 就到下一拍首 ⇒ not_ready）⇒ 既有物件移出回收追蹤，之後每 1000 步再凍結
+        import gc as _gc
+        _gc.collect(); _gc.freeze()
+        w._gc_refreeze = True
+    ex_ = None
+    if os.environ.get('D2W_ROS_EXEC', '1') == '1':                   # 常駐執行器（rclpy.spin_once(node) 每次都把節點加入再移出全域執行器；本節點每秒 100 則狀態）
+        from rclpy.executors import SingleThreadedExecutor
+        ex_ = SingleThreadedExecutor()
+        ex_.add_node(w)
     print('[d2w] world_ready', flush=True)
     try:
         while rclpy.ok() and w.stage != 'end':
-            rclpy.spin_once(w, timeout_sec=0.05)
+            rclpy.spin_once(w, executor=ex_, timeout_sec=0.05)
     except (SystemExit, KeyboardInterrupt):
         pass
+    except Exception as e_:                                           # noqa: BLE001
+        if type(e_).__name__ != 'ExternalShutdownException':           # 常駐執行器在外部關閉（SIGTERM）時拋此例外＝正常收尾
+            raise
     finally:
         try:
             w.ev('world_end')

@@ -7,6 +7,7 @@
 執行（step_cmd，每拍一次）與預測（sim，逐拍向前到停穩）共用同一函式、同一受控對象模型（真管線、拍內斜坡、偏置）。
 CStopWorker：啟動模擬器前 fork 的獨立程序，收參數與狀態快照做 sim（與主程序求解並行）。"""
 import math
+import os
 import multiprocessing as mp
 import time
 
@@ -229,6 +230,11 @@ def _serve(conn):
     import door_clear_door_fast as _F
     WB.clear_door = _F.clear_door_fast
     cs = None
+    _pp = os.environ.get('D2_PROFILE_CS')                            # 即時化剖析（預設關）：停止模擬 cProfile，每 50 次覆寫
+    _pr, _np = None, 0
+    if _pp:
+        import cProfile
+        _pr = cProfile.Profile()
     conn.send(('ready',))
     while True:
         try:
@@ -246,7 +252,13 @@ def _serve(conn):
                 t0 = time.perf_counter()
                 cs.set_ref(st['Xd'])
                 emit = (lambda i0, xs, _v=ver: conn.send(('part', _v, int(i0), xs))) if st.get('stream') else None
+                if _pr is not None:
+                    _pr.enable()
                 r = cs.sim(st, emit=emit, chunk=int(st.get('stream_chunk', 6)))
+                if _pr is not None:
+                    _pr.disable(); _np += 1
+                    if _np % 50 == 0:
+                        _pr.dump_stats('%s.%d' % (_pp, os.getpid()))
                 conn.send((ver, r['ok'], r['why'], r['n_ticks'], r['X'], (time.perf_counter() - t0) * 1e3, list(cs._cl), list(cs._tr), r.get('out'), r.get('props')))
         except Exception as e:                                        # noqa: BLE001
             conn.send((msg[1] if msg[0] != 'init' else 'init', False, 'exception:' + repr(e)[:200], 0, None, 0.0, None))

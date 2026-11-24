@@ -204,6 +204,7 @@ DT, D_STEPS = 0.01, 8
 STEP_PROF = os.environ.get('D2_STEP_PROF', '0') == '1'               # 主迴圈分項計時（即時化剖析；不改任何行為）
 RENDER_EVERY = max(1, int(os.environ.get('D2_RENDER_EVERY', '1')))
 BASECAM = os.environ.get('D2_BASECAM', '0') == '1'                 # Howard 11/24：機身相機（base_camera，D435 型，車頭前緣 0.26 m、離地約 0.36 m、朝前）接進住宅任務；與手腕相機輪流送偵測
+CAM_POSE_WIN = os.environ.get('D2_CAM_POSE_WIN', '1') == '1'        # 相機位姿只在算圖前後幾步讀（D2_RENDER_EVERY>4 才生效）
 RENDER_BURST = max(1, int(os.environ.get('D2_RENDER_BURST', '1')))   # 讀相機前連續繪圖步數（RTX 管線延遲）   # 繪圖頻率：每 N 個物理步繪一次（Howard 11/21 問 RTF 1：每步 100 Hz 繪圖＋讀相機）
 _SP_T, _SP_ACC = [0.0], {}
 
@@ -213,6 +214,8 @@ def _sp_mark(name):
     a_[0] += now_ - _SP_T[0]; a_[1] += 1; _SP_T[0] = now_
 CONTACT_N, DOOR_DEG = 0.05, 0.05
 NO_CATCHUP = os.environ.get('D2_NO_CATCHUP', '1') == '1'          # RTF 上限配速（落後不補步）
+CATCHUP_MAX_S = float(os.environ.get('D2_CATCHUP_MAX_S', '0'))     # 即時化（Howard 11/24 RTF 1）：>0 ⇒ 落後 ≤ 此值時由後續純物理步追回（只重設超出部分）；
+                                                                  #   控制拍保護：交權後拍首狀態發布間隔 ≥ NPH 步（÷RTF），拍首等段窗口 ≥ 1 步 ⇒ 控制器每拍牆鐘預算不被補步壓縮。0＝原行為
 R_REM = int(os.environ.get('D2_R_REM', '3'))                       # 放行收到後到套用的剩餘延遲（步）
 GRIP_F_ABORT_N, DOOR_PREBIND_DEG = 40.0, 0.5                        # 交權後：夾爪合力上限（模擬工程中止值，同舊開門執行器 40 N）、綁定前門動上限（同 BindGate 0.5°）
 JOINT = '/World/door/ideal_grasp_attach'
@@ -393,6 +396,8 @@ class Bridge(Node):
             self.d2_attach_dr = True                                 # 抽屜把手理想連接請求（夾住證據成立後）
         elif w == 'unbind_drawer':
             self.d2_unbind_dr, self.d2_unbind_dr_req, self.dr_q_open = True, c.get('req_n'), c.get('q_open')
+        elif w == 'pace':
+            self.pace_req = float(c['rtf'])                          # 配速閥（D2_PACE）：控制伺服器依模式要求的目標 RTF
         elif w == 'door_reset':
             self.door_reset = True                                   # 回程關門：門扇第二次綁定前重設
         elif w == 'unbind':
@@ -570,6 +575,16 @@ def main():
     v_cyl = v_objs[0] if v_objs else None
     v_dr = RigidPrim(prim_paths_expr='/World/drawer_unit/drawer', name='v_drawer_pose') if DRAWER else None
     walk_views = [XFormPrim(prim_paths_expr=f"/World/walkers/{w_['name']}", name=f"wv_{w_['name']}") for w_ in walk_list]
+    walk_view_all = None                                              # 即時化（Howard 11/24 RTF 1）：四個行人一次批次設定位置（同值；逐個設定每步 1.5 ms）
+    if walk_list and os.environ.get('D2_WALK_BATCH', '1') == '1':
+        try:
+            wp_ = [f"/World/walkers/{w_['name']}" for w_ in walk_list]
+            wv_ = XFormPrim(prim_paths_expr=wp_, name='wv_all_walkers')
+            if [str(x) for x in wv_.prim_paths] == wp_:
+                walk_view_all = wv_
+            print(f'[fc] 行人批次視圖 {"啟用" if walk_view_all is not None else "順序不符、照逐個"}：{[str(x) for x in wv_.prim_paths]}', flush=True)
+        except Exception as e_:                                       # noqa: BLE001
+            print(f'[fc] 行人批次視圖失敗、照逐個：{e_!r}', flush=True)
     world.reset()
     for v in v_tool + [v_base, leaf_v] + ([v_grip] if v_grip is not None else []) + ([v_dr] + v_objs if DRAWER else []):
         v.initialize()
@@ -647,6 +662,16 @@ def main():
         set_camera_view(eye=np.array([3.4, -4.2, 3.2]), target=np.array([1.0, -0.8, 0.6]))
     except Exception as e:                                            # noqa: BLE001
         print(f'[fc] 視角設定失敗（不影響物理）：{e!r}', flush=True)
+    vp_res_ = os.environ.get('D2_VP_RES')                             # 即時化：視窗 viewport 算圖解析度（如 640x360；視窗照開、只降觀看畫面解析度；相機影像不受影響）
+    if vp_res_:
+        try:
+            from omni.kit.viewport.utility import get_active_viewport
+            vpw_, vph_ = (int(x) for x in vp_res_.lower().split('x'))
+            vp_ = get_active_viewport()
+            vp_.resolution = (vpw_, vph_)
+            print(f'[fc] viewport 解析度 → {tuple(vp_.resolution)}', flush=True)
+        except Exception as e_:                                       # noqa: BLE001
+            print(f'[fc] viewport 解析度設定失敗：{e_!r}', flush=True)
     try:
         g_kp, g_kd = robot.get_articulation_controller().get_gains()
         gains_rb = dict(arm_kp=[float(np.asarray(g_kp).reshape(-1)[i]) for i in idx], arm_kd=[float(np.asarray(g_kd).reshape(-1)[i]) for i in idx], finger_kp=float(np.asarray(g_kp).reshape(-1)[f1]), finger_kd=float(np.asarray(g_kd).reshape(-1)[f1]), source='ArticulationController.get_gains()')
@@ -707,6 +732,11 @@ def main():
 
     rclpy.init()
     node = Bridge()
+    _EX = None                                                        # 即時化：常駐執行器（rclpy.spin_once(node) 每次都把節點加入再移出全域執行器，每步 4 次約 0.9 ms）
+    if os.environ.get('D2_ROS_EXEC', '1') == '1':
+        from rclpy.executors import SingleThreadedExecutor
+        _EX = SingleThreadedExecutor()
+        _EX.add_node(node)
     tg_, _ = _DET.recv()
     if tg_ != 'ready':
         print('[fc] 偵測程序未就緒 ⇒ 拒跑', flush=True)
@@ -786,6 +816,8 @@ def main():
         hp = hist.get(int(round(float(t_r) / DT)))
         if hp is None or abs(hp['t_sim'] - float(t_r)) > 0.25 * DT:
             return rej('no_state_at_render_time')
+        if hp.get('T_render') is None:
+            return rej('no_render_pose_at_render_time')               # 相機位姿只在算圖前後幾步讀；若算圖時刻不在窗內就拒收（計數可查）
         dep = np.asarray(fr['distance_to_image_plane'], dtype=np.float32)
         rgba = np.asarray(col)
         if dep.size == 0 or rgba.size == 0:
@@ -819,26 +851,51 @@ def main():
     scans = []
     d2_stat, d2_last, bound, bind_pending, fcmd, released, f_hold, cyl_attached = dict(late=0, on_time=0), None, False, False, FINGER_OPEN, False, None, False
     dr_bound, dr_released, dr_log = False, False, []
+    dr_pen_binned = False                                             # 11/24：取筆放盒後 ⇒ 重新偵測抽屜把手（關抽屜重抓前以視覺量實際開度；放手退開會使抽屜漂移 −8～+7 mm）
+    DR_CLOSE_VIS = os.environ.get('D2_DR_CLOSE_VIS', '1') == '1'
     if DRAWER:
         dr_p0 = np.asarray(v_dr.get_world_poses()[0], float)[0].copy()
         dr_pull = np.array([math.sin(math.radians(float(dr_pose_true[2]))), -math.cos(math.radians(float(dr_pose_true[2]))), 0.0])   # 真實拉出方向（開度真值記錄用）
         import drawer_scene as DRS_
     pace_off = 0.0
+    rtf_now = float(a.rtf)
+    bnd_w = [0.0]                                                     # 上一個拍首狀態發布牆鐘（控制拍保護）
+    import gc as _gc                                                  # 即時化（Howard 11/24 RTF 1）：第 110／113 趟每約 4 s 卡 0.3 s＝Kit 程序第二代垃圾回收掃過大量既有物件
+    gc_stat = dict(n=[0, 0, 0], ms_sum=[0.0, 0.0, 0.0], ms_max=[0.0, 0.0, 0.0], frozen=None)
+    _gc_t0 = [0.0]
+
+    def _gc_cb(phase, info):
+        if phase == 'start':
+            _gc_t0[0] = time.perf_counter()
+        else:
+            g_ = int(info.get('generation', 0)); d_ = (time.perf_counter() - _gc_t0[0]) * 1e3
+            gc_stat['n'][g_] += 1; gc_stat['ms_sum'][g_] += d_; gc_stat['ms_max'][g_] = max(gc_stat['ms_max'][g_], d_)
+    _gc.callbacks.append(_gc_cb)
+    if os.environ.get('D2_GC_FREEZE', '1') == '1':
+        _gc.collect()
+        _gc.freeze()                                                  # 既有物件移到永久代（之後回收不再掃；同控制伺服器 AHEAD_GC_FREEZE）
+        gc_stat['frozen'] = _gc.get_freeze_count()
+        print(f'[fc] gc.freeze：凍結 {gc_stat["frozen"]} 個物件', flush=True)
     try:
         for k in range(n_steps):
             w_step0 = time.perf_counter()
             if STEP_PROF: _SP_T[0] = w_step0
+            if gc_stat['frozen'] is not None and k % 1000 == 999:        # 第 120 趟：迴圈內累積的紀錄物件仍讓第二代回收每 1.6 s 跑一次（最長 180 ms）⇒ 每 1000 步再凍結一次
+                _gc.freeze()
             t_sim = float(world.current_time)
             node.t = t = t_sim - T0
             q, jp = q9()
-            pos_r, q_r = cam.get_world_pose(camera_axes='ros')
-            hist[int(round(t_sim / DT))] = dict(t_sim=t_sim, q=q.copy(), T_render=T_of(pos_r, q_r), map_odom=node.map_odom, s=s.copy())
-            if cam_b is not None:
+            cam_need_ = RENDER_EVERY <= 4 or not CAM_POSE_WIN or (k % RENDER_EVERY) in (0, 1, RENDER_EVERY - 1, RENDER_EVERY - 2, RENDER_EVERY - 3)   # 即時化：相機世界位姿只在算圖前後幾步讀（影格只查算圖時刻的狀態；其他步不會被查）
+            if cam_need_:
+                pos_r, q_r = cam.get_world_pose(camera_axes='ros')
+            hist[int(round(t_sim / DT))] = dict(t_sim=t_sim, q=q.copy(), T_render=T_of(pos_r, q_r) if cam_need_ else None, map_odom=node.map_odom, s=s.copy())
+            if cam_b is not None and cam_need_:
                 pb_, qb_ = cam_b.get_world_pose(camera_axes='ros')
                 hist[int(round(t_sim / DT))]['T_render_b'] = T_of(pb_, qb_)
             if len(hist) > 300:
                 for kk in sorted(hist)[:len(hist) - 300]:
                     hist.pop(kk, None)
+            if STEP_PROF: _sp_mark('st_pose')
             # ---- 保護
             n_now = int(round(t / DT))
             post = node.d2_n0 is not None and n_now >= node.d2_n0
@@ -850,9 +907,17 @@ def main():
                 if b_ is None:
                     b_ = np.asarray(pipe[i_][:3], float) if i_ < len(pipe) else np.full(3, np.nan)
                 kb_ += [float(x) for x in b_]
+            if CATCHUP_MAX_S > 0 and post and n_now % 5 == node.d2_n0 % 5:   # 控制拍保護：拍首狀態不得早於上一拍首＋5 步（÷RTF）發布
+                wb_ = bnd_w[0] + 5 * DT / rtf_now
+                now_b = time.perf_counter()
+                if bnd_w[0] > 0 and now_b < wb_:
+                    time.sleep(wb_ - now_b); pace['bnd_guard_s'] = pace.get('bnd_guard_s', 0.0) + (wb_ - now_b)
+                bnd_w[0] = time.perf_counter()
             node.p_d2.publish(Float64MultiArray(data=[float(n_now), float(t), *[float(x) for x in q], float(phi_now), float(jp[f1]), float(jp[f2]), *[float(x) for x in s], *[float(x) for x in np.concatenate(pipe)], *kb_, float(ffor['uflite_finger1']), float(ffor['uflite_finger2'])]))   # 控制伺服器（world_d2_node）每步狀態（尾端＝兩指接觸力）
+            if STEP_PROF: _sp_mark('st_pub')
             cn_t, cwho, cn_b, cwho_b = contacts(split=True)
             cn = None if cn_t is None else max(cn_t, cn_b)
+            if STEP_PROF: _sp_mark('st_contact')
             dq_deg = abs(math.degrees(phi_now - door_q0))
             why = None
             if cn is None:
@@ -880,17 +945,21 @@ def main():
                 ev('latched_sim_engineering_abort', **latch)
                 node.p_state.publish(String(data='latched:' + latch['why']))
                 break
+            if STEP_PROF: _sp_mark('st_check')
             if walk_views:                                            # 行人移動（模擬時間；D2_WALKER_YIELD 時各自進度、遇機器人讓路）
                 WK.crowd_step(t, q[:2], walk_list)
-                for w_, v_ in zip(walk_list, walk_views):
-                    p_ = WK.crowd_pos(w_, t)
-                    v_.set_world_poses(positions=np.array([[p_[0], p_[1], w_['height'] / 2]], np.float32))
+                if walk_view_all is not None:
+                    walk_view_all.set_world_poses(positions=np.array([[p_[0], p_[1], w_['height'] / 2] for w_ in walk_list for p_ in (WK.crowd_pos(w_, t),)], np.float32))
+                else:
+                    for w_, v_ in zip(walk_list, walk_views):
+                        p_ = WK.crowd_pos(w_, t)
+                        v_.set_world_poses(positions=np.array([[p_[0], p_[1], w_['height'] / 2]], np.float32))
                 if k % 10 == 0:
                     walk_log.append([float(t)] + [float(x) for w_ in walk_list for x in WK.crowd_pos(w_, t)])
             if STEP_PROF: _sp_mark('state')
             # ---- ROS 收命令
             for _ in range(4):
-                rclpy.spin_once(node, timeout_sec=0.0)
+                rclpy.spin_once(node, executor=_EX, timeout_sec=0.0)
             if node.d2_abort is not None and node.abort is None:
                 node.abort = 'd2_world:' + node.d2_abort
             if node.abort is not None and latch is None:              # 監督節點要求模擬工程中止：沒有核過的停法 ⇒ 不再步進物理
@@ -909,9 +978,11 @@ def main():
                 fcmd = FINGER_OPEN
             else:                                                     # 交權後：本地播放控制伺服器下發的已核段／尾段（Codex 20261117_173459）；底盤＝放行排程
                 if n_now % 5 == node.d2_n0 % 5:                       # 拍首：等新段到本步配速時限為止（物理照牆鐘，不多等）
-                    tgt_w_ = w_all0 + pace_off + (t + DT) / a.rtf
+                    tgt_w_ = w_all0 + pace_off + (t + DT) / rtf_now
+                    if CATCHUP_MAX_S > 0:
+                        tgt_w_ = max(tgt_w_, bnd_w[0] + DT / rtf_now)   # 補步中仍保留拍首等段窗口 ≥ 1 步（同準時時的窗口）
                     while not any(sg[0] == n_now for sg in node.d2_segs) and time.perf_counter() < tgt_w_:
-                        rclpy.spin_once(node, timeout_sec=0.001)
+                        rclpy.spin_once(node, executor=_EX, timeout_sec=0.001)
                 ent, src_ = None, None
                 for sg in reversed(node.d2_segs):
                     n0_, arm_, fg_, tl_ = sg
@@ -992,6 +1063,8 @@ def main():
                     cyl_attached = False
                     Tb_ = T_of(*[np.asarray(x)[0] for x in v_base.get_world_poses()])
                     po_ = np.asarray(v_objs[obj_i].get_world_poses()[0], float)[0]
+                    if DRAWER and dr_released and DR_CLOSE_VIS:
+                        dr_pen_binned = True
                     bin_info['binned'].append(dict(obj=OBJS[obj_i], t=round(t, 3), n=int(n_now), req=getattr(node, 'd2_detach_req', None), joint_enabled_readback=str(v_jc_), obj_in_base_link_at_release=[round(float(v), 4) for v in (np.linalg.inv(Tb_) @ np.r_[po_, 1.0])[:3]]))
                     ev('obj_detach_fixed_joint', obj=OBJS[obj_i], n=int(n_now), readback=str(v_jc_))
                     if v_jc_ is not False and latch is None:
@@ -1134,7 +1207,7 @@ def main():
             if k % RENDER_EVERY == 0:                                     # 只在連續繪圖段的最後一步讀相機（D2_RENDER_EVERY／D2_RENDER_BURST；相機 5 Hz）
                 b_use_ = cam_b is not None and released and (                 # 機身影格只在有事可做時輪到（第 107 趟：取筆時機身影格無任務卻分走一半手腕影格）
                     (cyl_info is not None and not cyl_once)
-                    or (DRAWER and HANDLE_VISION and not dr_bound and not dr_released and float(np.hypot(q[0] - reg['drawer']['pose'][0], q[1] - reg['drawer']['pose'][1])) < 3.0)
+                    or (DRAWER and HANDLE_VISION and not dr_bound and (not dr_released or dr_pen_binned) and float(np.hypot(q[0] - reg['drawer']['pose'][0], q[1] - reg['drawer']['pose'][1])) < 3.0)
                     or (DOOR_CLOSE and released and not bound and float(np.hypot(q[0], q[1])) < 3.5))
                 if b_use_ and cam_turn == 1 and not det_busy and t + 1e-9 >= t_next_cam:   # 開門放手前門把只用手腕相機（不分走 5 Hz）
                     f = grab_b()
@@ -1162,7 +1235,7 @@ def main():
                                    dbox=(DRS_.interior_box(float(node.dr_q_open)) if (src_ == 'wrist' and DRAWER and dr_released and getattr(node, 'dr_q_open', None) is not None and not cyl_attached) else None),
                                    hspec=os.path.join(WS, reg['drawer']['asset']) if DRAWER else None,
                                    leafdet=bool(DOOR_CLOSE and released and not bound and float(np.hypot(f['q'][0], f['q'][1])) < 3.5),
-                                   hprior=([float(v) for v in reg['drawer']['pose'][:2]] + [math.radians(float(reg['drawer']['pose'][2]))] if (DRAWER and HANDLE_VISION and not dr_bound and not dr_released
+                                   hprior=([float(v) for v in reg['drawer']['pose'][:2]] + [math.radians(float(reg['drawer']['pose'][2]))] if (DRAWER and HANDLE_VISION and not dr_bound and (not dr_released or dr_pen_binned)
                                            and float(np.hypot(f['q'][0] - reg['drawer']['pose'][0], f['q'][1] - reg['drawer']['pose'][1])) < 3.0) else None)))
                     det_busy = True
             if det_busy and _DET.poll(0):
@@ -1211,19 +1284,30 @@ def main():
                 if seq_r <= 3 or seq_r % 25 == 0:
                     print(f"[fc] 影格 {seq_r} t_obs={f['t_obs']:.2f} valid={T_est is not None} {'' if T_est is not None else info.get('why') or info.get('cls')} 距離 {frames[-1]['eval_only']['range_m']} m 偵測 {ms:.0f} ms", flush=True)
             if STEP_PROF: _sp_mark('camera')
-            tgt_w = w_all0 + pace_off + (t + DT) / a.rtf                       # RTF 上限配速：早到就睡；晚到不補步（重設基準，實得 RTF ≤ 目標）——物理照牆鐘推進、不等任何計算
+            pr_ = getattr(node, 'pace_req', None)
+            if pr_ is not None and pr_ != rtf_now:                           # 配速閥：換目標 RTF 時接續目前時刻的目標牆鐘（不跳、不補步）
+                pace_off += t / rtf_now - t / pr_
+                pace.setdefault('changes', []).append([round(t, 3), round(pr_, 3)])
+                pace.setdefault('sim_s_at', {})
+                rtf_now = pr_
+            pace.setdefault('sim_s_at', {})[str(rtf_now)] = round(pace.get('sim_s_at', {}).get(str(rtf_now), 0.0) + DT, 3)
+            tgt_w = w_all0 + pace_off + (t + DT) / rtf_now                       # RTF 上限配速：早到就睡；晚到不補步（重設基準，實得 RTF ≤ 目標）——物理照牆鐘推進、不等任何計算
             now_w = time.perf_counter()
             if now_w < tgt_w:
                 time.sleep(tgt_w - now_w); pace['slept_s'] += tgt_w - now_w
             else:
                 if now_w - tgt_w > 0.05:
                     pace['behind_steps'] += 1; pace['behind_max_s'] = max(pace['behind_max_s'], now_w - tgt_w)
-                if NO_CATCHUP:                                         # 不連續補步（m8house_d2_unified_2：補步時每步 16 ms，控制側預算被壓縮 ⇒ not_ready）
+                if NO_CATCHUP and CATCHUP_MAX_S > 0:                   # 有界補步：只重設超出上限的落後
+                    if now_w - tgt_w > CATCHUP_MAX_S:
+                        pace_off += now_w - tgt_w - CATCHUP_MAX_S; pace['reanchored_s'] = pace.get('reanchored_s', 0.0) + (now_w - tgt_w - CATCHUP_MAX_S)
+                elif NO_CATCHUP:                                       # 不連續補步（m8house_d2_unified_2：補步時每步 16 ms，控制側預算被壓縮 ⇒ not_ready）
                     pace_off += now_w - tgt_w; pace['reanchored_s'] = pace.get('reanchored_s', 0.0) + (now_w - tgt_w)
             if STEP_PROF: _sp_mark('sleep')
             st0 = float(world.current_time)
-            world.step(render=((k + 1) % RENDER_EVERY == 0 or (k + 1) % RENDER_EVERY >= RENDER_EVERY - RENDER_BURST + 1 if RENDER_BURST > 1 else (k + 1) % RENDER_EVERY == 0) if RENDER_EVERY > 1 else True)   # 物理每步；繪圖在下一次讀相機前連續 RENDER_BURST 步（第七十七趟：每 10 步單繪 ⇒ 深度與彩色幀錯位、門把中心觀測不到 2758 次）
-            if STEP_PROF: _sp_mark('step')
+            rnd_ = ((k + 1) % RENDER_EVERY == 0 or (k + 1) % RENDER_EVERY >= RENDER_EVERY - RENDER_BURST + 1 if RENDER_BURST > 1 else (k + 1) % RENDER_EVERY == 0) if RENDER_EVERY > 1 else True
+            world.step(render=rnd_)   # 物理每步；繪圖在下一次讀相機前連續 RENDER_BURST 步（第七十七趟：每 10 步單繪 ⇒ 深度與彩色幀錯位、門把中心觀測不到 2758 次）
+            if STEP_PROF: _sp_mark('step_render' if rnd_ else 'step_phys')
             if abs((float(world.current_time) - st0) - DT) > 1e-9:
                 clock_bad += 1
             sw = time.perf_counter() - w_step0
@@ -1262,6 +1346,7 @@ def main():
                sources=dict(odom='物理位姿直接當里程（理想，無滑移）', scan='PhysX 射線 360 道，略過機器人自身形狀，無雜訊', pose_for_camera='渲染時刻的關節／底盤讀值 FK', delay='8 步在途管線（軟體模型）'),
                step_wall_ms_p50=round(float(np.median(step_wall)) * 1e3, 1) if step_wall else None, supervisor_done=t_done is not None,
                pacing=dict(pace, rtf_target=a.rtf, note='物理依牆鐘固定 RTF 推進、不等計算；behind＝迴圈本身（算圖、射線、發布）比目標慢的步數與最大落後'), detector=dict(process='獨立程序（模擬器前 fork）', pending_at_end=len(det_pend)))
+    res['gc'] = dict(gc_stat, ms_sum=[round(x, 1) for x in gc_stat['ms_sum']], ms_max=[round(x, 1) for x in gc_stat['ms_max']])
     if STEP_PROF:
         res['step_prof'] = {k_: dict(total_s=round(v_[0], 2), per_step_ms=round(1e3 * v_[0] / max(v_[1], 1), 3), n=v_[1]) for k_, v_ in _SP_ACC.items()}
         res['render_every'] = RENDER_EVERY

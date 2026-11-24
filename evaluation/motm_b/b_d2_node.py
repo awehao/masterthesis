@@ -81,6 +81,7 @@ APP_TRIG = float(os.environ.get('B_APP_TRIG', '0.6'))          # 單一控制器
 FUSE_HO = os.environ.get('B_FUSE_HO', '1') == '1'            # 交權參考＝全部有效影格閘門內融合（c13／c22：最早 3 格估計沿接近軸誤差 2 mm 吃掉外殼—橫桿餘裕）
 CL_LINE = os.environ.get('B_CL_LINE', '1') == '1'             # 混接／直線段以實際底盤即時解 IK（c7 阻點修正）；0＝原開迴路關節參考
 EST = dict(n=3, spread_m=0.005, max_age_s=0.5, replan_shift_m=0.010)
+EST_SPAN_TOBS = os.environ.get('B_EST_SPAN_TOBS', '1') == '1'          # 門把估計歷史視窗：1＝觀測之間的擷取時間跨度 ≤0.5 s（與偵測延遲無關）；0＝原「收到時刻往回 0.5 s」
 ASSOC_TOL = dict(dxy_m=0.15, dz_m=0.10, dang_deg=10.0)
 GOAL_A, SB_PRIOR = -0.49, 0.45
 STILL = dict(base=0.003, yaw=0.003, arm=0.002, hold_s=0.3)
@@ -484,7 +485,8 @@ def worker(conn):
                                               source=dict(asset=sreg['door']['asset'], sha256=hashlib.sha256(open(ap_, 'rb').read()).hexdigest(), note='名目位姿（門關閉）；不讀把手 prim 真值'))))
             elif op == 'obs':
                 To = np.asarray(a['T_odom_handle'], float)
-                h = [x for x in st['hist'] if float(a['t']) - x[1] <= EST['max_age_s']] + [(int(a['seq']), float(a['t_obs']), To)]
+                t_ref_ = float(a['t_obs']) if EST_SPAN_TOBS else float(a['t'])   # 11/24 RTF 1：視窗以最新觀測的擷取時刻起算（原以收到時刻起算 ⇒ 偵測延遲 >0.1 s 時 5 Hz 影格永遠湊不到 3 筆；第 116–119 趟卡在門前）
+                h = [x for x in st['hist'] if t_ref_ - x[1] <= EST['max_age_s']] + [(int(a['seq']), float(a['t_obs']), To)]
                 st['hist'] = h[-EST['n']:]
                 out = dict(n_hist=len(st['hist']))
                 if len(st['hist']) >= EST['n']:
@@ -994,6 +996,26 @@ def main():
                 return None
             return np.r_[P_[:, :2].mean(0), float(yw.mean())]
 
+        def _dr_close_vis(self, t, qo_, t_min=-1e9):
+            """關抽屜前：最近 DR_CLOSE_VIS_S 秒的把手觀測（抽屜原點＝橫桿位置推得）中位數 − 拉開前融合的關閉位姿，沿拉出方向投影＝實際開度。
+            至少 3 筆、離中位數 ≤6 mm、與控制器估計差 ≤30 mm 才採用；否則回 None（照原控制器估計）。"""
+            dr, R_ = self.dr, self._DRR
+            if not HANDLE_VISION or dr.get('pose_vis') is None:
+                return None, dict(why='no_vision')
+            rec = [p_ for t_, p_ in self.hdl_obs if t - t_ <= float(os.environ.get('DR_CLOSE_VIS_S', '8')) and t_ >= t_min][-8:]
+            if len(rec) < 3:
+                return None, dict(why='few_obs', n=len(rec))
+            P_ = np.array(rec)[:, :2]
+            med_ = np.median(P_, axis=0)
+            spr_ = float(np.linalg.norm(P_ - med_, axis=1).max())
+            if spr_ > 0.006:
+                return None, dict(why='spread', n=len(rec), spread_mm=round(spr_ * 1e3, 2))
+            pu_ = np.asarray(R_.D.PULL[:2], float); pu_ = pu_ / max(float(np.linalg.norm(pu_)), 1e-9)
+            qv_ = float((med_ - np.asarray(dr['pose_vis'][:2], float)) @ pu_)
+            if abs(qv_ - qo_) > 0.03:
+                return None, dict(why='far_from_ctrl', n=len(rec), q_vis_raw=round(qv_, 4))
+            return qv_, dict(n=len(rec), spread_mm=round(spr_ * 1e3, 2))
+
         def _cyl_fuse(self, t):
             rec = [p_ for t_, p_ in self.cyl_obs if t - t_ <= 1.0][-5:]
             if len(rec) < 5:
@@ -1391,6 +1413,8 @@ def main():
                     dr['stage'] = 'wait_release'
             elif st == 'close_send':                                   # 關抽屜封包：拉開終點底盤位、目前開度的把手位姿、推回方向
                 qo_ = float(dr.get('q_open') or R_.OPEN_M)
+                qv_, vinf_ = self._dr_close_vis(t, qo_)                # 11/24：放盒期間機身相機看到的橫桿 ⇒ 實際開度（控制器估計是拉開終點 TCP；放手退開會使抽屜漂移）
+                self.event('dr_close_vis', q_vis=None if qv_ is None else round(qv_, 4), q_ctrl=round(qo_, 4), **vinf_)
                 b1_ = np.asarray(dr['sel']['base'], float) + np.r_[qo_ * R_.D.PULL[:2], 0.0]
                 R_.D.set_open(qo_)
                 Tg_ = np.asarray(R_.D.handle_T(qo_, bool(dr['sel'].get('flip', False))), float)
@@ -1398,10 +1422,17 @@ def main():
                     Tg_ = np.asarray(dr['sel']['T_grasp'], float).copy(); Tg_[:3, 3] = Tg_[:3, 3] + qo_ * np.asarray(R_.D.PULL, float)
                 self.pick_goal, self.pass_t = self._dr_goal(b1_), t
                 dr['goal_od'] = list(b1_)
-                self._dr_send('dr_close', b1_, t, T_grasp=Tg_.tolist(), pull=[float(R_.D.PULL[0]), float(R_.D.PULL[1])], q_open=qo_,
+                self._dr_send('dr_close', b1_, t, T_grasp=Tg_.tolist(), pull=[float(R_.D.PULL[0]), float(R_.D.PULL[1])], q_open=qo_, q_vis=qv_,
                               **(dict(flow=dict(b0=[float(x) for x in b1_[:3]], v_cap=FLOW_V, r_turn=1.3, r_in=0.4)) if DR_FLOW else {}))
                 dr['stage'] = 'closing'
+                dr['t_close_sent'], dr['q_ctrl'], dr['vis_upd'] = t, qo_, qv_ is not None
                 self.event('dr_close_sent', q_open=round(qo_, 4), base=[round(float(x), 4) for x in b1_])
+            elif st == 'closing' and HANDLE_VISION and not dr.get('vis_upd') and dr.get('t_close_sent') is not None and t - dr['t_close_sent'] <= float(os.environ.get('DR_CLOSE_VIS_WAIT_S', '10')):
+                qv_, vinf_ = self._dr_close_vis(t, float(dr['q_ctrl']), t_min=float(dr['t_close_sent']))   # 第 121 趟：機身相機在關抽屜展開、退到站位後才看到橫桿（封包已送）⇒ 收到 3 筆新觀測就補送開度更新
+                if qv_ is not None:
+                    dr['vis_upd'] = True
+                    self.p_ho.publish(String(data=json.dumps(dict(what='pick_app', app=dict(kind='dr_close_vis', q_vis=qv_, q_open=float(dr['q_ctrl']), pull=[float(R_.D.PULL[0]), float(R_.D.PULL[1])])))))
+                    self.event('dr_close_vis_upd', q_vis=round(qv_, 4), q_ctrl=round(float(dr['q_ctrl']), 4), dt_s=round(t - dr['t_close_sent'], 2), **vinf_)
             elif st == 'wait_release' and 'pick_dr_released' not in dr and DR_OBS_PRE and dr.get('pre_obs') is None and dr.get('sel') is not None:
                 dr['pre_obs'] = self._dr_thread(R_.select_observe, float(R_.OPEN_M), np.asarray(dr['sel']['base'], float).copy(), bool(dr['sel']['flip']))   # 即時化（Howard 11/23）：觀察位在拉抽屜時就以名目開度背景先算（Isaac 85：放開後才算 2.6 s，底盤近停）
                 self.event('dr_observe_precompute_start')
