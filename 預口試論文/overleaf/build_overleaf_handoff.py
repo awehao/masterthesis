@@ -43,7 +43,8 @@ def main():
             stem=Path(path).stem;title,place=FIGURES[stem];number=f'3.{section}.{sub}'
             before=content[:m.start()].rstrip();lead=before.rsplit('\n\n',1)[-1]
             lead='\n'.join(ln for ln in lead.splitlines() if not ln.lstrip().startswith('%')).strip()
-            if lead.startswith('\\end'):lead=''
+            lead=re.split(r'\\end\{[^}]+\}',lead)[-1].strip()
+            assert '\\label{' not in lead and '\\begin{' not in lead,stem
             label=re.search(r'\\label\{([^}]+)\}',block).group(1)
             rows.append(dict(section=number,title=title,path=path,placement=place,source=source.name,label=label))
             snippets+=['% ==================================================',f'% {number} {title}',

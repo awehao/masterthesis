@@ -402,6 +402,40 @@ def _path_ik(T, b0, e, ss, q0):
     return sig, env, bc, qs
 
 
+SEL_BNB = os.environ.get('PICK_SEL_BNB', '1') == '1'                # 11/24 Howard「為什麼過頭再急轉」：逐一 IK 9.4 s（RTF 0.8 下佔 8.9 s 模擬，結果出來只剩 0.74 m）⇒ 先算與手臂解無關的可行性＋代價下界、依下界排序，下界 ≥ 目前最佳即停（結果與逐一搜尋相同）
+
+
+def _motm_lb(c, b, e, th, b_now, goal_next, F, Fg, s_start, s1, w_dist):
+    """select_motm 中與手臂解（flip、IK、σ）無關的部分：不可行回 None；否則回代價下界（σ 懲罰與併線偏航兩項 ≥0 不計）。各式與 select_motm 內相同。"""
+    b_start = np.array([b[0] + s_start * e[0], b[1] + s_start * e[1], th])
+    if not base_free(b_start):
+        return None
+    b_end = b[:2] + s1 * e
+    if not line_scan_ok(b, e, s_start, s1):
+        return None
+    L_ = None
+    if LINE_MERGE:
+        if not all(base_clear(np.r_[b[:2] + s_ * e, th], PATH_BASE_MARGIN) for s_ in np.arange(s_start, s1 + LINE_TAIL + 1e-9, 0.05)):
+            return None
+        if F is not None:
+            L_ = route_len(F, b_start)
+            if not np.isfinite(L_):
+                return None
+    lb = w_dist * (L_ if L_ is not None else float(np.hypot(*(b_start[:2] - np.asarray(b_now[:2], float)))))
+    if goal_next is not None and Fg is not None:
+        Lg_ = route_len(Fg, b_end)
+        if not np.isfinite(Lg_):
+            return None
+        lb += w_dist * Lg_
+    elif goal_next is not None:
+        lb += w_dist * float(np.hypot(*(b_end - np.asarray(goal_next[:2], float))))
+    if LINE_MERGE:
+        lb += LINE_W_TRAV * abs((th - math.atan2(e[1], e[0]) + math.pi) % (2 * math.pi) - math.pi)
+    reach_ = float(np.hypot(c[0] - b[0] - ARM_X * math.cos(th), c[1] - b[1] - ARM_X * math.sin(th)))
+    lb += LINE_W_REACH * max(0.0, reach_ - REACH_OK)
+    return lb
+
+
 def select_motm(c_xy, b_now, v_g, goal_next=None, w_dist=1.0, w_sig=0.02, w_dir=0.5):
     """移動中夾取（Howard 11/19「茶几那個要移動中夾取 我要做整體速度最佳」）選位：底盤朝向面桌、沿桌邊以 v_g 橫移經過抓取底盤位 b0。
     同一個世界固定抓取位姿 T_grasp（接近軸＝b0→圓柱），沿路線 s∈[MOTM_S0, v_g·MOTM_T_WIN] 每 5 cm 都要 IK（同分支連續）＋控制器同一份淨空＋不壓桌面；
@@ -411,6 +445,7 @@ def select_motm(c_xy, b_now, v_g, goal_next=None, w_dist=1.0, w_sig=0.02, w_dir=
     ss = np.round(np.arange(MOTM_S0, s1 + 1e-9, MOTM_DS), 4)
     F = route_field(b_now, c) if (ROUTE and LINE_MERGE) else None    # 併線版
     Fg = route_field(np.asarray(goal_next, float), c) if (ROUTE and LINE_MERGE and goal_next is not None) else None   # 抓完後到下一站（s135d：往西的經過線盡頭被 unknown_l5 擋，直線估計誤選 ⇒ 導航繞回東邊）（Howard 11/21「茶几要真的移動中抓」）：路線起點要走得到（同 select 的格點路線）、途經點交原導航
+    jobs = []
     for side, d, lat, b in candidates(c):
         if not base_free(b):
             continue
@@ -425,57 +460,68 @@ def select_motm(c_xy, b_now, v_g, goal_next=None, w_dist=1.0, w_sig=0.02, w_dir=
             e = sg * np.array([-math.sin(th_f), math.cos(th_f)])      # 沿桌邊（垂直於面桌方向）
             sgn_ = 1.0 if ((math.atan2(e[1], e[0]) - th_f + math.pi) % (2 * math.pi) - math.pi) > 0 else -1.0
             th = th_f + sgn_ * kh; b = np.array([b_f[0], b_f[1], th])   # Howard 11/21「抓完倒退走很不自然」：車頭可往行進方向轉 kh（面桌與行進方向之間，斜著往前開經過）
-            for fl in (False, True):
-                Tg = grasp_T(c, a, fl)
-                g = ik(Tg, b)
-                if g is None:
-                    continue
-                Tp = Tg.copy(); Tp[:3, 3] -= PRE * np.r_[a, 0.0]
-                gp = ik(Tp, b)
-                if gp is None or not clear_ok(b, gp[0])[0]:
-                    continue
-                fwd = _path_ik(Tg, b, e, [x for x in ss if x >= 0.0], g[0])
-                bwd = _path_ik(Tg, b, e, [x for x in ss[::-1] if x <= 0.0], g[0])
-                if fwd is None or bwd is None:
-                    continue
-                s_start = MOTM_S0 - 0.40 - float(v_g) * MOTM_T_ARM        # 路線起點（導航目標）：進線加速 0.40 m＋手臂展開時間內的行程
-                b_start = np.array([b[0] + s_start * e[0], b[1] + s_start * e[1], th])
-                if not base_free(b_start):
-                    continue
-                b_end = b[:2] + s1 * e
-                if not line_scan_ok(b, e, s_start, s1):                # 路線起點→經過→終點後都離未知障礙點夠遠（地圖沒有、雷射看得到；接近中重核同一式）
-                    continue
-                via_, L_ = None, None
-                if LINE_MERGE:
-                    if not all(base_clear(np.r_[b[:2] + s_ * e, th], PATH_BASE_MARGIN) for s_ in np.arange(s_start, s1 + LINE_TAIL + 1e-9, 0.05)):
-                        continue                                      # 抓到後底盤沿線續走 LINE_TAIL（抬升＋確認時間）再交回導航
-                    if F is not None:
-                        L_ = route_len(F, b_start)
-                        if not np.isfinite(L_):
-                            continue
-                cost = w_dist * (L_ if L_ is not None else float(np.hypot(*(b_start[:2] - np.asarray(b_now[:2], float))))) + w_sig / max(min(fwd[0], bwd[0]), 1e-6)
-                if goal_next is not None and Fg is not None:           # 併線版：終點到下一站用格點路線長（走不到 ⇒ 不選）
-                    Lg_ = route_len(Fg, b_end)
-                    if not np.isfinite(Lg_):
+            lb = 0.0
+            if SEL_BNB:
+                lb = _motm_lb(c, b, e, th, b_now, goal_next, F, Fg, MOTM_S0 - 0.40 - float(v_g) * MOTM_T_ARM, s1, w_dist)
+                if lb is None:
+                    continue                                          # 與手臂解無關的不可行（原流程在 IK 之後同樣 continue，兩個 flip 都一樣）
+            jobs.append((lb, len(jobs), side, d, lat, a, b, e, th))
+    jobs.sort(key=lambda j_: (j_[0], j_[1]))                          # 關閉時 lb 全 0 ⇒ 原順序、不剪枝
+    for lb, ix, side, d, lat, a, b, e, th in jobs:
+        if best is not None and lb >= best['cost']:
+            break                                                     # 其餘下界都不小於目前最佳（σ 項 >0 ⇒ 實際代價嚴格大於下界）
+        for fl in (False, True):
+            Tg = grasp_T(c, a, fl)
+            g = ik(Tg, b)
+            if g is None:
+                continue
+            Tp = Tg.copy(); Tp[:3, 3] -= PRE * np.r_[a, 0.0]
+            gp = ik(Tp, b)
+            if gp is None or not clear_ok(b, gp[0])[0]:
+                continue
+            fwd = _path_ik(Tg, b, e, [x for x in ss if x >= 0.0], g[0])
+            bwd = _path_ik(Tg, b, e, [x for x in ss[::-1] if x <= 0.0], g[0])
+            if fwd is None or bwd is None:
+                continue
+            s_start = MOTM_S0 - 0.40 - float(v_g) * MOTM_T_ARM        # 路線起點（導航目標）：進線加速 0.40 m＋手臂展開時間內的行程
+            b_start = np.array([b[0] + s_start * e[0], b[1] + s_start * e[1], th])
+            if not base_free(b_start):
+                continue
+            b_end = b[:2] + s1 * e
+            if not line_scan_ok(b, e, s_start, s1):                # 路線起點→經過→終點後都離未知障礙點夠遠（地圖沒有、雷射看得到；接近中重核同一式）
+                continue
+            via_, L_ = None, None
+            if LINE_MERGE:
+                if not all(base_clear(np.r_[b[:2] + s_ * e, th], PATH_BASE_MARGIN) for s_ in np.arange(s_start, s1 + LINE_TAIL + 1e-9, 0.05)):
+                    continue                                      # 抓到後底盤沿線續走 LINE_TAIL（抬升＋確認時間）再交回導航
+                if F is not None:
+                    L_ = route_len(F, b_start)
+                    if not np.isfinite(L_):
                         continue
-                    cost += w_dist * Lg_
-                elif goal_next is not None:                              # 整體路程（s75：方向偏好權重太小 ⇒ 選了背離抽屜的方向）：到起點＋終點到下一目標（直線近似）
-                    cost += w_dist * float(np.hypot(*(b_end - np.asarray(goal_next[:2], float))))
-                if LINE_MERGE:                                         # 併線中要轉的偏航（到路線起點的來向≈導航行進方向）：每 rad 折算 LINE_W_YAW m
-                    if F is not None:
-                        via_ = route_via(F, b_start[:2])
-                    p_in = np.asarray((via_[-1] if via_ else b_now[:2]), float)[:2]
-                    if float(np.hypot(*(b_start[:2] - p_in))) > 1e-3:
-                        h_in = math.atan2(b_start[1] - p_in[1], b_start[0] - p_in[0])
-                        cost += LINE_W_YAW * abs((th - h_in + math.pi) % (2 * math.pi) - math.pi)
-                    cost += LINE_W_TRAV * abs((th - math.atan2(e[1], e[0]) + math.pi) % (2 * math.pi) - math.pi)   # 車頭與行進方向夾角（抓完沿線往前開，不倒退、不橫走）
-                reach_ = float(np.hypot(c[0] - b[0] - ARM_X * math.cos(th), c[1] - b[1] - ARM_X * math.sin(th)))
-                cost += LINE_W_REACH * max(0.0, reach_ - REACH_OK)
-                if best is None or cost < best['cost']:
-                    best = dict(side=side, d=float(d), lat=float(lat), base=b.tolist(), a=a.tolist(), e=e.tolist(), flip=bool(fl), v_g=float(v_g), s_start=float(s_start),
-                                base_start=b_start.tolist(), sigma_min=float(min(fwd[0], bwd[0])), env_min=float(min(fwd[1], bwd[1])), base_clear_min=float(min(fwd[2], bwd[2])),
-                                s_range=[float(ss[0]), float(ss[-1])], t_arm=MOTM_T_ARM, cost=cost, reach=reach_, q=g[0].tolist(), T_grasp=Tg.tolist(), via=via_, route_len=L_, b_end=b_end.tolist())
-                break
+            cost = w_dist * (L_ if L_ is not None else float(np.hypot(*(b_start[:2] - np.asarray(b_now[:2], float))))) + w_sig / max(min(fwd[0], bwd[0]), 1e-6)
+            if goal_next is not None and Fg is not None:           # 併線版：終點到下一站用格點路線長（走不到 ⇒ 不選）
+                Lg_ = route_len(Fg, b_end)
+                if not np.isfinite(Lg_):
+                    continue
+                cost += w_dist * Lg_
+            elif goal_next is not None:                              # 整體路程（s75：方向偏好權重太小 ⇒ 選了背離抽屜的方向）：到起點＋終點到下一目標（直線近似）
+                cost += w_dist * float(np.hypot(*(b_end - np.asarray(goal_next[:2], float))))
+            if LINE_MERGE:                                         # 併線中要轉的偏航（到路線起點的來向≈導航行進方向）：每 rad 折算 LINE_W_YAW m
+                if F is not None:
+                    via_ = route_via(F, b_start[:2])
+                p_in = np.asarray((via_[-1] if via_ else b_now[:2]), float)[:2]
+                if float(np.hypot(*(b_start[:2] - p_in))) > 1e-3:
+                    h_in = math.atan2(b_start[1] - p_in[1], b_start[0] - p_in[0])
+                    cost += LINE_W_YAW * abs((th - h_in + math.pi) % (2 * math.pi) - math.pi)
+                cost += LINE_W_TRAV * abs((th - math.atan2(e[1], e[0]) + math.pi) % (2 * math.pi) - math.pi)   # 車頭與行進方向夾角（抓完沿線往前開，不倒退、不橫走）
+            reach_ = float(np.hypot(c[0] - b[0] - ARM_X * math.cos(th), c[1] - b[1] - ARM_X * math.sin(th)))
+            cost += LINE_W_REACH * max(0.0, reach_ - REACH_OK)
+            if best is None or cost < best['cost'] or (cost == best['cost'] and ix < best_ix):   # 同分取原順序在前者（與逐一搜尋一致）
+                best_ix = ix
+                best = dict(side=side, d=float(d), lat=float(lat), base=b.tolist(), a=a.tolist(), e=e.tolist(), flip=bool(fl), v_g=float(v_g), s_start=float(s_start),
+                            base_start=b_start.tolist(), sigma_min=float(min(fwd[0], bwd[0])), env_min=float(min(fwd[1], bwd[1])), base_clear_min=float(min(fwd[2], bwd[2])),
+                            s_range=[float(ss[0]), float(ss[-1])], t_arm=MOTM_T_ARM, cost=cost, reach=reach_, q=g[0].tolist(), T_grasp=Tg.tolist(), via=via_, route_len=L_, b_end=b_end.tolist())
+            break
     if best is not None and Fg is not None:                             # 抓完後的途經點（終點→下一站；route_via 自 Fg 起點＝下一站回溯 ⇒ 反轉）
         v_ = route_via(Fg, np.asarray(best['b_end'], float)[:2])
         best['via_next'] = None if v_ is None else v_[::-1]

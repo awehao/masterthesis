@@ -79,6 +79,22 @@ def main():
     assert '\\input{algorithm_preamble}' in (ROOT/'preamble.tex').read_text()
     assert '\\subsection{現有研究比較與研究缺口}' in outline
 
+    handoff=ROOT/'第三章_現行22張圖_插入片段.tex'
+    if handoff.is_file():
+        s=uncomment(handoff.read_text())
+        fig_labels=re.findall(r'\\label\{([^}]+)\}',s)
+        assert len(fig_labels)==len(set(fig_labels))==22
+        assert s.count('\\begin{figure}')==22
+        assert set(fig_labels).issubset(labels)
+        figrefs=[k.strip() for g in re.findall(r'\\(?:[cC]ref|eqref|ref)\{([^}]+)\}',s) for k in g.split(',')]
+        assert set(figrefs).issubset(labels)
+        guide=(ROOT/'Overleaf_從第三章插圖開始_修改清單.md').read_text()
+        assert all(ord(c)>=32 or c in '\n\t' for c in guide)
+        assert '\\input{algorithm_preamble}' in guide
+        assert '\\label{eq:ch3_condensed_augmented_prediction}' in guide
+        for target in re.findall(r'\[[^\]]+\]\(([^)]+)\)',guide):
+            assert (ROOT/target).is_file(),target
+
     report=dict(date='2026-11-24',source_files=[p.name for p in PARTS],
         bibliography_entries=len(keys),unique_labels=len(labels),missing_citations=[],missing_references=[],
         graphics_paths=len(images),all_graphics_exist=True,chapter3_figure_count=22,
