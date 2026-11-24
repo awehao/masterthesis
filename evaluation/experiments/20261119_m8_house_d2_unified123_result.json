@@ -1,0 +1,32 @@
+{
+ "run_id": "m8house_d2_unified_123",
+ "outcome": "全鏈成功（n=1）：開門→穿門→茶几移動中夾取→放盒→開抽屜→取筆→放盒→關抽屜→回程推門穿過並關門→回起點",
+ "end_dist_m": 0.272,
+ "door_end_deg": 2.18,
+ "sim_s": 378.96,
+ "wall_s": 469.9,
+ "rtf_actual": 0.806,
+ "compare": {"unified_109": {"sim_s": 352.05, "wall_s": 977.1, "rtf": 0.360}, "unified_105": {"sim_s": 355.2, "wall_s": 949.0, "rtf": 0.374}},
+ "settings": {
+  "RTF_target": 1.0,
+  "D2_RENDER_EVERY": 20, "D2_RENDER_BURST": 2, "D2_ZERO_DELAY": 1, "D2_VP_RES": "640x360",
+  "D2_PACE": "grasp:CLOSE/CONFIRM/READY,open=0.35",
+  "defaults_on": ["D2_GC_FREEZE（主迴圈前凍結＋每 1000 步再凍結）", "D2_WALK_BATCH", "D2_CAM_POSE_WIN", "D2_ROS_EXEC", "D2W_GC_FREEZE", "D2W_ROS_EXEC", "B_EST_SPAN_TOBS", "DR_REGRASP_DEEP=0.004", "DR_REGRASP_DZ=0.006", "D2_DR_CLOSE_VIS"]
+ },
+ "losses": [
+  "開門段（閉爪至開門結束約 10.2 s 模擬）以 RTF 0.35 推進：開門控制每拍最長 >100 ms，非即時",
+  "視窗 viewport 每 20 步算圖（5 Hz）、解析度 640x360；相機影像 5 Hz 與解析度不變，影片為事後重播不受影響"
+ ],
+ "drawer_close_vision": {"q_vis": 0.1988, "q_ctrl": 0.2005, "dq_mm": -1.72, "n_obs": 3, "spread_mm": 2.53, "src": "機身相機，關抽屜展開段補送（封包送出後 3.15 s）"},
+ "tick_ms": {"open_p99": 57.4, "open_max": 61.9, "nonopen_max": 46.2, "note": "非開門段每拍最長 46.2 ms；實得 RTF 0.81 下每拍牆鐘預算約 62 ms，RTF 1 時只有 50 ms"},
+ "isaac_step_ms": {"phys": 5.89, "render_step": 20.0, "walkers": 1.22, "ros_spin": 0.93, "note": "不補步時算圖步造成的落後追不回 ⇒ 實得約 0.81；補步會壓縮放行鏈（第 116 趟）"},
+ "failures_on_the_way": {
+  "110": "關抽屜重抓夾空（放手退開時抽屜被推進 3.1 mm）",
+  "115-117": "算圖連續 1 步 ⇒ 影格舊 0.3 s",
+  "116": "有界補步壓縮放行鏈",
+  "116-119": "門把估計歷史視窗以收到時刻起算，偵測延遲 >0.1 s 湊不到 3 筆 ⇒ 不開始接近",
+  "120": "關抽屜夾空（推進 7.6 mm；機身相機觀測在封包送出後才有）",
+  "121": "控制伺服器拍首處理慢約 14 ms ⇒ 回程關門 SWING not_ready",
+  "122": "開門段 RTF 0.45 下一拍 >111 ms ⇒ not_ready"
+ }
+}
