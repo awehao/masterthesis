@@ -37,6 +37,8 @@ UNFOLD_TOL = 0.03
 CLOSE_UNF_ANCHOR = os.environ.get('DR_CLOSE_UNF_ANCHOR', '1') == '1'
 REGRASP_HOLD = os.environ.get('DR_REGRASP_HOLD', '1') == '1'
 CLOSE_UNF_V = float(os.environ.get('DR_CLOSE_UNF_V', '0.15'))        # 關抽屜展開段退到關抽屜站位的參考速度（m/s）
+REGRASP_MAX = int(os.environ.get('DR_REGRASP_MAX', '2'))
+REGRASP_DZ = float(os.environ.get('DR_REGRASP_DZ', '0.002'))           # 每次重夾沿工具軸再深（m）
 OBS_QD = float(os.environ.get('DR_OBS_QD', '0.6'))                    # 俯視關節空間移動峰速上限（rad/s）
 UNF_QD = float(os.environ.get('DR_UNF_QD', '1.2'))                    # 展開關節空間峰速（rad/s）：Howard「依照硬體限制」，Lite 6 手冊 180°/s＝3.14 rad/s，取 38%（原沿用俯視 0.6 ⇒ 展開 7.25 s，照導航接近時底盤已到站等手臂）
 W_Q_OBS = float(os.environ.get('DR_W_Q_OBS', '5.0'))
@@ -127,7 +129,7 @@ class DrawerCtrl(PK.TablePickCtrl):
             self.dr_attach, self.dr_release, self.dr_unbound = False, False, False
             self.T_p0, self.b_p0, self.T_rel_r0, self.dvec_b, self.n_ev, self.T_hold = None, None, None, None, 0, None   # T_hold 必清（s80：確認段保持舊退出位姿 ⇒ 手臂抬走、證據逾時）
             self.finger_cmd = P.FINGER_OPEN
-            self.q_unf0, self.b_unf = None, None
+            self.q_unf0, self.b_unf, self.regrasp_n, self._reopen_t = None, None, 0, None
             self.app_prof = dict(base_goal=list(app['base_goal']), door=None)
             self.T_app, self.T_b, self.t_l0 = float(app['T']), float(app['T_b']), float(app['t_l0'])
             self._bg, self._t_arr, self._t_line0, self._bp = np.asarray(app['base_goal'], float)[:2].copy(), None, None, 0.0   # 關抽屜把手也走狀態閘門
@@ -242,6 +244,13 @@ class DrawerCtrl(PK.TablePickCtrl):
                     self._stop('unfold_not_reached', err=round(float(np.abs(np.asarray(q[3:], float) - Q_UNFOLD).max()), 4))
                 return
             if self.phase == 'CONFIRM':
+                if getattr(self, '_reopen_t', None) is not None:          # 重夾：等手指張開（≥7.5 mm 或 0.8 s）⇒ 目標沿工具軸再深 REGRASP_DZ ⇒ 回閉爪
+                    fm_ = self.finger_meas
+                    if (fm_ is not None and float(np.min(fm_)) >= 0.0075) or self.t - self._reopen_t > 0.8:
+                        self.T_grasp = self.T_grasp.copy(); self.T_grasp[:3, 3] = self.T_grasp[:3, 3] + REGRASP_DZ * self.T_grasp[:3, 2]
+                        self._reopen_t, self.n_ev = None, 0
+                        self._goto('CLOSE', retry=int(self.regrasp_n), dz_mm=round(REGRASP_DZ * 1e3, 1))
+                    return
                 self.n_ev = self.n_ev + 1 if self._held_handle() else 0
                 if self.n_ev * DT >= PK.EVID_S - 1e-9:
                     self.T_p0 = K.fk(q, 'link_tcp')
@@ -253,6 +262,12 @@ class DrawerCtrl(PK.TablePickCtrl):
                     self.dr_attach = True                             # 夾住證據成立 ⇒ 執行端 FixedJoint 夾爪↔抽屜（理想抓持，同門把）
                     self._goto('PULL', finger=None if self.finger_meas is None else [round(float(x), 5) for x in self.finger_meas],
                                force=None if self.finger_force is None else [round(float(x), 3) for x in self.finger_force])
+                elif el > (PK.MOTM_EVID_TO_S if self.motm is not None else PK.EVID_TO_S) and self.task == 'handle' and getattr(self, 'regrasp_n', 0) < REGRASP_MAX:
+                    self.regrasp_n = getattr(self, 'regrasp_n', 0) + 1           # 證據不成立（Isaac 103 夾空、108 單指受力 1.1 mm）：張開、再深 2 mm 重夾（深度窗口窄，名目淺 1–2 mm 即失敗）
+                    self.finger_cmd, self._reopen_t, self.n_ev = P.FINGER_OPEN, self.t, 0
+                    self._ev('pick_dr_regrasp_retry', n=int(self.regrasp_n), close_mode=bool(getattr(self, 'close_mode', False)),
+                             finger=None if self.finger_meas is None else [round(float(x), 5) for x in self.finger_meas],
+                             force=None if self.finger_force is None else [round(float(x), 3) for x in self.finger_force])
                 elif el > (PK.MOTM_EVID_TO_S if self.motm is not None else PK.EVID_TO_S):   # 移動中：證據窗有限
                     self._stop('handle_grasp_evidence_timeout', finger=None if self.finger_meas is None else [round(float(x), 5) for x in self.finger_meas],
                                force=None if self.finger_force is None else [round(float(x), 3) for x in self.finger_force])
