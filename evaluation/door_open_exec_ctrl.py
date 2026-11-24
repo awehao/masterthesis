@@ -79,6 +79,7 @@ sys.path.insert(0, HERE)
 import door_wbopt as W                                             # noqa: E402
 import door_limits as LIM                                          # noqa: E402
 import gmpc_wb_ramp as GR                                          # noqa: E402
+OPEN_FB_TICKS = int(os.environ.get('D2_OPEN_FB_TICKS', '2'))           # 開門段「底盤後處理改動」可連續執行備援命令的拍數（0＝原行為：一律停）
 import dataclasses                                                 # noqa: E402
 import door_body_model as BM                                       # noqa: E402
 import door_fast_kin as DFK                                        # noqa: E402
@@ -1082,9 +1083,21 @@ class DoorOpenExec:
         self.qp_log.append((float(self.t), float(self.stop is not None), (w_pre - w0) * 1e3, (time.perf_counter() - w_pre) * 1e3, f_(qi_.get('asm_ms')), f_(qi_.get('gi_ms')), f_(qi_.get('osqp_ms')), 0.0 if qi_.get('solver') == 'gi' else 1.0))
         ck = dict(r.arm_check or {})
         if ck.get('fallback') or ck.get('failed') or not ck.get('seq_consistent', False) or r.u_arm_seq is None:
-            self._dump_qp_fail(ck, qp, sp, sig_eff, g, X, Ts)
-            return None
-        u = np.r_[np.asarray(r.u_opt, float), r.u_arm_seq[0]]
+            fb_ok_ = (OPEN_FB_TICKS > 0 and ck.get('fallback') == 'base_postprocess_changed' and not ck.get('failed') and ck.get('arm_decel_valid')
+                      and r.u_arm_seq is not None and np.isfinite(np.asarray(r.u_opt, float)).all() and np.isfinite(np.asarray(r.u_arm_seq[0], float)).all())
+            if fb_ok_:                                                 # 11/25 第 132、143 趟開門中「底盤後處理改動」一拍即停整趟；同 W-GMPC 其他控制器（wg_result，Isaac 93）：連續 ≤OPEN_FB_TICKS 拍照求解器備援命令（hold 底盤＋已驗證手臂減速），下一拍重解；候選仍經核對
+                self._open_fb_run = getattr(self, '_open_fb_run', 0) + 1
+                if self._open_fb_run <= OPEN_FB_TICKS:
+                    self.n_open_fb = getattr(self, 'n_open_fb', 0) + 1
+                    if hasattr(self, '_ev'):
+                        self._ev('open_fallback_tick', why='base_postprocess_changed', run=self._open_fb_run, n_total=self.n_open_fb, sigma=round(float(sig_eff), 4))
+                    fb_ok_ = 'go'
+            if fb_ok_ != 'go':
+                self._dump_qp_fail(ck, qp, sp, sig_eff, g, X, Ts)
+                return None
+        else:
+            self._open_fb_run = 0
+        u = np.r_[np.asarray(r.u_opt, float), r.u_arm_seq[0]]          # 備援拍：底盤＝求解器備援（hold 底盤解），閉鏈模式下手臂仍由下方閉鏈一致式依此底盤重算
         if self.arm_mode == 'closure':
             w_cl = time.perf_counter()
             ua = self._closure_arm(qp, sp, r, np.array(xi), sig_eff, g, tau, va)
