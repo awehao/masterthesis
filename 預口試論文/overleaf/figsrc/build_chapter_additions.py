@@ -7,12 +7,14 @@ REPO=HERE.parents[2]
 sys.path.insert(0,str(HERE/'ch03'))
 from method_diagrams import plt, FONT, text, node, arrow, line, plain, robot_plan
 from method_scene_geometry import Scene, frames, URDF, origin, mesh_for
+from figure_style import prepare
 from matplotlib.patches import Circle, Polygon, Rectangle
 
 MANIFEST=[]
 
 def save(fig,chapter,name,source):
     folder=HERE/chapter;folder.mkdir(exist_ok=True)
+    style=prepare(fig) if chapter=='ch03' else {}
     fig.canvas.draw();renderer=fig.canvas.get_renderer();w,h=fig.canvas.get_width_height()
     for artist in fig.findobj(plt.matplotlib.text.Text):
         if artist.get_visible() and artist.get_text():
@@ -20,7 +22,7 @@ def save(fig,chapter,name,source):
             assert b.x0>=-1 and b.y0>=-1 and b.x1<=w+1 and b.y1<=h+1,(name,artist.get_text())
     for ext in ('pdf','svg','png'):fig.savefig(folder/(name+'.'+ext),dpi=220)
     plt.close(fig)
-    MANIFEST.append(dict(chapter=chapter,file=name,source=source,font='DFKai-SB / STIX',text_bounds='passed'))
+    MANIFEST.append(dict(chapter=chapter,file=name,source=source,font='DFKai-SB / STIX',text_bounds='passed',**style))
     print(name,flush=True)
 
 def coord_frames():
@@ -146,7 +148,7 @@ def wheel_polygon():
     ax.set_xlabel('$v_x$ (m/s)',fontsize=12);ax.set_ylabel('$v_y$ (m/s)',fontsize=12)
     ax.text(0,.225,r'$\omega=0$',ha='center',fontsize=12)
     ax.text(0,0,r'$\omega=0.6$'+'\nrad/s',ha='center',va='center',fontsize=11)
-    ax.set_title('固定旋轉速度：平移方框收縮',fontproperties=FONT,fontsize=12,pad=14)
+    ax.set_title('(a)',fontproperties=FONT,fontsize=12,pad=14)
     ax=axes[1];wm=c/L
     ax.add_patch(Rectangle((-c,-wm),2*c,2*wm,fill=False,ec='black',ls='--',lw=1.2))
     ax.add_patch(Polygon([(c,0),(0,wm),(-c,0),(0,-wm)],fc='.87',ec='black',lw=1.4))
@@ -155,9 +157,8 @@ def wheel_polygon():
     ax.set_xlim(-.32,.32);ax.set_ylim(-1.3,1.3)
     ax.set_xticks([-.3,0,.3]);ax.set_yticks([-1,0,1])
     ax.set_xlabel('$v_x$ (m/s)',fontsize=12);ax.set_ylabel(r'$\omega$ (rad/s)',fontsize=12)
-    ax.set_title('$v_y=0$：平移與旋轉共同限制',fontproperties=FONT,fontsize=12,pad=14)
+    ax.set_title('(b)',fontproperties=FONT,fontsize=12,pad=14)
     for ax in axes:ax.axhline(0,color='.65',lw=.5,zorder=0);ax.axvline(0,color='.65',lw=.5,zorder=0);ax.tick_params(labelsize=10)
-    fig.text(.5,.055,'虛線：各軸獨立速度框　　灰色：輪速限制下的可行區域',ha='center',fontproperties=FONT,fontsize=12)
     save(fig,'ch03','omni_wheel_velocity_feasible_set','chapter3 W matrix; r=.05 m, L=.245 m, wheel limit5.55 rad/s; no margins')
 
 def vision_pipeline():
@@ -186,17 +187,16 @@ def approach_profile():
     vc=packet['v_cap']+(.26-packet['v_cap'])*smooth(x)
     fig,axes=plt.subplots(2,1,figsize=(8.2,5.5),sharex=True);fig.subplots_adjust(left=.13,right=.95,top=.92,bottom=.18,hspace=.35)
     axes[0].plot(d,vc,'k',lw=1.8);axes[0].set_ylim(0,.30)
-    axes[0].set_ylabel('平移逐軸限速（m/s）',fontproperties=FONT,fontsize=11)
-    axes[0].set_title('圓柱接近段的距離剖面（設計曲線）',fontproperties=FONT,fontsize=13)
+    axes[0].set_ylabel('速度上限（m/s）',fontproperties=FONT,fontsize=11)
+    axes[0].set_title('(a)',fontproperties=FONT,fontsize=13)
     axes[0].text(.85,.075,'近段 0.06 m/s',fontproperties=FONT,fontsize=11)
     axes[1].plot(d,beta,'k',lw=1.8);axes[1].axhline(.55,ls='--',color='.5',lw=.9)
     axes[1].text(1.1,.61,r'$\beta_0=0.55$：開始後段併線',fontproperties=FONT,fontsize=11)
-    axes[1].set_ylabel(r'距離展開進度 $\beta_{dist}$',fontproperties=FONT,fontsize=11)
-    axes[1].set_xlabel('底盤至操作位置的剩餘距離（m）　接近方向 →',fontproperties=FONT,fontsize=11)
+    axes[1].set_title('(b)',fontproperties=FONT,fontsize=13)
+    axes[1].set_ylabel(r'距離進度 $\beta_{\mathrm{dist}}$',fontproperties=FONT,fontsize=11)
+    axes[1].set_xlabel('底盤至操作位置的剩餘距離（m）',fontproperties=FONT,fontsize=11)
     for ax in axes:ax.set_xlim(1.7,0);ax.set_xticks([0,.4,.8,1.2,1.6]);ax.grid(color='.87',lw=.6);ax.tick_params(labelsize=10)
     axes[0].set_yticks([0,.1,.2,.3]);axes[1].set_yticks([0,.5,1])
-    fig.text(.5,.055,'實際進度另受最短展開時間限制；最終命令仍經導航、避障及輪級限制',
-             ha='center',fontproperties=FONT,fontsize=11)
     (HERE/'ch03/approach_profile_evidence.json').write_text(json.dumps(dict(run='m8house_d2_unified_101',
         branch_event=next(e for e in es if e['what']=='pick_jblend_start'),close_event=end,
         flow=packet,distance_progress=dict(outer_m=1.2,inner_m=.3,beta_merge=.55),
@@ -205,7 +205,13 @@ def approach_profile():
     save(fig,'ch03','mobile_approach_distance_profile','run101 flow packet + door_pick_ctrl.py distance and speed envelope; design curve')
 
 def main():
-    coord_frames();command_chains();state_machine();gantt();wheel_polygon();vision_pipeline();approach_profile()
+    manifest_path=HERE/'chapter_additions_manifest.json'
+    if '--chapter3' in sys.argv:
+        existing=json.loads(manifest_path.read_text())
+        wheel_polygon();vision_pipeline();approach_profile()
+        MANIFEST[:]=[row for row in existing if row['chapter']!='ch03']+MANIFEST
+    else:
+        coord_frames();command_chains();state_machine();gantt();wheel_polygon();vision_pipeline();approach_profile()
     (HERE/'chapter_additions_manifest.json').write_text(json.dumps(MANIFEST,ensure_ascii=False,indent=2)+'\n')
 
 if __name__=='__main__':main()

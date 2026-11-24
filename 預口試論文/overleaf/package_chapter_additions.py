@@ -49,7 +49,9 @@ def main():
     shared+=[ROOT/'figsrc'/i['chapter']/(i['file']+ext) for i in manifest for ext in ('.png',)]
     shared+=[ROOT/'figsrc'/i['chapter']/(i['file']+'.svg') for i in manifest if i['file']!='mask_rcnn_class_examples']
     # The original drawing helpers are needed to reproduce the new vector drawings.
-    shared+=[ROOT/'figsrc/ch03'/n for n in ['method_diagrams.py','method_scene_geometry.py']]
+    shared+=[ROOT/'figsrc/ch03'/n for n in [
+        'method_diagrams.py','method_scene_geometry.py',
+        'supplementary_method_diagrams.py','figure_style.py']]
     note='''先看 Overleaf_從第三章插圖開始_修改清單.md。
 第三章_現行22張圖_插入片段.tex 含全部現行圖的複製格式與位置；整節替換後不重貼。
 更新學姐專案的對應小節並上傳 figsrc，不要同時載入正文與目錄骨架。

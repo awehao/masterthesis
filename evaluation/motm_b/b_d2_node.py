@@ -1548,8 +1548,18 @@ def main():
                 return
             if O is not None:
                 h = math.atan2(O[1] - cur[1], O[0] - cur[0]); self._hleg = None; mode = 'obj'
-            elif HEAD_HOLD:
-                h = float(cur[2]); self._hleg = None; mode = 'hold'      # 不轉：偏航參考＝目前車頭（抓取等朝向由控制器最後一段處理）
+            elif HEAD_HOLD:                                           # 不轉：進入維持時記住當下車頭（第 129 趟每 0.15 s 送「目前車頭」＝延遲的彈簧 ⇒ 與抓取前轉向互拉、0.59 rad/s 左右甩）
+                hl_ = getattr(self, '_h_hold', None)
+                if hl_ is None or getattr(self, '_h_mode', None) != 'hold':
+                    hl_, self._h_dev_t = float(cur[2]), None
+                if abs((float(cur[2]) - hl_ + math.pi) % (2 * math.pi) - math.pi) > 0.5:   # 控制器刻意轉走（抓取朝向等）持續 1.5 s ⇒ 改記新車頭，不拉回
+                    if getattr(self, '_h_dev_t', None) is None:
+                        self._h_dev_t = t
+                    elif t - self._h_dev_t > 1.5:
+                        hl_, self._h_dev_t = float(cur[2]), None
+                else:
+                    self._h_dev_t = None
+                self._h_hold = hl_; h = hl_; self._hleg = None; mode = 'hold'
             else:
                 g = self.pick_goal if self.pick_goal is not None else (PICK_PRIOR if getattr(self, 'chain', 'cyl') == 'cyl' else DR_PRIOR)
                 if g is None:

@@ -10,6 +10,7 @@ from matplotlib.patches import Circle, Rectangle, FancyArrowPatch, Polygon, Arc
 import numpy as np
 from scipy.spatial.transform import Rotation
 from method_scene_geometry import Scene, solve_pose, IK_RECORDS
+from figure_style import CAPTIONS, prepare
 
 OUT=Path(__file__).resolve().parent
 FONT_PATH=OUT.parents[1]/"fonts/kaiu.ttf"
@@ -90,6 +91,8 @@ def callout(ax,scene,p,label,position,ha="center"):
 
 
 def export(fig,name,caption,placement,purpose):
+    style=prepare(fig)
+    caption=CAPTIONS.get(name,caption)
     fig.canvas.draw();renderer=fig.canvas.get_renderer();w,h=fig.canvas.get_width_height()
     for artist in fig.findobj(matplotlib.text.Text):
         if not artist.get_visible() or not artist.get_text(): continue
@@ -106,7 +109,8 @@ def export(fig,name,caption,placement,purpose):
     plt.close(fig)
     MANIFEST.append(dict(file=name,caption=caption,placement=placement,purpose=purpose,
                          source="本研究自行繪製之方法圖，未使用實驗結果。",
-                         chinese_font="DFKai-SB",math_font="STIX",bounds_check="passed"))
+                         chinese_font="DFKai-SB",math_font="STIX",bounds_check="passed",
+                         **style))
     print(name,flush=True)
 
 
@@ -136,7 +140,6 @@ def setpoint_tracking():
             ax.add_patch(Arc(pivot,2*r,2*r,theta1=np.rad2deg(a1),theta2=np.rad2deg(a2),lw=1))
             arrow(ax,r*np.array([np.cos(a2-.10),np.sin(a2-.10)]),
                   r*np.array([np.cos(a2),np.sin(a2)]),lw=1,scale=7)
-    fig.text(.5,.085,"虛線：位置設定點　　實線：實際關節位置",fontproperties=FONT,fontsize=10.2,ha="center")
     export(fig,"arm_setpoint_tracking","手臂設定點與實際關節位置之追蹤關係",
            "3.2.2 增廣狀態與末端位姿說明之後","設定點固定後，關節仍可能持續追蹤。")
 
@@ -152,7 +155,6 @@ def dynamic_prediction():
         col=i%2;row=i//2
         ax=plain(fig,[.025+col*.50,.56-row*.47,.45,.33],(-.15,2.55),(-1.05,1.85),True)
         fig.text(.25+col*.50,.95-row*.47,titles[i],fontproperties=FONT,fontsize=10.8,ha="center")
-        fig.text(.25+col*.50,.53-row*.48,notes[i],fontproperties=FONT,fontsize=10.2,ha="center")
         if i==0:
             robot_plan(ax,start);person(ax,old_obs)
             arrow(ax,(.80,0),(1.30,0));arrow(ax,(1.6,1.04),(1.6,.55))
@@ -205,11 +207,6 @@ def visual_reference():
         else:
             callout(ax,s,goal,"夾爪接近目標",(.80,.86))
             callout(ax,s,[0,0,.28],"選定底盤位姿",(.25,.08))
-    flow=plain(fig,[.04,.025,.92,.12],(0,12),(0,1))
-    labels=["目標定位","產生底盤候選","淨空與構型檢查","評分選位"]
-    for i,label in enumerate(labels):
-        x=1.4+i*3.05;text(flow,x,.48,label,10.1)
-        if i<3:arrow(flow,(x+1.13,.48),(x+1.82,.48),scale=8,lw=.9)
     export(fig,"visual_operation_reference","操作目標導引之底盤選位與手臂接近",
            "3.5.3 候選集合與底盤目標說明之後","選擇底盤操作位姿，讓手臂能接近已定位目標。")
 
@@ -256,7 +253,6 @@ def articulated_constraints():
     a,b=s.p([[.48,.0,.55],[.48,-.28,.55]])
     arrow(ax,a,b,lw=1.25,scale=9)
     text(ax,.88,.56,"拉出方向",10,transform=ax.transAxes)
-    fig.text(.5,.065,"抓持期間，底盤與手臂共同配合物件的機構運動。",fontproperties=FONT,fontsize=10.5,ha="center")
     export(fig,"articulated_operation_constraints","移動機械臂開門與抽屜操作之機構運動",
            "3.6.2 門與抽屜機構模型之後","門沿圓弧轉動，抽屜沿滑軌平移，夾爪在協同運動中維持抓持。")
 
@@ -282,7 +278,6 @@ def execution_timeline():
     r.set_hatch("///")
     for artist in list(ax.texts):
         if artist.get_text()=="沿已核對停止尾段減速":artist.set_bbox(dict(fc="white",ec="none",pad=2))
-    text(ax,(a+b)/2,.72,"這段既定命令用來預測生效時刻的狀態",10)
     export(fig,"command_execution_timeline","控制計算期間之命令接續與停止備援",
            "3.7.1 在途命令前推與延遲補償初始狀態之後","計算期間機器人持續執行舊命令，只有接受的新結果才接續執行。")
 
@@ -304,7 +299,7 @@ def overall_workflow():
     arrow(ax,(x+2.15,5.35),(stopx,5.35));text(ax,7.18,5.70,"否／逾時",10.1)
     line(ax,[(stopx,5.35),(stopx,3.95)],lw=1.15)
     arrow(ax,(stopx,3.95),(stopx,3.63))
-    node(ax,stopx,3.10,3.15,h,"停止備援","沿既定停止尾段執行",fill=LIGHT,size=10.7)
+    node(ax,stopx,3.10,3.15,h,"停止備援","沿停止尾段",fill=LIGHT,size=10.7)
     node(ax,x,1.15,w,h,"5　執行回授","回報最終命令、設定點與新狀態")
     arrow(ax,(x,2.575),(x,1.675))
     line(ax,[(stopx,2.575),(stopx,1.15),(x+w/2,1.15)],lw=1.15)

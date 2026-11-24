@@ -14,20 +14,19 @@ def generate(d):
 
 
 def _paired_scenes(d, scenes, titles, labels, footer, name, caption, placement, purpose):
-    fig=plt.figure(figsize=(7.2,4.6))
+    fig=plt.figure(figsize=(7.2,4.1))
     points=np.concatenate([s.p(p) for s in scenes for p in s.polygons])
     lo,hi=points.min(axis=0)-.13,points.max(axis=0)+.13
     for i,s in enumerate(scenes):
-        ax=fig.add_axes([.025+i*.50,.17,.45,.66]);s.draw(ax)
+        ax=fig.add_axes([.025+i*.50,.08,.45,.79]);s.draw(ax)
         ax.set(xlim=(lo[0],hi[0]),ylim=(lo[1],hi[1]))
-        fig.text(.25+i*.50,.91,titles[i],fontproperties=d.FONT,fontsize=10.8,ha="center")
+        fig.text(.25+i*.50,.94,titles[i],fontproperties=d.FONT,fontsize=10.8,ha="center")
         for point,label,position in labels[i]:d.callout(ax,s,point,label,position)
-    fig.text(.5,.065,footer,fontproperties=d.FONT,fontsize=10.4,ha="center")
     d.export(fig,name,caption,placement,purpose)
 
 
 def _base_error(d):
-    fig=plt.figure(figsize=(7.2,4.25))
+    fig=plt.figure(figsize=(7.2,3.65))
     pr=np.array([.75,.65]);pb=np.array([2.60,1.75]);tr=np.deg2rad(35);tb=np.deg2rad(65)
     rr=Rotation.from_euler("z",tr).as_matrix()[:2,:2]
     relative=rr.T@(pb-pr)
@@ -36,8 +35,8 @@ def _base_error(d):
         d.arrow(ax,p,p+length*ex,scale=7,lw=.9);d.arrow(ax,p,p+length*ey,scale=7,lw=.9)
         d.text(ax,*(p+(length+.14)*ex),"$x_"+suffix+"$",10.3)
         d.text(ax,*(p+(length+.14)*ey),"$y_"+suffix+"$",10.3)
-    a=d.plain(fig,[.025,.24,.45,.60],(-.15,3.65),(-.10,2.90),True)
-    b=d.plain(fig,[.525,.24,.45,.60],(-.50,2.95),(-1.00,1.65),True)
+    a=d.plain(fig,[.025,.14,.45,.70],(-.15,3.65),(-.10,2.90),True)
+    b=d.plain(fig,[.525,.14,.45,.70],(-.50,2.95),(-1.00,1.65),True)
     for ax,title in [(a,"(a) 世界座標中的兩個底盤位姿"),(b,"(b) 以參考底盤為座標基準")]:
         d.text(ax,.5,1.12,title,10.6,transform=ax.transAxes)
     d.robot_plan(a,pr,yaw=tr,ghost=True);d.robot_plan(a,pb,yaw=tb)
@@ -52,7 +51,6 @@ def _base_error(d):
     d.arrow(b,[.10,-.12],relative+[0,-.12],ls=":",lw=.9)
     d.text(b,1.15,-.60,"相對平移 $t_E$",10.1)
     d.text(b,2.08,1.18,"相對航向 $\\varphi$",10.1)
-    fig.text(.5,.11,"先求相對位姿 $E_B=X_r^{-1}X_B$，再由對數映射取得幾何誤差。",fontproperties=d.FONT,fontsize=10.4,ha="center")
     d.export(fig,"base_pose_error","底盤參考位姿、實際位姿與相對幾何關係",
              "3.1.2 幾何追蹤誤差與局部模型說明之後","區分世界座標位姿、相對平移與李代數誤差，圖中平移箭頭不當作 rho。")
 
@@ -115,23 +113,22 @@ def _visual_time(d):
         d.line(ax,[(x,5.08),(x,5.33)],lw=.9);d.text(ax,x,5.68,label,10.4)
     d.node(ax,2.25,3.70,3.85,1.05,"影像中的目標量測","保留原觀測時間 $t_o$")
     d.node(ax,2.25,1.65,3.85,1.05,"觀測時刻的相機位姿","$ {}^WT_C(t_o)$")
-    d.node(ax,6.80,2.70,3.40,1.20,"轉換至世界座標","量測與位姿使用相同時間")
+    d.node(ax,6.80,2.70,3.40,1.20,"轉換至世界座標","使用同一觀測時間")
     d.node(ax,10.30,2.70,2.85,1.20,"操作參考生成",size=10.5)
     for y in [3.70,1.65]:
         d.line(ax,[(4.175,y),(4.65,y),(4.65,2.70)])
     d.arrow(ax,(4.65,2.70),(5.10,2.70));d.arrow(ax,(8.50,2.70),(8.875,2.70))
-    d.text(ax,6.0,.50,"影像處理完成後，仍使用影像取得時刻的相機位姿。",10.4)
     d.export(fig,"visual_time_alignment","視覺量測與相機位姿依觀測時間配對之流程",
              "3.5.2 影像時間對齊說明之後","影像時間與處理完成時間不同，座標轉換以觀測時刻相機位姿為準。")
 
 
 def _grasp_sequence(d):
-    fig=plt.figure(figsize=(7.2,3.8))
+    fig=plt.figure(figsize=(7.2,3.2))
     for i,(gap,title,note) in enumerate([(.48,"(a) 接近目標","夾爪保持張開"),
                                           (.27,"(b) 閉爪確認","檢查手指位置與接觸"),
                                           (.27,"(c) 抓持成立","持續達標且確認連接")]):
-        ax=d.plain(fig,[.025+i*.333,.23,.285,.54],(-.75,.75),(-.70,1.10),True)
-        d.text(ax,.5,1.18,title,10.8,transform=ax.transAxes)
+        ax=d.plain(fig,[.025+i*.333,.10,.285,.76],(-.75,.75),(-.70,1.10),True)
+        d.text(ax,.5,1.08,title,10.8,transform=ax.transAxes)
         ax.add_patch(Rectangle((-.55,.58),1.10,.18,ec=d.INK,fc=d.LIGHT,lw=1))
         ax.add_patch(Rectangle((-gap-.08,-.08),.08,.66,ec=d.INK,fc=d.LIGHT,lw=1))
         ax.add_patch(Rectangle((gap,-.08),.08,.66,ec=d.INK,fc=d.LIGHT,lw=1))
@@ -140,12 +137,9 @@ def _grasp_sequence(d):
             for x in (-.27,.27):ax.plot(x,0,"o",color=d.INK,ms=3.2,zorder=8)
         if i==2:
             d.line(ax,[(-gap,.42),(gap,.42)],lw=1.3)
-            d.text(ax,0,-.47,"抓持狀態已確認",9.8)
-        d.text(ax,.5,-.16,note,10.1,transform=ax.transAxes)
-    ax=d.plain(fig,[.025,.23,.95,.54],(0,12),(0,2))
+    ax=d.plain(fig,[.025,.10,.95,.76],(0,12),(0,2))
     d.arrow(ax,(3.45,1.08),(4.05,1.08),scale=9)
     d.arrow(ax,(7.65,1.08),(8.25,1.08),scale=9)
-    fig.text(.5,.065,"抓持成立後才銜接後續機構操作或持物運送。",fontproperties=d.FONT,fontsize=10.4,ha="center")
     d.export(fig,"grasp_state_transition","接近、閉爪確認與抓持成立之狀態轉移",
              "3.6.1 抓持證據與連接確認說明之後","閉爪命令、接觸證據與抓持成立是不同階段。")
 
@@ -217,7 +211,7 @@ def _model_bias(d):
     d.node(ax,2.10,3.10,3.65,1.05,"區間末實際關節位置",size=10.3)
     d.node(ax,7.75,3.10,4.30,1.05,"計算區間終點殘差","實際位置減去預測位置")
     d.node(ax,7.75,1.15,4.30,1.05,"平滑與限幅更新偏置","用於後續預測")
-    d.node(ax,2.10,1.15,3.65,1.05,"更新共用預測模型","QP、在途命令與停止預測")
+    d.node(ax,2.10,1.15,3.65,1.05,"更新共用預測模型","控制與執行共用")
     d.arrow(ax,(3.925,5.05),(5.60,5.05));d.arrow(ax,(3.925,3.10),(5.60,3.10))
     d.arrow(ax,(7.75,4.525),(7.75,3.625));d.arrow(ax,(7.75,2.575),(7.75,1.675))
     d.arrow(ax,(5.60,1.15),(3.925,1.15))
@@ -238,6 +232,5 @@ def _tcp_offset(d):
         d.line(ax,[(x,2.40),(x,3.25)],ls=":",color=d.GRAY,lw=.7)
     d.arrow(ax,(1.6,3.35),(6.0,3.35));d.text(ax,3.80,3.85,"追蹤誤差 $e_p$",10.5)
     d.arrow(ax,(6.0,3.35),(9.8,3.35));d.text(ax,7.90,3.85,"有界修正 $\\iota$",10.5)
-    d.text(ax,6.0,.32,"完成條件仍對原始幾何目標判定。",10.4)
     d.export(fig,"tcp_target_compensation","末端原始幾何目標與有界命令目標補償",
              "3.7.2 有界 TCP 目標補償公式與說明之後","以單一位置分量呈現 p_cmd=p_d+iota；補償改目標，不改原始完成判準。")

@@ -74,9 +74,11 @@ FLOW_PULL = os.environ.get('PICK_FLOW_PULL', '1') == '1'             # Howard 11
 FLOW_PULL_DIN = float(os.environ.get('PICK_FLOW_PULL_DIN', '0.25'))   # 沿路徑離 b0 此距離內 ⇒ 全量拉到 b0 的側向位置
 FLOW_PULL_DOUT = float(os.environ.get('PICK_FLOW_PULL_DOUT', '2.5'))  # 此距離外 ⇒ 不拉（中間 smoothstep）；第 128 趟 1.3 m 時 0.6 m 側移擠在約 1 m 內 ⇒ 側向 0.24 m/s 橫衝 ⇒ 2.5 m（偏轉約 15°）
 FLOW_PULL_MAX = float(os.environ.get('PICK_FLOW_PULL_MAX', '0.6'))    # 側向拉移上限（m）
+FLOW_PULL_TIN = float(os.environ.get('PICK_FLOW_PULL_TIN', '4.0'))    # 接手後拉移量隨時間平順加上（第 129 趟接手時已在 1.2 m 內、拉移七成一步跳 ⇒ 側向 0.24 m/s）
+FLOW_PULL_TOUT = float(os.environ.get('PICK_FLOW_PULL_TOUT', '3.0'))  # 抬起後：凍結當下拉移向量、此時間內平順退回 0（第 128／129 趟放盒中依路徑切向重算 ⇒ 方向一直翻、四角來回）
 
 
-def flow_pull(X, b0, din=None, dout=None, lmax=None):
+def flow_pull(X, b0, din=None, dout=None, lmax=None, wmul=1.0):
     """導航參考視窗側向拉近 b0：每點以本點路徑切向 t、法向 n，沿切向離 b0 的距離 d＝|(b0−p)·t|，側向差 l＝(b0−p)·n；
     p ← p＋w(d)·clip(l, ±lmax)·n，w＝1（d≤din）→0（d≥dout）smoothstep。偏航不動。回 (新視窗, 最大拉移量)。"""
     din = FLOW_PULL_DIN if din is None else din; dout = FLOW_PULL_DOUT if dout is None else dout; lmax = FLOW_PULL_MAX if lmax is None else lmax
@@ -88,18 +90,20 @@ def flow_pull(X, b0, din=None, dout=None, lmax=None):
     if float(np.linalg.norm(tot_)) < 0.01:
         return X, 0.0
     b0_ = np.asarray(b0, float)[:2]
-    out, mx_ = [], 0.0
+    out, mx_, s0_ = [], 0.0, np.zeros(2)
     for k in range(n_):
         tk_ = (P_[min(k + 1, n_ - 1)] - P_[max(k - 1, 0)])
         tk_ = tk_ / float(np.linalg.norm(tk_)) if float(np.linalg.norm(tk_)) > 1e-4 else tot_ / float(np.linalg.norm(tot_))
         nk_ = np.array([-tk_[1], tk_[0]])
         dv_ = b0_ - P_[k]; d_ = abs(float(dv_ @ tk_)); l_ = float(dv_ @ nk_)
         x_ = min(max((dout - d_) / max(dout - din, 1e-3), 0.0), 1.0); w_ = x_ * x_ * (3.0 - 2.0 * x_)
-        sh_ = w_ * max(-lmax, min(lmax, l_))
+        sh_ = float(wmul) * w_ * max(-lmax, min(lmax, l_))
         mx_ = max(mx_, abs(sh_))
         p_ = P_[k] + sh_ * nk_
+        if k == 0:
+            s0_ = sh_ * nk_
         out.append(XO.from_xytheta(float(p_[0]), float(p_[1]), math.atan2(float(X[k][1, 0]), float(X[k][0, 0]))))
-    return out, mx_
+    return out, mx_, s0_
 EXIT_A, EXIT_AW = float(os.environ.get('PICK_EXIT_A', '0.25')), float(os.environ.get('PICK_EXIT_AW', '0.6'))   # 放盒起步：線速度／角速度上限隨時間增加率（m/s²、rad/s²）
 BIN_MOVE = os.environ.get('D2_BIN_MOVE', '1') == '1'                  # 放盒／收臂中底盤照導航前端（限速框 BIN_V/BIN_WZ）；0＝底盤錨定
 BIN_V, BIN_WZ = float(os.environ.get('D2_BIN_V', '0.15')), float(os.environ.get('D2_BIN_WZ', '0.5'))
@@ -744,7 +748,9 @@ class TablePickCtrl(P.DoorPassCtrl):
             xi = [np.zeros(3)] * (XO.N + 1)
             umin0, src = float('nan'), 'anchor'
         if FLOW_PULL and self.flow and src == 'nav' and self.phase in ('APPROACH', 'CLOSE', 'CONFIRM', 'LIFT', 'VERIFY'):   # 抓取位附近導航路徑側向拉近 b0（不是經過線：形狀、方向、速度照導航）
-            X, mx_ = flow_pull(list(X), self.flow['b0'])
+            if getattr(self, '_pull_t0', None) is None:
+                self._pull_t0 = float(self.t)
+            X, mx_, self._pull_s0 = flow_pull(list(X), self.flow['b0'], wmul=P._ss((float(self.t) - self._pull_t0) / max(FLOW_PULL_TIN, 1e-3)))
             xi = xi_from_X(X, DT)
             if mx_ > 0.02 and self.t - getattr(self, '_pull_ev_t', -9.0) > 1.0:
                 self._pull_ev_t = self.t; self._ev('flow_pull', phase=self.phase, shift_m=round(mx_, 3))
@@ -878,8 +884,13 @@ class TablePickCtrl(P.DoorPassCtrl):
             return None, 'nav_obstacles_stale'
         self.app_prof = None
         if FLOW_PULL and getattr(self, 'flow', None) and BIN_MOVE and src == 'nav':   # 抬起後同一拉移隨離 b0 距離平順退回導航路徑（不在抬起那拍一步拉回）
-            X, mx_ = flow_pull(list(X), self.flow['b0'])
-            xi = xi_from_X(X, DT)
+            if getattr(self, '_pull_tb', None) is None:
+                self._pull_tb = float(self.t)
+            s_ = getattr(self, '_pull_s0', None)
+            k_ = 0.0 if s_ is None else 1.0 - P._ss((float(self.t) - self._pull_tb) / max(FLOW_PULL_TOUT, 1e-3))
+            if k_ > 1e-3:
+                X = [XO.from_xytheta(float(Xk[0, 2]) + k_ * float(s_[0]), float(Xk[1, 2]) + k_ * float(s_[1]), math.atan2(float(Xk[1, 0]), float(Xk[0, 0]))) for Xk in X]
+                xi = xi_from_X(X, DT)
         if BIN_MOVE and src == 'nav' and P.REF_VCAP:                  # 參考先時間縮放到本段速度框（含起步斜坡）內，偏航速率限 REF_WCAP（第 123／124 趟抓完以 0.5 rad/s 轉 90°、兩軸貼框斜走）
             vb_ = self._bin_vlim(qp)
             X, sc_ = P.ref_speed_cap(list(X), P.REF_VCAP_K * float(vb_[0]), DT, min(P.REF_WCAP, float(vb_[2])), yaw0=P.yaw_ref_state(self, qp, X, min(P.REF_WCAP, float(vb_[2])), DT))
