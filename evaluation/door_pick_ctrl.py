@@ -74,6 +74,7 @@ FLOW_PULL = os.environ.get('PICK_FLOW_PULL', '1') == '1'             # Howard 11
 FLOW_PULL_DIN = float(os.environ.get('PICK_FLOW_PULL_DIN', '0.25'))   # 沿路徑離 b0 此距離內 ⇒ 全量拉到 b0 的側向位置
 FLOW_PULL_DOUT = float(os.environ.get('PICK_FLOW_PULL_DOUT', '2.5'))  # 此距離外 ⇒ 不拉（中間 smoothstep）；第 128 趟 1.3 m 時 0.6 m 側移擠在約 1 m 內 ⇒ 側向 0.24 m/s 橫衝 ⇒ 2.5 m（偏轉約 15°）
 FLOW_PULL_MAX = float(os.environ.get('PICK_FLOW_PULL_MAX', '0.6'))    # 側向拉移上限（m）
+FLOW_YAW_LOCK = os.environ.get('PICK_FLOW_YAW_LOCK', '1') == '1'     # Howard 11/25「只要全域導航段都要 heading on」：全域導航照導航 heading；茶几接近／夾取（區域操作段）車頭不跟路徑，鎖在接手當下角度，再由既有距離權重平順轉到抓取朝向
 FLOW_PULL_TIN = float(os.environ.get('PICK_FLOW_PULL_TIN', '4.0'))    # 接手後拉移量隨時間平順加上（第 129 趟接手時已在 1.2 m 內、拉移七成一步跳 ⇒ 側向 0.24 m/s）
 FLOW_PULL_TOUT = float(os.environ.get('PICK_FLOW_PULL_TOUT', '3.0'))  # 抬起後：凍結當下拉移向量、此時間內平順退回 0（第 128／129 趟放盒中依路徑切向重算 ⇒ 方向一直翻、四角來回）
 
@@ -747,6 +748,12 @@ class TablePickCtrl(P.DoorPassCtrl):
             X = [XO.from_xytheta(*self.b_anchor)] * (XO.N + 1)
             xi = [np.zeros(3)] * (XO.N + 1)
             umin0, src = float('nan'), 'anchor'
+        if FLOW_YAW_LOCK and self.flow and src == 'nav' and self.phase in ('APPROACH', 'CLOSE', 'CONFIRM', 'LIFT', 'VERIFY'):   # 區域操作段：偏航不跟路徑（導航 heading 只管全域導航段）
+            if getattr(self, '_yaw_lock', None) is None:
+                self._yaw_lock = float(qp[2])
+                self._ev('pick_yaw_lock', yaw=round(self._yaw_lock, 3))
+            X = [XO.from_xytheta(float(Xk[0, 2]), float(Xk[1, 2]), self._yaw_lock) for Xk in X]
+            xi = xi_from_X(X, DT)
         if FLOW_PULL and self.flow and src == 'nav' and self.phase in ('APPROACH', 'CLOSE', 'CONFIRM', 'LIFT', 'VERIFY'):   # 抓取位附近導航路徑側向拉近 b0（不是經過線：形狀、方向、速度照導航）
             if getattr(self, '_pull_t0', None) is None:
                 self._pull_t0 = float(self.t)
