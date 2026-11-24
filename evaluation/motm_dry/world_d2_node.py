@@ -33,6 +33,7 @@ import door_p2_planner_server as PS                                  # noqa: E40
 import wrist_v0_capture as W0                                        # noqa: E402
 FSP = PS.PlannerServer()                                             # D2 首段規劃程序（背景）
 FS_LEAD = float(os.environ.get('D2_FS_LEAD', '1.5'))
+FS_PRED_GOAL = os.environ.get('D2_FS_PRED_GOAL', '1') == '1'         # 首段預測底盤＝接近封包的抓取底盤位（停止）
 FS_RETRY_LEAD = float(os.environ.get('D2_FS_RETRY_LEAD', '0.5'))
 FS_RETRY_MAX = int(os.environ.get('D2_FS_RETRY_MAX', '3'))   # 首段重送：預計結果可用所需模擬時間（RTF 0.2 下規劃約 1 s 牆鐘＝0.2 s 模擬，留餘量）
 R_REM = int(os.environ.get('D2_R_REM', str(D_STEPS - NPH)))   # 放行收到後到執行器套用的剩餘延遲（步）：總延遲 D＝安全鏈一個 GUARD 週期（NPH）＋剩餘
@@ -724,6 +725,9 @@ class WorldD2(Node):
             ub_ = np.asarray(self.pipe[-1][:3], float); c_, s_ = math.cos(q[2]), math.sin(q[2])
             vw_ = np.array([c_ * ub_[0] - s_ * ub_[1], s_ * ub_[0] + c_ * ub_[1]])
         b_pred = q[:3] + np.r_[vw_ * (t_ready_rel - t_rel_now), 0.0]
+        bg_ = (self.ho.get('app') or {}).get('base_goal') if FS_PRED_GOAL else None
+        if bg_ is not None and t_rel_now > 0.0:                      # Howard 11/25「車到 TCP 到」：接近提早到 1.0 m、底盤 0.26 m/s 時送首段，直線外推過頭 0.5 m ⇒ 預測 IK 殘差 4.9 cm（第 133 趟）⇒ 預測＝底盤停在抓取底盤位（同一控制器等減速收斂到此）、速度 0
+            b_pred = np.asarray(bg_, float)[:3].copy(); vw_ = np.zeros(2)
         Tg_ = T_at(T_ref, float(os.environ.get('B_S_FINAL', '0.0015')))   # Codex 192427：首段預測用與接近目標相同的名目抓姿（含深度留量）
         qa_pred, res_ = None, 9.0
         for seed0 in (q[3:], np.array([-0.354, -0.088, 1.435, -1.421, -0.358, -0.157])):   # 預測底盤離目前較遠：底盤分段前推、逐步接續種子（c30：一步解殘差 3.1 cm）
