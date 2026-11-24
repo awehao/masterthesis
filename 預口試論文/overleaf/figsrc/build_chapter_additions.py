@@ -5,7 +5,7 @@ import numpy as np
 HERE=Path(__file__).resolve().parent
 REPO=HERE.parents[2]
 sys.path.insert(0,str(HERE/'ch03'))
-from method_diagrams import plt, FONT, text, node, arrow, line, plain, robot_plan
+from method_diagrams import plt, FONT, text, node, arrow, line, plain, robot_plan, BOX_CHECKS
 from method_scene_geometry import Scene, frames, URDF, origin, mesh_for
 from figure_style import prepare
 from matplotlib.patches import Circle, Polygon, Rectangle
@@ -20,6 +20,14 @@ def save(fig,chapter,name,source):
         if artist.get_visible() and artist.get_text():
             b=artist.get_window_extent(renderer)
             assert b.x0>=-1 and b.y0>=-1 and b.x1<=w+1 and b.y1<=h+1,(name,artist.get_text())
+    if chapter=='ch03':
+        for box,artist in BOX_CHECKS:
+            if artist.figure is not fig:
+                continue
+            bounds=artist.get_window_extent(renderer)
+            frame=box.get_window_extent(renderer)
+            assert (frame.x0+1 < bounds.x0 and bounds.x1 < frame.x1-1
+                    and frame.y0+1 < bounds.y0 and bounds.y1 < frame.y1-1),(name,artist.get_text())
     for ext in ('pdf','svg','png'):fig.savefig(folder/(name+'.'+ext),dpi=220)
     plt.close(fig)
     MANIFEST.append(dict(chapter=chapter,file=name,source=source,font='DFKai-SB / STIX',text_bounds='passed',**style))
@@ -153,7 +161,8 @@ def wheel_polygon():
     ax.add_patch(Rectangle((-c,-wm),2*c,2*wm,fill=False,ec='black',ls='--',lw=1.2))
     ax.add_patch(Polygon([(c,0),(0,wm),(-c,0),(0,-wm)],fc='.87',ec='black',lw=1.4))
     ax.plot(.24,.8,'kx',ms=8,mew=1.5);ax.annotate('輪速超限',xy=(.24,.8),xytext=(.04,.87),
-        fontproperties=FONT,fontsize=11,arrowprops=dict(arrowstyle='-',lw=.7))
+        fontproperties=FONT,fontsize=11,arrowprops=dict(arrowstyle='-',lw=.7),
+        bbox=dict(fc='white',ec='none',pad=1.5))
     ax.set_xlim(-.32,.32);ax.set_ylim(-1.3,1.3)
     ax.set_xticks([-.3,0,.3]);ax.set_yticks([-1,0,1])
     ax.set_xlabel('$v_x$ (m/s)',fontsize=12);ax.set_ylabel(r'$\omega$ (rad/s)',fontsize=12)
@@ -164,15 +173,15 @@ def wheel_polygon():
 def vision_pipeline():
     fig=plt.figure(figsize=(9,4.75));ax=plain(fig,[.02,.02,.96,.96],(0,16),(0,8))
     xs=[2.1,8.,13.9]
-    for x,a,b in zip(xs,['RGB 影像','Mask R-CNN','類別與實例遮罩'],['影像擷取時間 $t_c$','六類目標分割','分數及遮罩門檻均為 0.5']):node(ax,x,6.7,3.8,1.35,a,b,size=11.3)
+    for x,a,b in zip(xs,['RGB 影像','Mask R-CNN','類別與實例遮罩'],['影像擷取時間 $t_c$','六類目標分割','門檻皆為 0.5']):node(ax,x,6.7,3.8,1.35,a,b,size=11.3)
     for a,b in zip(xs,xs[1:]):arrow(ax,(a+1.9,6.7),(b-1.9,6.7))
     node(ax,2.1,3.9,3.8,1.35,'對齊的深度與內參',r'$D(u,v),\;K$')
-    node(ax,8.,3.9,4.6,1.35,'選取有效深度點','門把：遮罩外框擴張 ROI',size=11)
+    node(ax,8.,3.9,4.6,1.35,'選取有效深度點','門把使用擴張 ROI',size=11)
     arrow(ax,(4,3.9),(5.7,3.9));line(ax,[(13.9,6.025),(13.9,5.25),(8,5.25)]);arrow(ax,(8,5.25),(8,4.575))
-    node(ax,13.6,3.9,4.35,1.35,'幾何估測','平面／圓柱／直線與方向',size=11)
+    node(ax,13.6,3.9,4.35,1.35,'幾何估測','平面／圓柱／直線',size=11)
     arrow(ax,(10.3,3.9),(11.425,3.9))
     node(ax,4.0,1.15,7.1,1.35,'擷取時刻的機器人位姿與外參','以 $t_c$ 對齊底盤、關節與相機姿態',size=11)
-    node(ax,12.,1.15,6.0,1.35,'帶時間戳的世界座標目標','位置／姿態／來源時間／有效性',size=11)
+    node(ax,12.,1.15,6.0,1.35,'帶時間戳的世界座標目標','位置、姿態與有效性',size=11)
     arrow(ax,(7.55,1.15),(9.,1.15));line(ax,[(13.6,3.225),(13.6,1.825)]);arrow(ax,(13.6,2.0),(13.6,1.825))
     save(fig,'ch03','mask_rcnn_target_pipeline','house_seg.py and Isaac online geometry detectors; handle ROI exception included')
 
@@ -189,9 +198,10 @@ def approach_profile():
     axes[0].plot(d,vc,'k',lw=1.8);axes[0].set_ylim(0,.30)
     axes[0].set_ylabel('速度上限（m/s）',fontproperties=FONT,fontsize=11)
     axes[0].set_title('(a)',fontproperties=FONT,fontsize=13)
-    axes[0].text(.85,.075,'近段 0.06 m/s',fontproperties=FONT,fontsize=11)
+    axes[0].annotate('近段 0.06 m/s',xy=(.2,.06),xytext=(.72,.19),
+        fontproperties=FONT,fontsize=11,arrowprops=dict(arrowstyle='->',lw=.8))
     axes[1].plot(d,beta,'k',lw=1.8);axes[1].axhline(.55,ls='--',color='.5',lw=.9)
-    axes[1].text(1.1,.61,r'$\beta_0=0.55$：開始後段併線',fontproperties=FONT,fontsize=11)
+    axes[1].text(1.5,.78,r'$\beta_0=0.55$：開始後段併線',fontproperties=FONT,fontsize=11)
     axes[1].set_title('(b)',fontproperties=FONT,fontsize=13)
     axes[1].set_ylabel(r'距離進度 $\beta_{\mathrm{dist}}$',fontproperties=FONT,fontsize=11)
     axes[1].set_xlabel('底盤至操作位置的剩餘距離（m）',fontproperties=FONT,fontsize=11)

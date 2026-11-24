@@ -1,5 +1,9 @@
 """Print-size typography and caption text for the original thesis diagrams."""
 import re
+import os
+import tempfile
+from pathlib import Path
+os.environ.setdefault("MPLCONFIGDIR", str(Path(tempfile.gettempdir()) / "thesis_ch03_mpl"))
 import matplotlib
 
 PRINT_WIDTH_IN = 5.8
