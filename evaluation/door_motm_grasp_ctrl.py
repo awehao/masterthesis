@@ -96,6 +96,8 @@ BIAS_OBS_TAU = float(os.environ.get('GRASP_BIAS_OBS_TAU', '0.5'))
 BIAS_OBS_MAX = float(os.environ.get('GRASP_BIAS_OBS_MAX', '0.02'))      # 新增殘差補償限幅（rad／軸）
 CLOSE_WAIT_S = float(os.environ.get('GRASP_CLOSE_WAIT_S', '2.0'))   # 插入名目時間到後閉爪準備窗口上限（模擬秒；0＝原單拍判定）
 BG_V = 0.06                                                          # 導航到點後收斂到抓取底盤位姿的參考速度上限（m/s）
+BG_CONT = os.environ.get('D2_BG_CONT', '1') == '1'                  # Howard 11/25「開門前先衝過頭再倒車」：導航到點（容許 0.30 m）時底盤 0.24 m/s，參考一拍降到 BG_V 0.06 ⇒ 煞不住衝過 5.5 cm 再挪回（Isaac 124）⇒ 交接延續當下速率、等減速到點
+BG_A = float(os.environ.get('D2_BG_A', '0.15'))                      # 交接後等減速（m/s²）
 
 
 def _T3_(p):
@@ -397,6 +399,7 @@ class MovingGraspCtrl:
                 obs.append(d_)
             obs = door_filter(obs, getattr(self, 'app_prof', None), getattr(self, 'phi_now', None))
             self._obs_last = (self.t, obs)
+            self._bg_v0 = None                                        # 導航仍在給參考 ⇒ 下次到點交接重新取當下速率
             return X, xi, obs, float(ni.get('u_min0', float('nan'))), 'nav'
         ol = getattr(self, '_obs_last', None)
         obs = ol[1] if (ol is not None and self.t - ol[0] <= 0.5) else None   # 過期（>0.5 s）⇒ None：呼叫端停止，不在無障礙資料下續算
@@ -405,9 +408,17 @@ class MovingGraspCtrl:
         if bg is not None:                                             # 導航到點（前端停止更新）後：同一控制器把底盤帶到抓取底盤位姿（慢速直線、減速收斂；不假設沿門）
             bg = np.asarray(bg, float); X, xi = [], []
             p = np.asarray(qp[:3], float).copy()
+            v_in = None
+            if BG_CONT:
+                if getattr(self, '_bg_v0', None) is None:                # 導航到點交接當下的底盤速率（此後只用來封頂，不再加速）
+                    up_ = getattr(self, 'u_prev', None)
+                    self._bg_v0 = float(np.hypot(up_[0], up_[1])) if up_ is not None else 0.0
+                v_in = self._bg_v0
             for k in range(N + 1):
                 d_ = bg[:2] - p[:2]; dist = float(np.linalg.norm(d_)); dth = (bg[2] - p[2] + math.pi) % (2 * math.pi) - math.pi
                 v = min(BG_V, 0.8 * dist / max(DT, 1e-6) * DT / 0.5)   # 約 0.5 s 時間常數減速、上限 BG_V
+                if v_in is not None:
+                    v = min(max(v, min(v_in, math.sqrt(2.0 * BG_A * dist))), dist / max(DT, 1e-6))   # 延續交接速率、等減速 BG_A 到點；每拍不越過目標
                 w = max(-0.3, min(0.3, dth / 0.5))
                 X.append(XO.from_xytheta(float(p[0]), float(p[1]), float(p[2])))
                 vw_ = (v * d_ / dist) if dist > 1e-6 else np.zeros(2)

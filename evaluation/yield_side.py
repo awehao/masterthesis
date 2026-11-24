@@ -133,6 +133,7 @@ PRED_V_FAST = float(os.environ.get('YS_PRED_V_FAST', '0.18'))
 PRED_HYST = float(os.environ.get('YS_PRED_HYST', '0.10'))
 PRED_LAT_W = float(os.environ.get('YS_PRED_LAT_W', '1.0'))           # 側移代價（s／m）
 CROSS_MAX_S = float(os.environ.get('YS_CROSS_MAX_S', '15.0'))
+GHOST_CLR = float(os.environ.get('YS_GHOST_CLR', '0.10'))            # 移動群的點離地圖佔據格（家具、牆）中位距離小於此 ⇒ 視為靜物假移動（0＝關）
 
 
 class YieldSide:
@@ -149,6 +150,18 @@ class YieldSide:
         if self._t_G == t:
             return
         G = _groups(obs); dt_ = 0.0 if self._t_G is None else max(0.0, float(t) - self._t_G)
+        if GHOST_CLR > 0.0 and _load_map():                           # Isaac 124（無行人）仍觸發 yield_pred 兩次：落在地圖家具／牆上的「移動群」是追蹤器把靜物可見面變化當成移動（桌腳等），不是行人 ⇒ 本層略過（不改追蹤器與 CBF）
+            keep_ = []
+            for gp in G:
+                c_ = float(np.median([clearance(float(p_[0]), float(p_[1])) for p_ in gp['P']]))
+                if c_ < GHOST_CLR:
+                    if float(t) - getattr(self, '_t_ghost_log', -9.0) >= 1.0:
+                        self._t_ghost_log = float(t)
+                        m_g = gp['P'].mean(axis=0)
+                        self.log.append(dict(t=round(float(t), 2), what='ys_map_ghost', m=[round(float(m_g[0]), 2), round(float(m_g[1]), 2)], v=[round(float(x), 3) for x in gp['v']], n=int(len(gp['P'])), clr=round(c_, 3)))
+                    continue
+                keep_.append(gp)
+            G = keep_
         a_ = 1.0 - math.exp(-dt_ / V_TAU) if V_TAU > 0 and dt_ > 0 else 1.0
         new = []
         for gp in G:
@@ -410,7 +423,7 @@ class YieldSide:
                 ok_ = dm >= (0.0 if (same_ or prev is None) else PRED_HYST)       # 換成別的選擇要多 PRED_HYST 安全餘裕（離線 isaac84：搶先過走到一半翻成等待 ⇒ 撞）
                 key = (0 if ok_ else 1, cost if ok_ else -dm)
                 if best is None or key < best[0]:
-                    best = (key, dict(rho=rho, sg=sg, st=st, n=n, u=u, dm=round(dm, 3), cost=round(cost, 2), v_nav=round(v_nav, 3)))
+                    best = (key, dict(rho=rho, sg=sg, st=st, n=n, u=u, dm=round(dm, 3), cost=round(cost, 2), v_nav=round(v_nav, 3), gm=[round(float(x), 2) for x in G[k_][0]], gv=[round(float(x), 3) for x in G[k_][1]]))
         return None if best is None else best[1]
 
     def _apply_pred(self, t, q, X, obs, dt):
@@ -426,7 +439,7 @@ class YieldSide:
             self.p_off = max(0.0, self.p_off - RATE * dt)
         else:
             if prev is None or abs(prev['rho'] - c['rho']) > 1e-6 or prev['sg'] != c['sg']:
-                self.log.append(dict(t=round(t, 2), what='yield_pred', rho=c['rho'], side=c['sg'], dm=c['dm'], cost=c['cost'], v_nav=c['v_nav']))
+                self.log.append(dict(t=round(t, 2), what='yield_pred', rho=c['rho'], side=c['sg'], dm=c['dm'], cost=c['cost'], v_nav=c['v_nav'], gm=c.get('gm'), gv=c.get('gv')))   # gm／gv：觸發的行人群中心與速度（Isaac 124 無行人仍觸發，查來源）
             self.pchoice = c
             self.p_off = min(self.p_off + RATE * dt, 1.5) if c['sg'] != 0.0 else max(0.0, self.p_off - RATE * dt)
         rho = c['rho']

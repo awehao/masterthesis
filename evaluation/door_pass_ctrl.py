@@ -44,6 +44,50 @@ STOW_V, STOW_WZ = float(os.environ.get('PASS_STOW_V', '0.15')), float(os.environ
 DOOR_V = float(os.environ['PASS_DOOR_V']) if os.environ.get('PASS_DOOR_V') else None   # 門口區（底盤 y＜DONE_Y_MIN）行駛速度框（任務限制，非導航參數；s61：門扇尾端旁全速 0.27 m/s ⇒ 停止軌跡離門扇 0.0984＜0.10 被停）；未設＝原行為
 NEAR_V = float(os.environ['PASS_NEAR_V']) if os.environ.get('PASS_NEAR_V') else None   # 近家具減速（任務限制，非導航參數）：底盤對已知靜態物淨空 <NEAR_D ⇒ 速度框 NEAR_V（s60／s68／s69／第二十八趟：繞家具 0.24 m/s，停止軌跡底盤淨空 0.098–0.0998 被停）；未設＝原行為
 NEAR_D = float(os.environ.get('PASS_NEAR_D', '0.20'))
+CAP_BLEND = float(os.environ.get('PASS_CAP_BLEND', '0.40'))           # Howard 11/25 不平滑：近家具／門口區速度框在邊界一步解除（Isaac 124 108.5 s 0.12→0.24）⇒ 邊界外 CAP_BLEND 內平順升到 CAP_TOP（比原本保守，原限制不放寬）
+CAP_TOP = float(os.environ.get('PASS_CAP_TOP', '0.26'))
+
+
+def _ss(x):
+    x = min(max(float(x), 0.0), 1.0)
+    return x * x * (3.0 - 2.0 * x)
+
+
+REF_VCAP = os.environ.get('D2_REF_VCAP', '1') == '1'                # Howard 11/25「茶几整段底盤很不平滑」：速度框只限車身 x、y 各軸，參考照導航速度跑在前面 ⇒ 兩軸同時貼框、底盤沿車身 45° 斜走（Isaac 124：限速 0.176 時指令 (0.17,0.17)）⇒ 先把參考視窗時間縮放到限速內，框留作上限
+REF_VCAP_K = float(os.environ.get('D2_REF_VCAP_K', '0.95'))          # 參考速度＝框 × 此值（留餘裕，不貼框）
+REF_WCAP = float(os.environ.get('D2_REF_WCAP', '0.30'))              # 參考偏航速率上限（rad/s；第 123、124 趟抓完以框上限 0.5 rad/s 轉 90°）
+
+
+def G_xi_from_X(X, dt):
+    """參考體速度＝相鄰參考位姿相對運動 /dt（同 door_pick_ctrl.xi_from_X）。"""
+    xi = []
+    for k in range(len(X) - 1):
+        T1 = np.linalg.inv(X[k]) @ X[k + 1]
+        xi.append(np.array([T1[0, 2] / dt, T1[1, 2] / dt, math.atan2(T1[1, 0], T1[0, 0]) / dt]))
+    xi.append(xi[-1].copy() if xi else np.zeros(3))
+    return xi
+
+
+def ref_speed_cap(X, v_cap, dt, w_cap=None):
+    """參考視窗時間縮放（不改幾何）：沿視窗依序走，每段實際用時＝max(原 dt, 段長／v_cap, |偏航變化|／w_cap)，再以原拍距 dt 重新取樣（分數索引內插位置與偏航）。
+    回 (新視窗, 是否有縮放)。v_cap 或 w_cap 為 None ⇒ 該項不限。"""
+    n = len(X)
+    if n < 2:
+        return X, False
+    P_ = np.array([[float(Xk[0, 2]), float(Xk[1, 2])] for Xk in X])
+    th_ = np.unwrap(np.array([math.atan2(float(Xk[1, 0]), float(Xk[0, 0])) for Xk in X]))
+    seg = np.linalg.norm(np.diff(P_, axis=0), axis=1); dth = np.abs(np.diff(th_))
+    need = np.full(n - 1, float(dt))
+    if v_cap is not None and v_cap > 1e-6:
+        need = np.maximum(need, seg / float(v_cap))
+    if w_cap is not None and w_cap > 1e-6:
+        need = np.maximum(need, dth / float(w_cap))
+    if float(np.max(need)) <= float(dt) * (1.0 + 1e-6):
+        return X, False
+    tau = np.r_[0.0, np.cumsum(need)]                                  # 各原視窗點在縮放後的時刻
+    u = np.interp(np.arange(n) * float(dt), tau, np.arange(n, dtype=float))   # 縮放後每拍對應的分數索引（超過視窗末端 ⇒ 停在末點）
+    xs = np.interp(u, np.arange(n), P_[:, 0]); ys = np.interp(u, np.arange(n), P_[:, 1]); ths = np.interp(u, np.arange(n), th_)
+    return [XO.from_xytheta(float(xs[k]), float(ys[k]), float(ths[k])) for k in range(n)], True
 
 
 def near_v(b):
@@ -52,7 +96,11 @@ def near_v(b):
         return None
     sh, _ = W._static()
     d = min((float(W.DOC.box_dist(np.array([[float(b[0]), float(b[1]), c[2]]]), c, R, hs)[0]) - W.DOC.RB for _, c, R, hs in sh if W.base_level(c, R, hs)), default=9.0)
-    return NEAR_V if d < NEAR_D else None
+    if d < NEAR_D:
+        return NEAR_V
+    if CAP_BLEND > 0.0 and d < NEAR_D + CAP_BLEND:
+        return NEAR_V + (max(CAP_TOP, NEAR_V) - NEAR_V) * _ss((d - NEAR_D) / CAP_BLEND)
+    return None
 
 
 STOW_JOINT = os.environ.get('PASS_STOW_JOINT', '0') == '1'          # 收臂走關節空間直線（第二十五趟 TCP 混接 ⇒ j1 先甩到 −1.89 再回 0）
@@ -302,6 +350,14 @@ class DoorPassCtrl:
             X = [XO.from_xytheta(*self.b_anchor)] * (XO.N + 1)
             xi = [np.zeros(3)] * (XO.N + 1)
             umin0, src = float('nan'), 'anchor'
+        if src == 'nav' and REF_VCAP and self.phase in ('STOW', 'DRIVE'):   # 參考先時間縮放到本拍速度框內（同下方框的式子）＋偏航速率 REF_WCAP（Isaac 124 繞門扇 0.15 框兩軸貼滿斜走、偏航 0.5 rad/s 打滿）
+            dc_ = DOOR_V is not None and float(qp[1]) < DONE_Y_MIN + max(CAP_BLEND, 0.0)
+            vd_ = (DOOR_V if float(qp[1]) < DONE_Y_MIN else DOOR_V + (max(CAP_TOP, DOOR_V) - DOOR_V) * _ss((float(qp[1]) - DONE_Y_MIN) / CAP_BLEND)) if dc_ else 9.0
+            nvr_ = near_v(qp[:3])
+            vr_ = min(STOW_V if (STOW_MOVE and self.phase == 'STOW') else 9.0, vd_, nvr_ if nvr_ is not None else 9.0)
+            X, sc_ = ref_speed_cap(list(X), None if vr_ >= 9.0 else REF_VCAP_K * vr_, DT, min(REF_WCAP, STOW_WZ))
+            if sc_:
+                xi = G_xi_from_X(X, DT)
         if src == 'nav':                                              # 會車選邊（s92d）：行人正面迎來且側向不足 ⇒ 依地圖淨空選邊平移參考
             yield_apply(self, qp, X, obs, xi)
         arm = dict(mode='hold')
@@ -318,10 +374,11 @@ class DoorPassCtrl:
         u_max_saved = np.asarray(mpc.cfg.u_max, float).copy()
         if math.isfinite(umin0):
             mpc.cfg.u_min = np.array([umin0, u_min_saved[1], u_min_saved[2]])
-        door_cap_ = DOOR_V is not None and self.phase in ('STOW', 'DRIVE') and float(qp[1]) < DONE_Y_MIN
+        door_cap_ = DOOR_V is not None and self.phase in ('STOW', 'DRIVE') and float(qp[1]) < DONE_Y_MIN + max(CAP_BLEND, 0.0)
+        v_door_ = (DOOR_V if float(qp[1]) < DONE_Y_MIN else DOOR_V + (max(CAP_TOP, DOOR_V) - DOOR_V) * _ss((float(qp[1]) - DONE_Y_MIN) / CAP_BLEND)) if door_cap_ else 9.0
         nv_ = near_v(qp[:3]) if self.phase in ('STOW', 'DRIVE') else None
         if (STOW_MOVE and self.phase == 'STOW') or door_cap_ or nv_ is not None:   # 邊走邊收：收臂中底盤速度框；門口區速度框；近家具減速
-            v_ = min(STOW_V if (STOW_MOVE and self.phase == 'STOW') else 9.0, DOOR_V if door_cap_ else 9.0, nv_ if nv_ is not None else 9.0)
+            v_ = min(STOW_V if (STOW_MOVE and self.phase == 'STOW') else 9.0, v_door_, nv_ if nv_ is not None else 9.0)
             lim_ = np.array([v_, v_, STOW_WZ])
             mpc.cfg.u_max = np.minimum(u_max_saved, lim_)
             mpc.cfg.u_min = np.maximum(np.asarray(mpc.cfg.u_min, float), -lim_)

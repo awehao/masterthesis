@@ -55,6 +55,8 @@ PICK_FLOW = os.environ.get('PICK_FLOW', '0') == '1'                 # Howard 11/
 FLOW_V = float(os.environ.get('PICK_FLOW_V', '0.06'))
 FLOW_V_CYL = float(os.environ.get('PICK_FLOW_V_CYL', '0')) or FLOW_V   # 茶几圓柱照導航夾取的抓取點限速（Howard 11/24「路過夾了就走」；抽屜把手維持 FLOW_V）                 # 抓取點附近底盤限速（m/s）
 FLOW_AHEAD = float(os.environ.get('PICK_FLOW_AHEAD', '0.35'))         # 途經點＝抓取點沿行進方向再往前（讓路徑穿過抓取點、不在抓取點停）
+FLOW_CARROT = os.environ.get('PICK_FLOW_CARROT', '1') == '1'         # Howard 11/25「茶几整段不平滑」：續走點在抓取點前 0.35 m、到點半徑也是 0.35 m ⇒ 底盤一到抓取點導航就換往抽屜（Isaac 124 閉爪那拍行進方向東北→西北）
+FLOW_GOAL_EXT = float(os.environ.get('PICK_FLOW_GOAL_EXT', '0.40'))    # ⇒ 導航目標放到續走點再往前此距離（淨空才放；導航到點容許 0.30 m 不會在夾取中到點），沿行進方向越過續走點（投影）或抬起確認才換下一站
 DR_FLOW = PICK_FLOW and os.environ.get('DR_FLOW', '1') == '1'        # 抽屜把手（開、關）同樣照導航：邊走邊展開（早送封包），導航目標＝把手底盤位，近把手只轉偏航與限速，閉爪看狀態
 DR_OBS_PRE = os.environ.get('DR_OBS_PRE', '1') == '1'                # 抽屜觀察位背景先算
 SEEK_FACE_LEAF = os.environ.get('B_SEEK_FACE_LEAF', '1') == '1'      # 回程找門扇：觀察位偏航朝門扇中段
@@ -1077,6 +1079,8 @@ def main():
         def pick_tick(self, t):
             if CHAIN and getattr(self, 'chain', 'cyl') == 'cyl' and (getattr(self, 'n_binned', 0) >= 1 or ((PICK_MOTM_V is not None or PICK_PATH) and self.pick_lifted)):   # 移動中夾取：抬起確認即換下一目標（底盤不折回路線起點）   # 串接：圓柱已放盒 ⇒ 換抽屜任務（導航目標換抽屜櫃粗目標；選位由 drawer_tick 接手）
                 self.chain, self.pick_goal, self.pass_t = 'drawer', None, t
+                if PICK_FLOW and getattr(self, '_flow_next', None) is not None:   # 續走點未到就已抬起確認 ⇒ 直接接往下一站的途經點（原本續走點先到時在 pick_tick 後段接）
+                    self.next_via, self._flow_next, self.pick_via = self._flow_next, None, []
                 self.event('chain_to_drawer')
                 return
             if self.pick_lifted and not self.pick_ret and (not BIN or getattr(self, 'n_binned', 0) >= 1) and not CHAIN:   # 已抬起且證據成立（收納盒：已放盒）⇒ 返回起點（經開著的門）
@@ -1113,7 +1117,15 @@ def main():
                 self.pick_via = [list(p) for p in (sel.get('via') or [])]   # 依可走路線的途經點（里程；Isaac 39–46 Smac 鑽茶几角與未知箱之間的窄縫）
                 if PICK_FLOW and sel.get('e') is not None and not sel.get('convergent'):   # 移動中夾取（照導航）：導航目標＝下一站；途經點＝路線＋抓取點沿行進方向前 FLOW_AHEAD；之後接往下一站的途經點
                     b0f_ = np.asarray(sel['base'], float); ef_ = np.asarray(sel['e'], float)
-                    self.pick_via = self.pick_via + [[float(b0f_[0] + FLOW_AHEAD * ef_[0]), float(b0f_[1] + FLOW_AHEAD * ef_[1])]]
+                    ext_ = 0.0
+                    if FLOW_CARROT:
+                        CRc_ = self._CR; th_c_ = float(sel['base'][2])
+                        for ex_ in np.arange(FLOW_GOAL_EXT, -1e-9, -0.05):   # 最遠且整段淨空的延伸（同選位的底盤淨空式）
+                            if all(CRc_.base_clear(np.r_[b0f_[:2] + s_ * ef_, th_c_], CRc_.PATH_BASE_MARGIN) for s_ in np.arange(FLOW_AHEAD, FLOW_AHEAD + ex_ + 1e-9, 0.05)):
+                                ext_ = float(ex_); break
+                    pc_ = [float(b0f_[0] + (FLOW_AHEAD + ext_) * ef_[0]), float(b0f_[1] + (FLOW_AHEAD + ext_) * ef_[1])]
+                    self.pick_via = self.pick_via + [pc_]
+                    self._flow_carrot = dict(p=pc_, b0=b0f_[:2].copy(), e=ef_.copy(), ext=ext_) if FLOW_CARROT else None
                     self._flow_next = [list(p_) for p_ in (sel.get('via_next') or [])]
                     if CHAIN:
                         self.pick_goal = list(DR_PRIOR)
@@ -1487,7 +1499,13 @@ def main():
             via = getattr(self, 'pick_via', None)
             if not via or self.pick_lifted or self.pick_ret or self.pick_goal is None:
                 return g_
-            while via and float(np.hypot(*(self.b_od_now[:2] - np.asarray(via[0][:2], float)))) <= 0.35:
+            while via:
+                fc_ = getattr(self, '_flow_carrot', None)
+                if fc_ is not None and len(via) == 1 and list(via[0][:2]) == list(fc_['p']):   # 移動中夾取續走點：沿行進方向越過抓取點 FLOW_AHEAD 才算到（抬起確認另由 chain_to_drawer 換站）
+                    if float((self.b_od_now[:2] - fc_['b0']) @ fc_['e']) < FLOW_AHEAD:
+                        break
+                elif float(np.hypot(*(self.b_od_now[:2] - np.asarray(via[0][:2], float)))) > 0.35:
+                    break
                 self.event('pick_via_reached', at=[round(float(x), 3) for x in via[0][:2]], left=len(via) - 1); via.pop(0); self.pass_t = t
             if not via:
                 return g_

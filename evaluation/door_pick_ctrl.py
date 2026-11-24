@@ -654,6 +654,36 @@ class TablePickCtrl(P.DoorPassCtrl):
                 self._ev('pick_binned')
                 self._bin_start(q, 'BIN_STOW')
 
+    def _flow_vc(self, qp):
+        """照導航移動中夾取的抓取點附近限速（APPROACH 在 r_turn 外 ⇒ None）；與速度框同一式。"""
+        b0f_ = np.asarray(self.flow['b0'], float)
+        df_ = float(np.hypot(qp[0] - b0f_[0], qp[1] - b0f_[1]))
+        if self.phase == 'APPROACH' and df_ >= float(self.flow.get('r_turn', 1.0)):
+            return None
+        vc_ = float(self.flow.get('v_cap', 0.08)) * (FLOW_CLOSE_K if self.phase in ('CLOSE', 'CONFIRM') else 1.0)
+        if FLOW_VRAMP and self.phase == 'APPROACH' and getattr(self, '_t_arr', None) is None:   # 進場：r_turn→r_in 之間平順降到 v_cap（原一步跳）
+            rt_, ri_ = float(self.flow.get('r_turn', 1.0)), float(self.flow.get('r_in', 0.35))
+            x_ = min(max((df_ - ri_) / max(rt_ - ri_, 1e-3), 0.0), 1.0)
+            vc_ = vc_ + (max(FLOW_V_HI, vc_) - vc_) * x_ * x_ * (3.0 - 2.0 * x_)
+        return vc_
+
+    def _ref_vcap(self, qp):
+        """本拍會套到底盤的速度框中最小者（同 _solve 後段各框的條件）；無 ⇒ None。只用來時間縮放參考。"""
+        c_ = []
+        if self.flow and self.phase in ('APPROACH', 'CLOSE', 'CONFIRM', 'LIFT', 'VERIFY'):
+            v_ = self._flow_vc(qp)
+            if v_ is not None:
+                c_.append(v_)
+        if self.phase == 'APPROACH' and getattr(self, 'app_v', APP_V) is not None:
+            c_.append(self.app_v if hasattr(self, 'app_v') else APP_V)
+        if self.phase in ('APPROACH', 'RETURN', 'CARRY', 'ALIGN'):
+            nv_ = P.near_v(qp[:3])
+            if nv_ is not None:
+                c_.append(nv_)
+        if self.phase in ('RETURN', 'CARRY'):
+            c_.append(CARRY_V)
+        return min(c_) if c_ else None
+
     def _solve(self, q):
         if self.phase in ('BIN_MOVE', 'BIN_REL', 'BIN_OPEN', 'BIN_DROP', 'BIN_STOW'):
             return self._solve_bin(q)
@@ -683,6 +713,11 @@ class TablePickCtrl(P.DoorPassCtrl):
             X = [XO.from_xytheta(*self.b_anchor)] * (XO.N + 1)
             xi = [np.zeros(3)] * (XO.N + 1)
             umin0, src = float('nan'), 'anchor'
+        if P.REF_VCAP and src in ('nav', 'base_goal'):                   # 參考先時間縮放到限速內（不讓兩軸速度框同時貼滿 ⇒ 斜走、左右翻）；框照舊當上限
+            vr_ = self._ref_vcap(qp)
+            X, sc_ = P.ref_speed_cap(list(X), None if vr_ is None else P.REF_VCAP_K * vr_, DT, P.REF_WCAP)
+            if sc_:
+                xi = xi_from_X(X, DT)
         if self.flow and self.phase in ('APPROACH', 'CLOSE', 'CONFIRM', 'LIFT', 'VERIFY') and src in ('nav', 'base_goal'):   # 照導航移動中夾取：位置照導航；離抓取點 r_turn 內偏航依距離轉到抓取朝向（要夾時才轉），夾到抬起後交回路徑朝向
             b0f_ = np.asarray(self.flow['b0'], float); rt_, ri_ = float(self.flow.get('r_turn', 1.0)), float(self.flow.get('r_in', 0.35))
             Xn_ = []
@@ -746,14 +781,8 @@ class TablePickCtrl(P.DoorPassCtrl):
         if math.isfinite(umin0):
             mpc.cfg.u_min = np.array([umin0, u_min_saved[1], u_min_saved[2]])
         if self.flow and self.phase in ('APPROACH', 'CLOSE', 'CONFIRM', 'LIFT', 'VERIFY'):   # 照導航移動中夾取：抓取點附近限速（閉爪確認更慢；物件只影響速度上限）
-            b0f_ = np.asarray(self.flow['b0'], float)
-            df_ = float(np.hypot(qp[0] - b0f_[0], qp[1] - b0f_[1]))
-            if self.phase != 'APPROACH' or df_ < float(self.flow.get('r_turn', 1.0)):
-                vc_ = float(self.flow.get('v_cap', 0.08)) * (FLOW_CLOSE_K if self.phase in ('CLOSE', 'CONFIRM') else 1.0)
-                if FLOW_VRAMP and self.phase == 'APPROACH' and getattr(self, '_t_arr', None) is None:   # 進場：r_turn→r_in 之間平順降到 v_cap（原一步跳）
-                    rt_, ri_ = float(self.flow.get('r_turn', 1.0)), float(self.flow.get('r_in', 0.35))
-                    x_ = min(max((df_ - ri_) / max(rt_ - ri_, 1e-3), 0.0), 1.0)
-                    vc_ = vc_ + (max(FLOW_V_HI, vc_) - vc_) * x_ * x_ * (3.0 - 2.0 * x_)
+            vc_ = self._flow_vc(qp)
+            if vc_ is not None:
                 lim_ = np.array([vc_, vc_, 0.6])
                 mpc.cfg.u_max = np.minimum(np.asarray(mpc.cfg.u_max, float), lim_)
                 mpc.cfg.u_min = np.maximum(np.asarray(mpc.cfg.u_min, float), -lim_)
@@ -794,6 +823,17 @@ class TablePickCtrl(P.DoorPassCtrl):
             return np.r_[np.asarray(r.u_opt, float), np.zeros(6)], src
         return P.wg_result(self, r, src)
 
+    def _bin_vlim(self, qp):
+        """放盒段底盤速度框 [vx, vy, wz]（任務限制＋近家具減速＋抓完起步斜坡）；同一式供速度框與參考時間縮放。"""
+        nv_ = P.near_v(qp[:3])
+        lim_ = np.array([min(BIN_V, nv_ if nv_ is not None else 9.0)] * 2 + [BIN_WZ])   # 放盒中底盤速度框（任務限制）＋近家具減速
+        if FLOW_VRAMP and self.phase == 'BIN_MOVE':                    # 抓完起步斜坡（原：限速框一解除即 0.06→0.2 m/s、偏航 0.05→0.5 rad/s 同一拍）
+            if getattr(self, '_ex_u0', None) is None:
+                self._ex_u0 = (float(np.hypot(self.u_prev[0], self.u_prev[1])), abs(float(self.u_prev[2])), float(self.t))
+            el_ = max(0.0, float(self.t) - self._ex_u0[2])
+            lim_ = np.minimum(lim_, np.array([max(self._ex_u0[0], 0.04) + EXIT_A * el_] * 2 + [max(self._ex_u0[1], 0.08) + EXIT_AW * el_]))
+        return lim_
+
     def _solve_bin(self, q):
         """放盒／收臂：手臂關節空間剖面（相對底盤，tcp_rel_base）；底盤照導航前端（限速框）或錨定。"""
         qp, sp = self._pred(q)
@@ -802,6 +842,11 @@ class TablePickCtrl(P.DoorPassCtrl):
         if obs is None:
             return None, 'nav_obstacles_stale'
         self.app_prof = None
+        if BIN_MOVE and src == 'nav' and P.REF_VCAP:                  # 參考先時間縮放到本段速度框（含起步斜坡）內，偏航速率限 REF_WCAP（第 123／124 趟抓完以 0.5 rad/s 轉 90°、兩軸貼框斜走）
+            vb_ = self._bin_vlim(qp)
+            X, sc_ = P.ref_speed_cap(list(X), P.REF_VCAP_K * float(vb_[0]), DT, min(P.REF_WCAP, float(vb_[2])))
+            if sc_:
+                xi = xi_from_X(X, DT)
         if BIN_MOVE and src == 'nav':                                   # s150d：放盒中底盤照導航（限速 0.15）沒接會車選邊 ⇒ 橫越行人從側後方追上撞到；同 RETURN 段接上
             X = list(X)
             P.yield_apply(self, qp, X, obs, xi)
@@ -821,13 +866,7 @@ class TablePickCtrl(P.DoorPassCtrl):
         u_max_saved = np.asarray(mpc.cfg.u_max, float).copy()
         if math.isfinite(umin0):
             mpc.cfg.u_min = np.array([umin0, u_min_saved[1], u_min_saved[2]])
-        nv_ = P.near_v(qp[:3])
-        lim_ = np.array([min(BIN_V, nv_ if nv_ is not None else 9.0)] * 2 + [BIN_WZ])   # 放盒中底盤速度框（任務限制）＋近家具減速
-        if FLOW_VRAMP and self.phase == 'BIN_MOVE':                    # 抓完起步斜坡（原：限速框一解除即 0.06→0.2 m/s、偏航 0.05→0.5 rad/s 同一拍）
-            if getattr(self, '_ex_u0', None) is None:
-                self._ex_u0 = (float(np.hypot(self.u_prev[0], self.u_prev[1])), abs(float(self.u_prev[2])), float(self.t))
-            el_ = max(0.0, float(self.t) - self._ex_u0[2])
-            lim_ = np.minimum(lim_, np.array([max(self._ex_u0[0], 0.04) + EXIT_A * el_] * 2 + [max(self._ex_u0[1], 0.08) + EXIT_AW * el_]))
+        lim_ = self._bin_vlim(qp)
         mpc.cfg.u_max = np.minimum(u_max_saved, lim_)
         mpc.cfg.u_min = np.maximum(np.asarray(mpc.cfg.u_min, float), -lim_)
         w0 = time.perf_counter()
