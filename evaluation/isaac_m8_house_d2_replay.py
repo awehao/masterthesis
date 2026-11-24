@@ -59,6 +59,17 @@ def main():
     mv = np.where(np.linalg.norm(np.diff(R[:, 2:4], axis=0), axis=1) > 1e-5)[0]
     t_from = a.t_from if a.t_from >= 0 else max(0.0, (float(R[mv[0], 0]) - 1.0 if len(mv) else 0.0))
     R = R[R[:, 0] >= t_from]
+    # Howard 11/25「跟車旋轉太厲害，在後面看、不要跟著車轉」：跟車鏡頭方向＝車頭角度零相位高斯平滑（σ＝REPLAY_FOLLOW_SIGMA 秒）；俯視預設固定地圖方向（REPLAY_TOP_YAW＝fixed，+y 朝上）
+    FOLLOW_SIG = float(os.environ.get('REPLAY_FOLLOW_SIGMA', '4.0'))
+    TOP_YAW = os.environ.get('REPLAY_TOP_YAW', 'fixed')
+    _yu = np.unwrap(R[:, 4]); _dt = float(np.median(np.diff(R[:, 0]))) if len(R) > 1 else 0.01
+    if FOLLOW_SIG > 0 and len(R) > 3:
+        from scipy.ndimage import gaussian_filter1d
+        CAM_YAW = gaussian_filter1d(_yu, sigma=max(FOLLOW_SIG / max(_dt, 1e-3), 1.0), mode='nearest')
+    else:
+        CAM_YAW = _yu
+    def cam_yaw(t_):
+        return float(np.interp(t_, R[:, 0], CAM_YAW))
     os.makedirs(a.out, exist_ok=False)
     world = World(stage_units_in_meters=1.0, physics_dt=0.01, rendering_dt=0.01)
     stage = world.stage
@@ -216,11 +227,11 @@ def main():
             p_ = np.array([np.interp(row[0], WKL[:, 0], WKL[:, 1 + 2 * j_]), np.interp(row[0], WKL[:, 0], WKL[:, 2 + 2 * j_])])
             v_.set_world_pose(position=np.array([p_[0], p_[1], 0.85]))
         if 'top' in cams:                                            # 俯視：底盤後 0.25 m、高 5 m，看底盤前 0.2 m 的地面（近正上方，避開正上方視線退化）
-            yw = float(row[4]); hx, hy = math.cos(yw), math.sin(yw)
+            yw = math.pi / 2 if TOP_YAW == 'fixed' else (cam_yaw(row[0]) if TOP_YAW == 'smooth' else float(row[4])); hx, hy = math.cos(yw), math.sin(yw)
             eye = np.array([row[2] - 0.25 * hx, row[3] - 0.25 * hy, 5.0]); tgt = np.array([row[2] + 0.2 * hx, row[3] + 0.2 * hy, 0.0])
             cams['top'].set_world_pose(position=eye, orientation=W0.R_to_wxyz(look_R(eye, tgt)), camera_axes='ros')
-        if 'follow' in cams:                                         # 跟車：底盤斜後上方 2.4 m、看底盤前 0.8 m
-            yw = float(row[4]); hx, hy = math.cos(yw), math.sin(yw)
+        if 'follow' in cams:                                         # 跟車：底盤斜後上方 2.4 m、看底盤前 0.8 m（方向用平滑後的車頭角度）
+            yw = cam_yaw(row[0]); hx, hy = math.cos(yw), math.sin(yw)
             eye = np.array([row[2] - 2.2 * hx + 0.9 * hy, row[3] - 2.2 * hy - 0.9 * hx, 1.9]); tgt = np.array([row[2] + 0.8 * hx, row[3] + 0.8 * hy, 0.55])
             cams['follow'].set_world_pose(position=eye, orientation=W0.R_to_wxyz(look_R(eye, tgt)), camera_axes='ros')
     for _ in range(40):
