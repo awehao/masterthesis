@@ -49,6 +49,10 @@ a = ap.parse_args()
 import multiprocessing as _mp                                    # noqa: E402
 
 
+class _SkipHandle(Exception):
+    pass
+
+
 def _det_worker(conn, fdir):
     """偵測＋估計程序（模擬器啟動前 fork）：收影格 → FL.HandleObs.intake → 回結果；並保存原始深度與彩色。"""
     try:                                                              # 父行程結束即跟著結束（unified_1–_4：本程序繼承 Isaac 互斥鎖描述子，父行程退出後仍等管道而握鎖）
@@ -78,9 +82,13 @@ def _det_worker(conn, fdir):
                 seg_ = dict(_err=repr(e_)[:200])
         _sm = lambda c_: (seg_ or {}).get(c_, {}).get('mask') if isinstance((seg_ or {}).get(c_), dict) else None   # noqa: E731
         try:
+            if m_.get('src') == 'base':                               # 機身相機：門把追蹤（HandleObs 時序融合）只吃手腕相機
+                raise _SkipHandle()
             dep_h_ = m_['dep'] if SEG_ is None else (SV_.roi_depth(m_['dep'], _sm('door_handle')) if _sm('door_handle') is not None else np_.full_like(np_.asarray(m_['dep'], float), np_.nan))
             T_est_, info_ = obs_.intake(dict(dep=dep_h_, K=m_['K'], T_cam=m_['T_cam'], t_obs=m_['t_obs'], q=m_['q'], t_state=m_['t_obs'], pose_source='fk_at_render_time', frame_id='map', fk_vs_render_m=m_['fk_vs_render_m']), m_['t_obs'])
             err_ = None
+        except _SkipHandle:
+            T_est_, info_, err_ = None, dict(cls='base_cam', why='base_cam_no_handle_track'), None
         except Exception as e_:                                  # noqa: BLE001
             T_est_, info_, err_ = None, dict(cls='exception', why='exception'), repr(e_)[:200]
         cyl_ = None
@@ -192,6 +200,7 @@ FINGER_TOL_M = 0.0005
 DT, D_STEPS = 0.01, 8
 STEP_PROF = os.environ.get('D2_STEP_PROF', '0') == '1'               # 主迴圈分項計時（即時化剖析；不改任何行為）
 RENDER_EVERY = max(1, int(os.environ.get('D2_RENDER_EVERY', '1')))
+BASECAM = os.environ.get('D2_BASECAM', '0') == '1'                 # Howard 11/24：機身相機（base_camera，D435 型，車頭前緣 0.26 m、離地約 0.36 m、朝前）接進住宅任務；與手腕相機輪流送偵測
 RENDER_BURST = max(1, int(os.environ.get('D2_RENDER_BURST', '1')))   # 讀相機前連續繪圖步數（RTX 管線延遲）   # 繪圖頻率：每 N 個物理步繪一次（Howard 11/21 問 RTF 1：每步 100 Hz 繪圖＋讀相機）
 _SP_T, _SP_ACC = [0.0], {}
 
@@ -617,6 +626,19 @@ def main():
     cam.set_focal_length(CAM['aperture'] / (2.0 * math.tan(math.radians(CAM['hfov_deg']) / 2.0)))
     cam.set_clipping_range(*CAM['clip'])
     cam.set_local_pose(translation=T_mount[:3, 3], orientation=W0.R_to_wxyz(T_mount[:3, :3]), camera_axes='ros')
+    cam_b, T_bcam = None, None
+    if BASECAM:
+        b_link_ = [b for b in bodies if name_of(b) == 'base_link'][0]
+        T_bl_ = W0.urdf_chain_T(a.urdf, 'base_link', 'base_camera_color_optical_frame')
+        T_bcam = W0.urdf_chain_T(a.urdf, 'base_footprint', 'base_camera_color_optical_frame')   # 平面底盤位姿（地面）→ 機身相機光學座標
+        cam_b = Camera(prim_path=f'{b_link_}/base_cam', resolution=CAM['res'], frequency=CAM['hz'])
+        cam_b.initialize()
+        cam_b.add_distance_to_image_plane_to_frame()
+        cam_b.set_horizontal_aperture(CAM['aperture'])
+        cam_b.set_focal_length(CAM['aperture'] / (2.0 * math.tan(math.radians(CAM['hfov_deg']) / 2.0)))
+        cam_b.set_clipping_range(*CAM['clip'])
+        cam_b.set_local_pose(translation=T_bl_[:3, 3], orientation=W0.R_to_wxyz(T_bl_[:3, :3]), camera_axes='ros')
+        print(f'[fc] 機身相機 base_cam：光學原點（底盤地面座標）{np.round(T_bcam[:3, 3], 4).tolist()}', flush=True)
     try:
         from isaacsim.core.utils.viewports import set_camera_view
         set_camera_view(eye=np.array([3.4, -4.2, 3.2]), target=np.array([1.0, -0.8, 0.6]))
@@ -692,6 +714,7 @@ def main():
     hist, frames, rows, events = {}, [], [], []
     cam_stat = dict(read=0, new=0, used=0, rejects={}, valid=0, fail={}, detect_ms=[])
     last_rf, t_next_cam, seq = [None], 0.0, 0
+    last_rf_b, cam_turn = [None], 0                                  # 機身相機：上一個算圖幀、輪流（0＝手腕先）
     s = q_s[3:].copy()                                                # 手臂設定點
     pipe = [np.zeros(9) for _ in range(D_STEPS)]
     latch, contact_max, clock_bad, step_wall = None, dict(n=0.0, who=None), 0, []
@@ -767,6 +790,27 @@ def main():
         return dict(t_obs=float(t_r) - T0, dep=dep[:, :, 0] if dep.ndim == 3 else dep, rgb=rgba[:, :, :3].astype(np.uint8), T_cam=T_fk, q=hp['q'], rf=rf,
                     fk_vs_render_m=float(np.linalg.norm(T_fk[:3, 3] - hp['T_render'][:3, 3])), map_odom=hp['map_odom'], s=hp['s'])
 
+    def grab_b():                                                    # 機身相機（同一套算圖時刻狀態對齊；外參＝URDF 固定變換）
+        fr = cam_b.get_current_frame()
+        rfd = fr.get('rendering_frame')
+        rf = (rfd.get('referenceTimeNumerator'), rfd.get('referenceTimeDenominator')) if isinstance(rfd, dict) else rfd
+        col = fr.get('rgb') if fr.get('rgb') is not None else fr.get('rgba')
+        if rf is None or rf == last_rf_b[0] or rf == (0, 0) or col is None or fr.get('distance_to_image_plane') is None:
+            return None
+        last_rf_b[0] = rf
+        t_r = fr.get('rendering_time')
+        hp = None if t_r is None else hist.get(int(round(float(t_r) / DT)))
+        if hp is None or abs(hp['t_sim'] - float(t_r)) > 0.25 * DT or hp.get('T_render_b') is None:
+            cam_stat['rejects']['base_no_state'] = cam_stat['rejects'].get('base_no_state', 0) + 1
+            return None
+        dep = np.asarray(fr['distance_to_image_plane'], dtype=np.float32)
+        rgba = np.asarray(col)
+        if dep.size == 0 or rgba.size == 0:
+            return None
+        T_fk = T3(hp['q'][:3]) @ T_bcam
+        return dict(t_obs=float(t_r) - T0, dep=dep[:, :, 0] if dep.ndim == 3 else dep, rgb=rgba[:, :, :3].astype(np.uint8), T_cam=T_fk, q=hp['q'], rf=rf,
+                    fk_vs_render_m=float(np.linalg.norm(T_fk[:3, 3] - hp['T_render_b'][:3, 3])), map_odom=hp['map_odom'], s=hp['s'], src='base')
+
     exc = None
     scans = []
     d2_stat, d2_last, bound, bind_pending, fcmd, released, f_hold, cyl_attached = dict(late=0, on_time=0), None, False, False, FINGER_OPEN, False, None, False
@@ -785,6 +829,9 @@ def main():
             q, jp = q9()
             pos_r, q_r = cam.get_world_pose(camera_axes='ros')
             hist[int(round(t_sim / DT))] = dict(t_sim=t_sim, q=q.copy(), T_render=T_of(pos_r, q_r), map_odom=node.map_odom, s=s.copy())
+            if cam_b is not None:
+                pb_, qb_ = cam_b.get_world_pose(camera_axes='ros')
+                hist[int(round(t_sim / DT))]['T_render_b'] = T_of(pb_, qb_)
             if len(hist) > 300:
                 for kk in sorted(hist)[:len(hist) - 300]:
                     hist.pop(kk, None)
@@ -1078,7 +1125,16 @@ def main():
             if DRAWER and getattr(node, 'dr_pose_vis', None) is not None and not getattr(node, '_dr_pose_set', False):
                 DRS_.set_pose(*[float(v) for v in node.dr_pose_vis]); node._dr_pose_set = True
                 ev('drawer_pose_vision_applied', pose=[round(float(v), 4) for v in node.dr_pose_vis], pose_true=dr_pose_true)
-            f = grab() if (k % RENDER_EVERY == 0) else None              # 只在連續繪圖段的最後一步讀相機（D2_RENDER_EVERY／D2_RENDER_BURST；相機 5 Hz）
+            f = None
+            if k % RENDER_EVERY == 0:                                     # 只在連續繪圖段的最後一步讀相機（D2_RENDER_EVERY／D2_RENDER_BURST；相機 5 Hz）
+                if cam_b is not None and released and cam_turn == 1 and not det_busy and t + 1e-9 >= t_next_cam:   # 開門放手前門把只用手腕相機（不分走 5 Hz）
+                    f = grab_b()
+                    if f is None:
+                        f = grab()
+                else:
+                    f = grab()
+                    if f is None and cam_b is not None and released and not det_busy and t + 1e-9 >= t_next_cam:
+                        f = grab_b()
             if f is not None and f['t_obs'] >= t_next_cam - 1e-9:
                 if det_busy:
                     cam_stat['rejects']['detector_busy'] = cam_stat['rejects'].get('detector_busy', 0) + 1
@@ -1087,9 +1143,14 @@ def main():
                     seq += 1
                     cam_stat['used'] += 1
                     stem = f'f{seq:04d}'
+                    src_ = f.get('src', 'wrist')
+                    cam_turn = 1 - cam_turn if cam_b is not None else 0
+                    if src_ == 'base':
+                        stem = f'b{seq:04d}'
+                        cam_stat['base_used'] = cam_stat.get('base_used', 0) + 1
                     det_pend[seq] = dict(f=dict((k_, v_) for k_, v_ in f.items() if k_ not in ('dep', 'rgb')), stem=stem, Th=truth_handle(), t_sent=t)
-                    _DET.send(dict(seq=seq, stem=stem, dep=f['dep'], rgb=f['rgb'], K=Kr, T_cam=f['T_cam'], t_obs=f['t_obs'], q=f['q'], fk_vs_render_m=f['fk_vs_render_m'], table=None if cyl_info is None else cyl_info['table'],
-                                   dbox=(DRS_.interior_box(float(node.dr_q_open)) if (DRAWER and dr_released and getattr(node, 'dr_q_open', None) is not None and not cyl_attached) else None),
+                    _DET.send(dict(seq=seq, stem=stem, src=src_, dep=f['dep'], rgb=f['rgb'], K=Kr, T_cam=f['T_cam'], t_obs=f['t_obs'], q=f['q'], fk_vs_render_m=f['fk_vs_render_m'], table=None if cyl_info is None else cyl_info['table'],
+                                   dbox=(DRS_.interior_box(float(node.dr_q_open)) if (src_ == 'wrist' and DRAWER and dr_released and getattr(node, 'dr_q_open', None) is not None and not cyl_attached) else None),
                                    hspec=os.path.join(WS, reg['drawer']['asset']) if DRAWER else None,
                                    leafdet=bool(DOOR_CLOSE and released and not bound and float(np.hypot(f['q'][0], f['q'][1])) < 3.5),
                                    hprior=([float(v) for v in reg['drawer']['pose'][:2]] + [math.radians(float(reg['drawer']['pose'][2]))] if (DRAWER and HANDLE_VISION and not dr_bound and not dr_released
@@ -1120,7 +1181,9 @@ def main():
                 if rr.get('seg') is not None:                          # Mask R-CNN：推論耗時、各類別最高分數
                     frames[-1]['seg'] = rr['seg']
                     cam_stat.setdefault('seg_ms', []).append(rr['seg'].get('ms'))
-                node.p_obs.publish(Float64MultiArray(data=[float(seq_r), float(f['t_obs']), 1.0 if T_est is not None else 0.0, *[float(v) for v in f['q'][:3]], *([float(v) for v in T_bh.reshape(-1)] if T_bh is not None else [float('nan')] * 16), float(t)]))
+                frames[-1]['src'] = f.get('src', 'wrist')
+                if f.get('src') != 'base':                             # 機身影格不送門把觀測（不讓「無效」計入門把融合）
+                  node.p_obs.publish(Float64MultiArray(data=[float(seq_r), float(f['t_obs']), 1.0 if T_est is not None else 0.0, *[float(v) for v in f['q'][:3]], *([float(v) for v in T_bh.reshape(-1)] if T_bh is not None else [float('nan')] * 16), float(t)]))
                 if rr.get('leaf') is not None:                         # 門扇開度觀測（rad）
                     l_ = rr['leaf']
                     node.p_leaf.publish(Float64MultiArray(data=[float(seq_r), float(f['t_obs']), 1.0 if l_.get('phi') is not None else 0.0, *[float(v) for v in f['q'][:3]], float('nan') if l_.get('phi') is None else float(l_['phi'])]))

@@ -24,6 +24,8 @@ ap.add_argument('--every-s', type=float, default=2.0, help='沿紀錄取樣間�
 ap.add_argument('--jitter', type=float, default=0.5, help='每個取樣點另加擾動影格的機率')
 ap.add_argument('--neg-keep', type=float, default=0.35, help='全背景影格保留機率')
 ap.add_argument('--seed', type=int, default=0)
+ap.add_argument('--basecam', type=int, default=0, help='1＝另存機身相機（base_camera，D435 型，車頭前緣）視角（Howard 11/24：機身相機接進住宅任務）')
+ap.add_argument('--no-wrist', type=int, default=0, help='1＝只存機身相機')
 ap.add_argument('--reg', default=os.path.join(HERE, 'experiments', '20261121_m8_house_r2w3_scene.json'))
 ap.add_argument('--urdf', default=os.path.join(WS, 'evaluation/models/omni_bot_manip.urdf'))
 a = ap.parse_args()
@@ -126,6 +128,19 @@ def main():
     cam.set_focal_length(CAM['aperture'] / (2.0 * math.tan(math.radians(CAM['hfov_deg']) / 2.0)))
     cam.set_clipping_range(*CAM['clip'])
     cam.set_local_pose(translation=T_mount[:3, 3], orientation=W0.R_to_wxyz(T_mount[:3, :3]), camera_axes='ros')
+    b_base0 = [b for b in bodies if str(b).rstrip('/').split('/')[-1] == 'base_link'][0]
+    cams = [] if a.no_wrist else [(cam, 'w')]
+    if a.basecam:
+        T_bc = W0.urdf_chain_T(a.urdf, 'base_link', 'base_camera_color_optical_frame')
+        cam_b = Camera(prim_path=f'{b_base0}/base_cam', resolution=CAM['res'], frequency=CAM['hz'])
+        cam_b.initialize()
+        cam_b.add_distance_to_image_plane_to_frame()
+        cam_b.add_semantic_segmentation_to_frame()
+        cam_b.set_horizontal_aperture(CAM['aperture'])
+        cam_b.set_focal_length(CAM['aperture'] / (2.0 * math.tan(math.radians(CAM['hfov_deg']) / 2.0)))
+        cam_b.set_clipping_range(*CAM['clip'])
+        cam_b.set_local_pose(translation=T_bc[:3, 3], orientation=W0.R_to_wxyz(T_bc[:3, :3]), camera_axes='ros')
+        cams.append((cam_b, 'b'))
     import rear_bin as RBIN_                                          # 車尾收納盒：同實跑（方盒掛 base_link 下，隨底盤；此處不加碰撞）
     b_base = [b for b in bodies if str(b).rstrip('/').split('/')[-1] == 'base_link'][0]
     bp_ = str(b_base) + '/rear_bin'
@@ -226,48 +241,48 @@ def main():
             for tag, rw in variants:
                 key.GetIntensityAttr().Set(float(rng.uniform(900, 1800)))
                 dome.GetIntensityAttr().Set(float(rng.uniform(300, 650)))
-                prev_, stable_ = None, 0                              # 試跑發現：語意標註比 RGB 晚一格更新 ⇒ 重複算圖到標註連續兩次相同（且至少 4 步）才讀
-                for k_ in range(12):
-                    set_scene(rw, obp, dro, wk)
-                    world.step(render=True)
-                    fr = cam.get_current_frame()
-                    seg = fr.get('semantic_segmentation') or {}
-                    sd_ = np.asarray(seg.get('data'))
-                    if prev_ is not None and sd_.shape == prev_.shape and np.array_equal(sd_, prev_):
-                        stable_ += 1
-                    else:
-                        stable_ = 0
-                    prev_ = sd_.copy() if sd_.ndim >= 2 else None
-                    if k_ >= 3 and stable_ >= 1:
-                        break
-                world.step(render=True)                               # 再一步讓 RGB／深度跟上同一姿態
-                fr = cam.get_current_frame()
-                rgba = np.asarray(cam.get_rgba())
-                dep = np.asarray(fr.get('distance_to_image_plane'))
-                seg = fr.get('semantic_segmentation') or {}
-                sd, info = np.asarray(seg.get('data')), (seg.get('info') or {}).get('idToLabels', {})
-                if rgba.ndim != 3 or sd.ndim < 2:
-                    print(f'[seg] 影格無效 趟 {run_n} t={ts:.1f}', flush=True)
-                    continue
-                lab = np.zeros(sd.shape[:2], np.uint8)
-                for sid, lv in info.items():
-                    nm = lv.get('class') if isinstance(lv, dict) else str(lv)
-                    if nm in CLASSES:
-                        lab[sd.reshape(sd.shape[:2]) == int(sid)] = CLASSES.index(nm)
-                cnt = {CLASSES[c]: int((lab == c).sum()) for c in range(1, len(CLASSES)) if (lab == c).any()}
-                if not cnt and rng.random() > a.neg_keep:
-                    continue
-                stem = f'r{run_n}_{j:04d}{tag}'
-                Image.fromarray(rgba[:, :, :3].astype(np.uint8)).save(os.path.join(a.out, stem + '_rgb.png'))
-                Image.fromarray(lab).save(os.path.join(a.out, stem + '_label.png'))
-                np.savez_compressed(os.path.join(a.out, stem + '_depth.npz'), dep=dep.astype(np.float16))
-                if K is None:
-                    K = np.asarray(cam.get_intrinsics_matrix(), float).tolist()
-                p_, q_ = cam.get_world_pose(camera_axes='ros')
-                idx_f.write(json.dumps(dict(stem=stem, run=run_n, t=round(float(ts), 2), variant=tag, counts=cnt, K=K, cam_p=[float(x) for x in p_], cam_wxyz=[float(x) for x in q_],
-                                            base=[round(float(x), 4) for x in rw['b']], drawer_open=round(dro, 4), door_deg=round(float(rw['door']), 2))) + '\n')
-                idx_f.flush()
-                n_tot += 1
+                for cam, ctag in cams:
+                  prev_, stable_ = None, 0                              # 試跑發現：語意標註比 RGB 晚一格更新 ⇒ 重複算圖到標註連續兩次相同（且至少 4 步）才讀
+                  for k_ in range(12):
+                      set_scene(rw, obp, dro, wk)
+                      world.step(render=True)
+                      fr = cam.get_current_frame()
+                      seg = fr.get('semantic_segmentation') or {}
+                      sd_ = np.asarray(seg.get('data'))
+                      if prev_ is not None and sd_.shape == prev_.shape and np.array_equal(sd_, prev_):
+                          stable_ += 1
+                      else:
+                          stable_ = 0
+                      prev_ = sd_.copy() if sd_.ndim >= 2 else None
+                      if k_ >= 3 and stable_ >= 1:
+                          break
+                  world.step(render=True)                               # 再一步讓 RGB／深度跟上同一姿態
+                  fr = cam.get_current_frame()
+                  rgba = np.asarray(cam.get_rgba())
+                  dep = np.asarray(fr.get('distance_to_image_plane'))
+                  seg = fr.get('semantic_segmentation') or {}
+                  sd, info = np.asarray(seg.get('data')), (seg.get('info') or {}).get('idToLabels', {})
+                  if rgba.ndim != 3 or sd.ndim < 2:
+                      print(f'[seg] 影格無效 趟 {run_n} t={ts:.1f}', flush=True)
+                      continue
+                  lab = np.zeros(sd.shape[:2], np.uint8)
+                  for sid, lv in info.items():
+                      nm = lv.get('class') if isinstance(lv, dict) else str(lv)
+                      if nm in CLASSES:
+                          lab[sd.reshape(sd.shape[:2]) == int(sid)] = CLASSES.index(nm)
+                  cnt = {CLASSES[c]: int((lab == c).sum()) for c in range(1, len(CLASSES)) if (lab == c).any()}
+                  if not cnt and rng.random() > a.neg_keep:
+                      continue
+                  stem = f'r{run_n}_{j:04d}{tag}' + ('' if ctag == 'w' else ctag)
+                  Image.fromarray(rgba[:, :, :3].astype(np.uint8)).save(os.path.join(a.out, stem + '_rgb.png'))
+                  Image.fromarray(lab).save(os.path.join(a.out, stem + '_label.png'))
+                  np.savez_compressed(os.path.join(a.out, stem + '_depth.npz'), dep=dep.astype(np.float16))
+                  K = np.asarray(cam.get_intrinsics_matrix(), float).tolist()
+                  p_, q_ = cam.get_world_pose(camera_axes='ros')
+                  idx_f.write(json.dumps(dict(stem=stem, run=run_n, t=round(float(ts), 2), variant=tag, cam=('wrist' if ctag == 'w' else 'base'), counts=cnt, K=K, cam_p=[float(x) for x in p_], cam_wxyz=[float(x) for x in q_],
+                                              base=[round(float(x), 4) for x in rw['b']], drawer_open=round(dro, 4), door_deg=round(float(rw['door']), 2))) + '\n')
+                  idx_f.flush()
+                  n_tot += 1
             if j % 25 == 0:
                 print(f'[seg] 趟 {run_n} {j}/{len(t_samp)} 累計 {n_tot} 格', flush=True)
     idx_f.close()
