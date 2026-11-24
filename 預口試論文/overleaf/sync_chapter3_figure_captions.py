@@ -16,6 +16,8 @@ REFERENCE_CAPTIONS = {
 
 def update(block):
     path = re.search(r"\\includegraphics(?:\[[^\]]*\])?\s*\{([^}]+)\}", block).group(1)
+    if "/ch03/" in path:
+        block = re.sub(r"width=[0-9.]+\\textwidth", r"width=0.98\\textwidth", block)
     caption = {**CAPTIONS, **REFERENCE_CAPTIONS}.get(Path(path).stem)
     if caption is None:
         return block
