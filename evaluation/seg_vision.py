@@ -135,7 +135,43 @@ def drawer_handle(dep, K, T_cam, bar_mask, front_mask, prior, spec, min_pts=20):
     return dict(origin=origin, yaw=yaw + dyaw, dx=dx, dy=dy, dyaw=dyaw, bar_world=bar_w, z_bar=zb), dict(n_bar=int(len(Q)), n_face=int(len(F)), seen_len=round(x1 - x0, 4), yaw_src=yaw_src, src='seg')
 
 
+LEAF_W = float(os.environ.get('SEG_LEAF_W', '0.95'))                   # 門扇寬（門資產；鉸鏈到門扇外緣）
+LEAF_HINGE_FIT = os.environ.get('SEG_LEAF_HINGE', '1') == '1'
+
+
 def door_leaf(dep, K, T_cam, mask, min_pts=60, min_span=0.30, hinge_tol=0.05):
+    """門扇（Isaac 101 回程：遮罩混入門洞外側牆面 ⇒ 主方向沿牆、直線也過鉸鏈 ⇒ 開 85° 被估成 −5.6°）。
+    以鉸鏈為端點的方位角直方圖：只用離鉸鏈 0.08 m～門寬＋5 cm 的點，取點數最多的方位（±3° 內中位數），支持點沿徑向範圍 ≥ min_span。
+    門開角範圍 −10°～100°（φ＝−方位角）。SEG_LEAF_HINGE=0 退回原主方向法。"""
+    if not LEAF_HINGE_FIT:
+        return _door_leaf_pca(dep, K, T_cam, mask, min_pts, min_span, hinge_tol)
+    P = mask_points(dep, K, T_cam, mask, max_dev=1.5)                # 門扇斜看時深度跨度近 1 m：原 0.15 m 中位數濾波把門扇切成窄條、牆面點多時只留牆
+    if len(P) < min_pts:
+        return None, dict(why='few_points', n=int(len(P)), src='seg')
+    r = np.hypot(P[:, 0], P[:, 1]); th = np.arctan2(P[:, 1], P[:, 0])   # 同 door_leaf_detect：鉸鏈極角帶（只用遮罩內點）
+    lo, hi = -math.radians(113.0), math.radians(15.0)
+    m = (r >= 0.20) & (r <= LEAF_W - 0.03) & (P[:, 2] >= 0.30) & (P[:, 2] <= 1.80) & (th >= lo) & (th <= hi)
+    Q = P[m]
+    if len(Q) < min_pts:
+        return None, dict(why='few_leaf_points', n=int(len(P)), n_in=int(len(Q)), src='seg')
+    tq = np.arctan2(Q[:, 1], Q[:, 0])
+    hist, edges = np.histogram(tq, bins=np.arange(lo, hi + math.radians(1.0), math.radians(1.0)))
+    k = int(np.argmax(np.convolve(hist, np.ones(3), 'same'))); th0 = 0.5 * (edges[k] + edges[k + 1])
+    S = Q[np.abs(tq - th0) <= math.radians(4.0)]
+    if len(S) < min_pts:
+        return None, dict(why='few_support', n=int(len(P)), n_sup=int(len(S)), src='seg')
+    c = S[:, :2].mean(0)
+    w_, V = np.linalg.eigh(np.cov((S[:, :2] - c).T)); a = V[:, 1]
+    if a @ np.array([math.cos(th0), math.sin(th0)]) < 0:
+        a = -a
+    sp = (S[:, :2] - c) @ a
+    span = float(sp.max() - sp.min()); d_h = abs(float(c[0] * a[1] - c[1] * a[0]))
+    if span < min_span or d_h > hinge_tol:
+        return None, dict(why='leaf_shape', span=round(span, 3), hinge_dist=round(d_h, 3), n=int(len(P)), n_sup=int(len(S)), src='seg')
+    return -math.atan2(a[1], a[0]), dict(n=int(len(P)), n_in=int(len(Q)), n_sup=int(len(S)), span=round(span, 3), hinge_dist=round(d_h, 4), theta0_deg=round(math.degrees(th0), 2), src='seg', method='hinge_band_pca')
+
+
+def _door_leaf_pca(dep, K, T_cam, mask, min_pts=60, min_span=0.30, hinge_tol=0.05):
     """門扇：遮罩點 xy 主方向（門局部＝世界，鉸鏈在原點）⇒ φ＝−方向角；核點沿直線範圍 ≥ min_span、直線過鉸鏈附近。輸出同 door_leaf_detect.detect。"""
     P = mask_points(dep, K, T_cam, mask)
     if len(P) < min_pts:
