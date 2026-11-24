@@ -8,6 +8,7 @@ TAG=${1:?要給 TAG，如 s300d}; shift
 bash "$MISSION/tools/wait_clean.sh" || { echo "還有導航／替身程序沒收乾淨：先跑 mission/launch/stop_all.sh"; exit 1; }
 load_env task.env stub.env
 apply_overrides "$@"
+[ -n "$B_PICK_RETURN" ] || export B_PICK_RETURN="$(echo "${D2_START:-1.5,-4.5,1.5708}" | cut -d, -f1-3)"   # 回程終點預設＝替身起點（D2_START 前三個）
 export DOOR_QP_DUMP_DIR=$D2OUT/${TAG}_qpfail
 cd "$WS"
 (setsid timeout 9000 bash evaluation/motm_dry/run_d2_stub.sh evaluation/results/motm_direct/d2/$TAG 900 > "$MISSION/logs/$TAG.out" 2>&1 < /dev/null &)

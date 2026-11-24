@@ -11,6 +11,7 @@ pgrep -f "[i]saac_m8_house" >/dev/null && { echo "已有 Isaac 在跑，一次�
 bash "$MISSION/tools/wait_clean.sh" || exit 1
 load_env task.env isaac.env
 apply_overrides "$@"
+[ -n "$B_PICK_RETURN" ] || export B_PICK_RETURN="$START"         # 回程終點預設＝起點（只改 START 即可換起點）
 export RUN_ID=m8house_d2_unified_$N FREEZE=$FRZ
 K=$(grep -l k10temp /sys/class/hwmon/*/name | head -1 | xargs dirname)
 cd "$WS"
