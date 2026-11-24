@@ -43,6 +43,8 @@ CARRY_POS = np.array([float(x) for x in os.environ.get('DR_CARRY_POS', '0.30,0.0
 T_CARRY_DR = float(os.environ.get('DR_T_CARRY', '4.0'))
 CLOSE_LEAVE_M = float(os.environ.get('DR_CLOSE_LEAVE_M', '0.005'))
 LIFT_DELAY = 0.35                                                     # 抬升自退出名目時間的 35% 起（先水平離開橫桿）
+RET_CENTER = os.environ.get('DR_RET_CENTER', '1') == '1'
+RET_CENTER_MAX = float(os.environ.get('DR_RET_CENTER_MAX', '0.008'))
 
 
 class DrawerCtrl(PK.TablePickCtrl):
@@ -192,7 +194,8 @@ class DrawerCtrl(PK.TablePickCtrl):
         ux = XE.minjerk(r)[0]
         uz = XE.minjerk(min(max((r - LIFT_DELAY) / (1.0 - LIFT_DELAY), 0.0), 1.0))[0]
         T = self.T_rel_r0.copy()
-        T[:3, 3] = T[:3, 3] + ux * self.dvec_b + uz * np.array([0.0, 0.0, RET_LIFT])
+        uc = XE.minjerk(min(r / 0.15, 1.0))[0]                         # 開合軸對中：退開前段把張開的兩指移回橫桿中心（Isaac 97：上指只剩 ~2.5 mm 餘隙，水平退開時壓著橫桿把抽屜拖出 6.7 mm）
+        T[:3, 3] = T[:3, 3] + ux * self.dvec_b + uz * np.array([0.0, 0.0, RET_LIFT]) + uc * getattr(self, 'dc_b', np.zeros(3))
         return T
 
     def _advance(self, q):
@@ -261,6 +264,13 @@ class DrawerCtrl(PK.TablePickCtrl):
                     Tc = K.fk(q, 'link_tcp')
                     self.T_rel_r0 = np.linalg.inv(_T3(q[:3])) @ Tc
                     self.dvec_b = _T3(self.b_anchor)[:3, :3].T @ (-P.S_RET * Tc[:3, 2])   # 沿接近軸（工具 z）反向
+                    self.dc_b = np.zeros(3)
+                    if RET_CENTER and self.task == 'handle' and getattr(self, 'T_grasp', None) is not None:
+                        c_ = self.T_grasp[:3, 3] + float(self.q_open) * self.pull       # 橫桿目前位置（抓取點＋拉出位移）
+                        yv_ = self.T_grasp[:3, 1]
+                        d_ = float(np.clip(float((c_ - Tc[:3, 3]) @ yv_), -RET_CENTER_MAX, RET_CENTER_MAX))
+                        self.dc_b = _T3(q[:3])[:3, :3].T @ (d_ * yv_)
+                        self._ev('dr_ret_center', dy_mm=round(d_ * 1e3, 2))
                     self._goto('RETREAT', finger=[round(float(x), 5) for x in fm])
                 elif el > P.FINGER_TO_S:
                     self._stop('finger_open_timeout', finger=None if fm is None else [round(float(x), 5) for x in fm])
