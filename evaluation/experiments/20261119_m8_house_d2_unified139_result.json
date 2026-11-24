@@ -1,0 +1,52 @@
+{
+ "run_id": "m8house_d2_unified_139",
+ "outcome": "全鏈成功（n=1，無行人）：開門→穿門→茶几移動中夾取→放盒→開抽屜→取筆→放盒→關抽屜→回程推門穿過並關門→回起點",
+ "end_dist_m": 0.255,
+ "door_end_deg": 1.97,
+ "sim_s": 353.5,
+ "wall_s": 587,
+ "rtf_actual": 0.60,
+ "howard_requests_11_25": [
+  "茶几整段底盤不平滑 → 選 A：抓取位附近導航路徑側向拉近、不要經過線",
+  "開門前（不是開門後）衝過頭再倒車；開門有點停止操作，希望車到 TCP 到",
+  "影片要倍速、跟車鏡頭不要跟著車轉",
+  "關掉偏航即可 → 只要全域導航段都要 heading on → 很多段倒車很奇怪、閃避用全向輪側移 → 129 已經不錯，最後不要倒車就好"
+ ],
+ "settings": {
+  "RTF_target": 0.7,
+  "D2_WALKERS": 0,
+  "HEAD_HOLD": 1,
+  "HEAD_REV_DEG": 100, "HEAD_REV_D": 1.5,
+  "B_APP_SYNC": 1, "B_APP_SYNC_TRIG": 1.0, "B_APP_SYNC_SETTLE": 0.3,
+  "D2_FS_PRED_GOAL": 1,
+  "D2_BG_CONT": "1（僅門把接近 MovingGraspCtrl）",
+  "D2_POST_INTERP": 1,
+  "D2_REF_VCAP": 1, "D2_REF_WCAP": 0.30,
+  "PICK_FLOW_PULL": 1, "PICK_FLOW_PULL_DOUT": 2.5, "PICK_FLOW_PULL_TIN": 4.0, "PICK_FLOW_PULL_TOUT": 3.0,
+  "PICK_FLOW_YAW_LOCK": 1, "PICK_FLOW_CARROT": 1, "PICK_SEL_BNB": 1,
+  "YS_GHOST_CLR": 0.10, "YS_PRED_MIN_AGE": 0.8,
+  "PASS_CAP_BLEND": 0.40,
+  "D2_DR_BOX_MARGIN": 0.03,
+  "D2_PACE": "grasp:CLOSE/CONFIRM/READY、open、pass:UNBIND/FINGERS/RETREAT=0.35；pick:APPROACH=0.6"
+ },
+ "compare": {
+  "unified_124": {"door_app_to_bind_s": 9.5, "door_still_s": 2.3, "table_lat_flips": 7, "table_yaw_flips": 5, "total_rotation_rad": 25.5, "reverse_s": 9.5, "rtf": 0.78},
+  "unified_129": {"door_app_to_bind_s": 8.4, "door_still_s": 2.7, "table_lat_flips": 8, "table_yaw_flips": 7, "total_rotation_rad": 12.3, "reverse_s": 37.7, "rtf": 0.66},
+  "unified_139": {"door_app_to_bind_s": 5.9, "door_still_s": 1.0, "door_backoff_m": 0.001, "table_lat_flips": 5, "table_yaw_flips": 3, "table_wz_max": 0.369, "total_rotation_rad": 14.4, "reverse_s": 23.9, "rtf": 0.60}
+ },
+ "reverse_breakdown_139": "拉門開門 3.4 s＋繞門扇退出 3.6 s＋抽屜拉開／關後退開／離櫃 7.0 s＋回程關門接近 4.8 s＋回起點轉身中 4.6 s（129 該段倒退 15 s）",
+ "failures_on_the_way": {
+  "125": "放手後切回 RTF 1.0 一拍 50.9 ms 晚到 ⇒ 放手三相配速 0.35",
+  "126": "抽屜展開一拍 53.7 ms 晚到（RTF 1.0）⇒ 目標 0.8",
+  "127": "回程關門手臂掃到門扇夾空（交接延續速率誤套關門控制）⇒ 限門把接近",
+  "130": "導航鏈未就緒（planner／map_server／amcl）",
+  "131": "茶几接近每拍 48–68 ms（拉近後 CBF 較多）⇒ pick:APPROACH 配速 0.6",
+  "132": "開門中 solver_fail（偶發）",
+  "133": "接近對齊後首段直線外推過頭 ⇒ 預測 IK 殘差 4.9 cm ⇒ 首段預測底盤＝抓取底盤位",
+  "134": "放盒後一拍 61 ms 晚到（RTF 0.8）⇒ 目標 0.7",
+  "135": "Isaac 啟動卡在 #EARLY r4（殘留 carb 號誌 98 個）⇒ 清理一併清號誌",
+  "136": "交權後 0.9 s 控制伺服器停頓 325 ms（偶發）",
+  "137-138": "抽屜內筆偵測範圍貼板、位姿／開度差 1 cm 即框進板面 ⇒ 範圍內縮 3 cm"
+ },
+ "not_claims": ["n=1", "無行人", "開門段 RTF 0.35、取物接近 0.6，非即時", "倒車未歸零：操作本身（拉門、拉抽屜、退開）約 19 s"]
+}
