@@ -22,7 +22,7 @@ START="${START:-1.5,-2.8,1.5708}"; ARM="${ARM:--0.0128,-0.0519,0.086,0.0116,-1.6
 SIM_LIMIT="${SIM_LIMIT:-90}"; RTF="${RTF:-0.3}"
 PLATFORM="${PLATFORM:-laptop}"
 case "$PLATFORM" in                                                  # 平台排程（另登錄、凍結）：laptop＝TUF A14（快核 0–3、10–13）；desktop＝9800X3D（邏輯核 i 與 i+8 同實體核，lscpu -e 核過）
-  desktop) D_ISAAC=0,8,1,9; D_NAV=2,10,7,15; D_SUP=3,11; D_PL=4,12; D_WORLD=4,12,5,13,6,14 ;;
+  desktop) D_ISAAC=0,8,1,9; D_NAV=2,10,7,15; D_SUP=3,11; D_PL=3,11; D_WORLD=4,12,5,13,6,14 ;;   # 11/25：規劃原 4,12 與控制伺服器重疊 ⇒ 第 136／155／159 趟控制拍外停頓 110–325 ms（計算本身 15 ms）⇒ 規劃改與監督共用 3,11
   *)       D_ISAAC=0,10,4,5,14,15; D_NAV=6,7,16,17; D_SUP=1,11; D_PL=12,13; D_WORLD=2,3,12,13,8,9 ;;
 esac
 ISAAC_CPUS="${ISAAC_CPUS:-$D_ISAAC}"; NAV_CPUS="${NAV_CPUS:-$D_NAV}"; SUP_CPUS="${SUP_CPUS:-$D_SUP}"; export B_PLANNER_CPUS="${B_PLANNER_CPUS:-$D_PL}"; WORLD_CPUS="${WORLD_CPUS:-$D_WORLD}"
