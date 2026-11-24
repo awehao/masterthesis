@@ -376,8 +376,11 @@ LINE_MERGE = os.environ.get('PICK_LINE', '0') == '1' or os.environ.get('PICK_FLO
 LINE_DMIN = float(os.environ.get('PICK_LINE_DMIN', '0.46'))          # 經過線底盤中心離桌邊下限
 LINE_TAIL = float(os.environ.get('PICK_LINE_TAIL', '0.15'))          # 窗口後沿線續走（抬升 1.2 s＋確認 0.3 s 約 0.15 m，之後交導航）要淨空的長度；0.35 時 l5 全見即無線可選
 LINE_W_YAW = float(os.environ.get('PICK_LINE_W_YAW', '0.25'))
-LINE_W_TRAV = float(os.environ.get('PICK_LINE_W_TRAV', '0.8'))       # 車頭與經過方向夾角代價（m/rad）
-HEAD_OFFS = tuple(float(x) for x in os.environ.get('PICK_LINE_HEAD_OFFS', '0,0.7854').split(','))   # 車頭自面桌往行進方向轉的候選（rad）        # 偏航代價（m/rad）
+LINE_W_TRAV = float(os.environ.get('PICK_LINE_W_TRAV', '0.8'))
+LINE_W_REACH = float(os.environ.get('PICK_LINE_W_REACH', '4.0'))     # 舒適代價（Howard 11/24「手臂伸那麼遠不是好事、要順暢舒服」）：手臂基座（車心前 ARM_X）到圓柱水平距離超過 REACH_OK 的每 m 折算
+REACH_OK = float(os.environ.get('PICK_REACH_OK', '0.38'))
+ARM_X = 0.11                                                          # arm_base_joint xyz 0.11 0 0.28       # 車頭與經過方向夾角代價（m/rad）
+HEAD_OFFS = tuple(float(x) for x in os.environ.get('PICK_LINE_HEAD_OFFS', '0,0.3927,0.7854').split(','))   # 車頭自面桌往行進方向轉的候選（rad）        # 偏航代價（m/rad）
 
 
 def _path_ik(T, b0, e, ss, q0):
@@ -466,10 +469,12 @@ def select_motm(c_xy, b_now, v_g, goal_next=None, w_dist=1.0, w_sig=0.02, w_dir=
                         h_in = math.atan2(b_start[1] - p_in[1], b_start[0] - p_in[0])
                         cost += LINE_W_YAW * abs((th - h_in + math.pi) % (2 * math.pi) - math.pi)
                     cost += LINE_W_TRAV * abs((th - math.atan2(e[1], e[0]) + math.pi) % (2 * math.pi) - math.pi)   # 車頭與行進方向夾角（抓完沿線往前開，不倒退、不橫走）
+                reach_ = float(np.hypot(c[0] - b[0] - ARM_X * math.cos(th), c[1] - b[1] - ARM_X * math.sin(th)))
+                cost += LINE_W_REACH * max(0.0, reach_ - REACH_OK)
                 if best is None or cost < best['cost']:
                     best = dict(side=side, d=float(d), lat=float(lat), base=b.tolist(), a=a.tolist(), e=e.tolist(), flip=bool(fl), v_g=float(v_g), s_start=float(s_start),
                                 base_start=b_start.tolist(), sigma_min=float(min(fwd[0], bwd[0])), env_min=float(min(fwd[1], bwd[1])), base_clear_min=float(min(fwd[2], bwd[2])),
-                                s_range=[float(ss[0]), float(ss[-1])], t_arm=MOTM_T_ARM, cost=cost, q=g[0].tolist(), T_grasp=Tg.tolist(), via=via_, route_len=L_, b_end=b_end.tolist())
+                                s_range=[float(ss[0]), float(ss[-1])], t_arm=MOTM_T_ARM, cost=cost, reach=reach_, q=g[0].tolist(), T_grasp=Tg.tolist(), via=via_, route_len=L_, b_end=b_end.tolist())
                 break
     if best is not None and Fg is not None:                             # 抓完後的途經點（終點→下一站；route_via 自 Fg 起點＝下一站回溯 ⇒ 反轉）
         v_ = route_via(Fg, np.asarray(best['b_end'], float)[:2])

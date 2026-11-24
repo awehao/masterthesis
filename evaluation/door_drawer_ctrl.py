@@ -93,6 +93,7 @@ class DrawerCtrl(PK.TablePickCtrl):
             self.q_obs0 = None
         elif kind == 'dr_close' and self.task == 'marker' and self.phase == 'RETURN' and getattr(self, 'binned', False):   # Howard 11/19「抽屜也要關阿」：取筆放盒收臂後夾回把手、全身推回（拉開的反向）
             self.task, self.close_mode = 'handle', True
+            self.d_line = PK.D_LINE                                       # 取筆可能用 0.12 預抓；關抽屜再夾橫桿回到 0.08
             self.app_tol_fy = float(os.environ.get('DR_APP_TOL_FY', '0.0008'))   # 關抽屜再夾同一橫桿：恢復開合軸門檻
             self.open0 = float(app.get('q_open', self.q_open))
             self.pull = -np.r_[np.asarray(app['pull'], float)[:2], 0.0]
@@ -117,6 +118,7 @@ class DrawerCtrl(PK.TablePickCtrl):
             self.bin_carry_first = True
             self.app_tol_fy = None                                    # 筆可被推正（非固定橫桿）：不另設開合軸門檻                               # 收納盒：筆先兩段式收臂再放盒
             self.T_grasp = np.asarray(app['T_grasp'], float).copy()   # 已含越過筆軸 4 mm（drawer_reach.grasp_T；s44 這裡再加一次 ⇒ TCP 在筆軸下 9.5 mm，替身判未夾到）
+            self.d_line = float(app.get('d_line', PK.D_LINE))           # 預抓高度＝選位用的高度（Isaac 98：0.08 不可行時改 0.12）
         else:
             self._ev('pick_dr_app_ignored', kind=kind, task=self.task, phase=self.phase)
             return

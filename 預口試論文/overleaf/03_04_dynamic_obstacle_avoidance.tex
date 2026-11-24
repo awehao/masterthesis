@@ -101,6 +101,14 @@
 \end{equation}
 其中 $\mathcal G_k$ 為本次納入的障礙群。側移方向可由主要衝突物件決定，但 $D_c$ 同時考量集合內的其他障礙，以降低避開單一物件卻接近另一物件的情況。此評估使用局部走向與離散取樣近似；實際路徑彎曲、障礙變速與遮蔽的影響，仍需在後續控制與實驗中檢查。
 
+不同候選運動與行人的預測位置如\cref{fig:ch3_dynamic_obstacle_prediction}所示。(a) 為目前觀測，(b) 至 (d) 分別比較原速度、減速與側移在相同未來時刻的位置。減速改變抵達交會區的時間，側移則改變通行位置；實際候選評估依式\eqref{eq:ch3_candidate_clearance_margin}共同考量各障礙與全部選定取樣時刻。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/dynamic_obstacle_prediction.pdf}
+    \caption{同一未來時刻下原速度、減速與側移候選之位置比較}
+    \label{fig:ch3_dynamic_obstacle_prediction}
+\end{figure}
 
 % ==================================================
 % 3.4.3 速度與側移候選評估及導航參考更新
@@ -298,3 +306,16 @@
 底盤命令依序經過速度平滑、雷射防護及最終輪級限制，再送至底盤執行介面。防護層以最近的最終放行命令作為輪級變化限制的基準，並記錄回退來源與命令修正量。若後處理改變原本的最佳化命令，其對底盤與末端預測的影響，需配合執行端回報於後續控制週期處理，相關方法於執行動態補償一節說明。
 
 上述雷射防護用於抑制機器人對可見回波的接近運動，未直接估測回波所屬障礙的速度，因此需與前述動態障礙預測配合。其效能與適用範圍，於第四章依避障距離、命令修正及任務表現進行評估。
+
+% ==================================================
+% 3.4.5 導航參考調整、預測避障與底盤命令處理之分層關係
+% ==================================================
+各層的作用位置如\cref{fig:ch3_navigation_command_layers}所示。參考調整改變導航目標序列，CBF 作用於全身最佳化問題，雷射防護與輪級限制則依序處理待執行底盤命令；最終放行值回報後，供後續命令限制與運動預測使用。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/navigation_command_layers.pdf}
+    \caption{導航參考調整、預測避障與底盤命令處理之分層關係}
+    \label{fig:ch3_navigation_command_layers}
+\end{figure}
+

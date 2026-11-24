@@ -1,6 +1,5 @@
 % !TeX program = xelatex
-% 第三章 3.4 至 3.7 完整稿；接在既有 3.3 後，取代原 3.4。
-% 沿用論文主檔與 amsmath、amssymb，不另加入 chapter 或 document 環境。
+% 已同步第三章方法示意圖；接在 3.3 之後。
 
 % ==================================================
 % 3.4 動態障礙預測與導航參考調整
@@ -100,6 +99,14 @@
 \end{equation}
 其中 $\mathcal G_k$ 為本次納入的障礙群。側移方向可由主要衝突物件決定，但 $D_c$ 同時考量集合內的其他障礙，以降低避開單一物件卻接近另一物件的情況。此評估使用局部走向與離散取樣近似；實際路徑彎曲、障礙變速與遮蔽的影響，仍需在後續控制與實驗中檢查。
 
+不同候選運動與行人的預測位置如\cref{fig:ch3_dynamic_obstacle_prediction}所示。(a) 為目前觀測，(b) 至 (d) 分別比較原速度、減速與側移在相同未來時刻的位置。減速改變抵達交會區的時間，側移則改變通行位置；實際候選評估依式\eqref{eq:ch3_candidate_clearance_margin}共同考量各障礙與全部選定取樣時刻。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/dynamic_obstacle_prediction.pdf}
+    \caption{同一未來時刻下原速度、減速與側移候選之位置比較}
+    \label{fig:ch3_dynamic_obstacle_prediction}
+\end{figure}
 
 % ==================================================
 % 3.4.3 速度與側移候選評估及導航參考更新
@@ -299,6 +306,18 @@
 上述雷射防護用於抑制機器人對可見回波的接近運動，未直接估測回波所屬障礙的速度，因此需與前述動態障礙預測配合。其效能與適用範圍，於第四章依避障距離、命令修正及任務表現進行評估。
 
 % ==================================================
+% 3.4.5 導航參考調整、預測避障與底盤命令處理之分層關係
+% ==================================================
+各層的作用位置如\cref{fig:ch3_navigation_command_layers}所示。參考調整改變導航目標序列，CBF 作用於全身最佳化問題，雷射防護與輪級限制則依序處理待執行底盤命令；最終放行值回報後，供後續命令限制與運動預測使用。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/navigation_command_layers.pdf}
+    \caption{導航參考調整、預測避障與底盤命令處理之分層關係}
+    \label{fig:ch3_navigation_command_layers}
+\end{figure}
+
+% ==================================================
 % 3.5 視覺目標估測與任務參考生成
 % ==================================================
 \section{視覺目標估測與任務參考生成}
@@ -357,6 +376,17 @@
 
 底盤相機與手腕相機依可見性及任務階段提供觀測。當次實驗使用的來源、更新時機及保留策略分別記錄，避免將不同來源的結果視為同一時刻的量測。
 
+% ==================================================
+% 3.5.2 視覺量測與相機位姿依觀測時間配對之流程
+% ==================================================
+視覺量測與相機位姿的時間配對如\cref{fig:ch3_visual_time_alignment}所示。影像處理完成後仍保留原觀測時間 $t_o$，並使用該時刻的相機位姿進行座標轉換，再將世界座標中的目標提供給操作參考生成。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/visual_time_alignment.pdf}
+    \caption{視覺量測與相機位姿依觀測時間配對之流程}
+    \label{fig:ch3_visual_time_alignment}
+\end{figure}
 
 % ==================================================
 % 3.5.3 可行操作區域與底盤目標選擇
@@ -381,6 +411,14 @@
 
 選定候選提供導航目標、操作朝向與可用構型，實際接近路徑仍由導航前端更新。候選區域與路線需配合新觀測重新核對；式\eqref{eq:ch3_operation_base_selection}的選擇範圍為當次已生成且已檢查的候選集合。
 
+底盤選位前後的操作關係如\cref{fig:ch3_visual_operation_reference}所示。系統依已定位目標與家具幾何產生底盤候選，通過淨空、路線與手臂構型檢查後，再依評分選擇操作位姿。選定結果提供導航接近目標與可用手臂構型，後續仍依實際狀態更新控制參考。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/visual_operation_reference.pdf}
+    \caption{操作目標導引之底盤選位與手臂接近}
+    \label{fig:ch3_visual_operation_reference}
+\end{figure}
 
 % ==================================================
 % 3.5.4 導航路徑下之朝向與末端參考生成
@@ -451,6 +489,17 @@
 
 目前模擬在抓持證據成立後，依任務使用夾爪與物件間的理想固定連接。連接建立與解除皆由執行端回報確認，控制器再更新抓持狀態。此假設用於研究抓持後的協同運動，其影響於第四章的限制分析說明。
 
+% ==================================================
+% 3.6.1 接近、閉爪確認與抓持成立之狀態轉移
+% ==================================================
+抓持狀態的轉移如\cref{fig:ch3_grasp_state_transition}所示。閉爪命令發出後，需檢查手指位置與接觸證據，待條件持續成立並取得必要的連接確認後，才銜接抓持後的機構操作或持物運送。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/grasp_state_transition.pdf}
+    \caption{接近、閉爪確認與抓持成立之狀態轉移}
+    \label{fig:ch3_grasp_state_transition}
+\end{figure}
 
 % ==================================================
 % 3.6.2 門與抽屜之機構約束建模
@@ -483,6 +532,18 @@
 \end{equation}
 其中 $R_{a_h}$ 為繞軸 $a_h$ 的旋轉矩陣。開門與關門分別依目標門角更新參考；回程操作前重新估計門扇開度，以處理放手後的門角變化。
 
+% ==================================================
+% 3.6.2 開門前後之門扇、底盤與手臂構型
+% ==================================================
+不同門角下的協同構型如\cref{fig:ch3_door_operation_sequence}所示。把手繞鉸鏈運動時，底盤位置與手臂構型配合調整，並維持式\eqref{eq:ch3_grasp_closed_chain}所定義的抓持相對位姿。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/door_operation_sequence.pdf}
+    \caption{開門前後之門扇、底盤與手臂構型}
+    \label{fig:ch3_door_operation_sequence}
+\end{figure}
+
 對平移抽屜，令 $a_d$ 為拉出方向，$d$ 為相對初始位置的位移，則
 \begin{equation}
     p_H(d)=p_{H,0}+d a_d,
@@ -490,6 +551,20 @@
     \label{eq:ch3_prismatic_handle_model}
 \end{equation}
 拉開與推回依位移參考的方向處理，並共同更新底盤與末端參考。物件機構參數、有效行程及家具幾何屬於已知模型或觀測後更新的資訊，實驗中分別揭露其來源。
+
+% ==================================================
+% 3.6.2 抽屜拉出前後之滑軌位移與全身構型
+% ==================================================
+抽屜拉出前後的機構位移與全身構型如\cref{fig:ch3_drawer_operation_sequence}所示。抽屜沿滑軌平移並保持機構姿態，底盤與手臂則依操作進度更新參考，以維持抓持及所需的運動空間。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/drawer_operation_sequence.pdf}
+    \caption{抽屜拉出前後之滑軌位移與全身構型}
+    \label{fig:ch3_drawer_operation_sequence}
+\end{figure}
+
+
 
 開門階段以把手機構產生末端目標，並可在選定預測步加入閉鏈位姿容許範圍。沿用式\eqref{eq:ch3_tcp_affine_residual}的局部近似，限制為
 \begin{equation}
@@ -534,6 +609,17 @@
 
 抬升、退出家具、移至收納區及收臂依階段產生參考，並檢查手臂、持物與家具的淨空。當物件放入收納區時，先確認連接解除與釋放狀態，再轉入空手收臂或後續操作。不同實驗採用直接持物返回或先收納再返回時，依各自流程評估。
 
+% ==================================================
+% 3.6.3 相對底盤目標下之持物運送與構型保持
+% ==================================================
+相對底盤目標下的運送關係如\cref{fig:ch3_base_relative_carrying}所示。手臂維持相對底盤的末端構型時，物件在世界座標中的位置隨底盤一起改變。此關係由式\eqref{eq:ch3_base_relative_carry_target}建立，與前述世界固定操作目標分別處理。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/base_relative_carrying.pdf}
+    \caption{相對底盤目標下之持物運送與構型保持}
+    \label{fig:ch3_base_relative_carrying}
+\end{figure}
 
 % ==================================================
 % 3.6.4 任務階段切換與控制狀態延續
@@ -594,6 +680,14 @@
 
 底盤命令經防護與輪級限制後，執行端回報最終放行值；手臂則回報實際位置設定點與關節位置。前者更新命令差分及執行紀錄，後者維持增廣模型中 $q_a$ 與 $s_a$ 的區分。各資料以來源時間與序號管理，障礙及視覺資訊另依其有效時間判定。
 
+控制計算與命令接續的時序如\cref{fig:ch3_command_execution_timeline}所示。計算期間既定命令持續執行，控制器依其作用預測新控制段生效時刻的狀態。新結果通過期限與可行性核對後才接續執行；若拒絕或逾時，則沿已核對的停止尾段減速。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/command_execution_timeline.pdf}
+    \caption{控制計算期間之命令接續與停止備援}
+    \label{fig:ch3_command_execution_timeline}
+\end{figure}
 
 % ==================================================
 % 3.7.2 模型偏置估測與末端追蹤補償
@@ -635,6 +729,18 @@
 
 啟用此估測的接近階段，在閉爪開始後凍結估計，並依配置承接至機構操作。更新後的偏置由 QP 預測、在途命令前推與停止軌跡核對共用。此偏移描述指定區間內的等效追蹤差異，其物理來源可能包含負載、伺服追蹤與模型近似。
 
+% ==================================================
+% 3.7.2 模型偏置估測之區間殘差與共用模型更新
+% ==================================================
+模型偏置估測的更新位置如\cref{fig:ch3_model_bias_estimation}所示。區間末殘差先由更新前的偏置估計計算，經平滑與限幅後，再將新偏置提供給後續 QP 預測、在途命令前推與停止軌跡核對使用。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/model_bias_estimation.pdf}
+    \caption{模型偏置估測之區間殘差與共用模型更新}
+    \label{fig:ch3_model_bias_estimation}
+\end{figure}
+
 此外，接近末段可對 TCP 的持續位置誤差施加有界積分補償。令 $\iota_k$ 為目標修正量，在符合接近進度、誤差及低 TCP 速度條件時，更新
 \begin{equation}
     \begin{aligned}
@@ -648,6 +754,18 @@
     \label{eq:ch3_bounded_tcp_target_compensation}
 \end{equation}
 其中 $K_I^{d}$ 為每次更新的離散增益，$\bar\iota$ 為逐軸修正上限。未滿足更新條件時保持補償量，閉爪與確認期間依配置凍結。控制器使用修正後目標產生命令，完成與否仍對原始幾何目標判定。
+
+% ==================================================
+% 3.7.2 末端原始幾何目標與有界命令目標補償
+% ==================================================
+末端目標修正的作用如\cref{fig:ch3_tcp_target_compensation}所示。圖中以單一位置分量說明原始幾何目標、實際末端位置及補償後命令目標的差異；補償量只改變控制器追蹤的命令目標，完成條件仍以原始幾何目標判定。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/tcp_target_compensation.pdf}
+    \caption{末端原始幾何目標與有界命令目標補償}
+    \label{fig:ch3_tcp_target_compensation}
+\end{figure}
 
 模型偏置估測改變關節狀態轉移，TCP 補償則改變追蹤目標，兩者的作用位置、啟用階段及消融比較分別記錄。
 
@@ -696,7 +814,18 @@
 \subsection{整體控制流程與演算法}
 \label{subsec:overall_control_algorithm}
 
-整體方法以任務階段更新參考與限制，以共用模型預測底盤及手臂運動，再由執行端核對與回授形成閉迴路。每一控制週期的運作如下：
+整體方法以任務階段更新參考與限制，以共用模型預測底盤及手臂運動，再由執行端核對與回授形成閉迴路。
+
+整體控制流程如\cref{fig:ch3_wholebody_control_workflow}所示。系統由狀態與感知更新開始，建立生效起點與任務參考後求解全身 GMPC，再依候選核對結果執行新控制段或停止備援，最後以實際命令與新狀態形成回授。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/wholebody_control_workflow.pdf}
+    \caption{全身預測控制之計算、命令核對與執行回授流程}
+    \label{fig:ch3_wholebody_control_workflow}
+\end{figure}
+
+每一控制週期的運作如下：
 
 \begin{enumerate}
     \item 取得機器人位姿、關節位置、位置設定點、障礙與視覺資料，保留來源時間及序號，檢查資料有效性。

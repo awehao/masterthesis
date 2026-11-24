@@ -1227,7 +1227,7 @@ def main():
                     self.pick_Tg_od = Tg_od.copy()
                     app = dict(T_grasp=Tg_od.tolist(), base_goal=[float(Tb_od[0, 3]), float(Tb_od[1, 3]), math.atan2(Tb_od[1, 0], Tb_od[0, 0])], T=Tapp, T_b=max(1.5, Tapp - 1.5), t_l0=max(0.5, Tapp - 2.5))
                     if PICK_FLOW and self.pick_sel.get('e') is not None and not self.pick_sel.get('convergent') and not getattr(self, '_flow_missed', False):
-                        app['flow'] = dict(b0=app['base_goal'], v_cap=FLOW_V, r_turn=1.3, r_in=0.4)   # 底盤照導航；控制器只在抓取點附近改偏航與限速
+                        app['flow'] = dict(b0=app['base_goal'], v_cap=FLOW_V, r_turn=1.3, r_in=0.4, q_grasp=[float(x) for x in self.pick_sel['q']] if self.pick_sel.get('q') is not None else None)   # 底盤照導航；控制器只在抓取點附近改偏航與限速；q_grasp＝選位抓取解（手臂關節內插展開終點，Howard 11/24 順暢）
                     self.p_ho.publish(String(data=json.dumps(dict(what='pick_app', app=app))))
                     self.pick_app_t = t
                     self.event('pick_app_sent', dist=round(dist_, 3), T=round(Tapp, 3))
@@ -1446,8 +1446,8 @@ def main():
                 if g_new_ is not self.pick_goal:                       # 目標保留 ⇒ 不重送（s46：同一目標因 pass_t 更新被重送 ⇒ no_plan）
                     self.pick_goal, self.pass_t = g_new_, t
                     dr['goal_od'] = list(sel['base'])
-                self.event('dr_marker_goal', base=[round(float(x), 4) for x in sel['base']], flip=sel['flip'], sigma_min=round(sel['sigma_min'], 4), env=round(sel['env'], 4), ms=round(dr['box']['ms'], 1))
-                self._dr_send('marker', sel['base'], t, T_grasp=sel['T_grasp'])
+                self.event('dr_marker_goal', base=[round(float(x), 4) for x in sel['base']], flip=sel['flip'], sigma_min=round(sel['sigma_min'], 4), env=round(sel['env'], 4), pre_m=sel.get('pre_m'), ms=round(dr['box']['ms'], 1))
+                self._dr_send('marker', sel['base'], t, T_grasp=sel['T_grasp'], d_line=float(sel.get('pre_m', 0.08)))
                 dr.update(stage='marker', box=None)
 
         def _via_goal(self, t, g_):

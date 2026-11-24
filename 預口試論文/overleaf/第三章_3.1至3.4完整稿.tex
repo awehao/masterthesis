@@ -1,5 +1,5 @@
 % !TeX program = xelatex
-% 第三章開頭與 3.1 至 3.4 整併稿（3.4 已同步新增導航參考預測）。
+% 已同步第三章方法示意圖。
 
 % ==================================================
 % 第三章 研究方法與全身模型預測控制器設計
@@ -138,6 +138,18 @@
 其中 $k$ 為離散時間索引，$A_{B,k}$ 隨參考速度更新。此模型用於建立有限時域內的底盤誤差預測；對數映射採用主值，局部近似之適用性需配合相對位姿誤差及預測時域評估。
 
 % ==================================================
+% 3.1.2 底盤參考位姿、實際位姿與相對幾何關係
+% ==================================================
+底盤位姿的相對幾何關係如\cref{fig:ch3_base_pose_error}所示。圖中 $t_E=R_r^{\top}(p_B-p_r)$ 為相對變換的平移分量；幾何誤差 $e_B$ 則由完整相對位姿的對數映射取得，兩者依各自定義使用。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/base_pose_error.pdf}
+    \caption{底盤參考位姿、實際位姿與相對幾何關係}
+    \label{fig:ch3_base_pose_error}
+\end{figure}
+
+% ==================================================
 % 3.1.3 移動機械臂正向運動學與全身雅可比矩陣
 % ==================================================
 \subsection{移動機械臂正向運動學與全身雅可比矩陣}
@@ -164,6 +176,18 @@
     \label{eq:ch3_wholebody_forward_kinematics}
 \end{equation}
 式\eqref{eq:ch3_wholebody_forward_kinematics}表示相同末端目標可由底盤位姿與手臂構型共同達成，亦說明底盤移動時，手臂需要配合修正其相對構型。
+
+% ==================================================
+% 3.1.3 底盤側移時之手臂構型調整與末端位置保持
+% ==================================================
+底盤與手臂的運動學耦合如\cref{fig:ch3_wholebody_motion_coupling}所示。兩個構型對應相同的世界座標末端目標；底盤側移時，手臂配合調整關節構型，使末端保持在操作目標附近。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/wholebody_motion_coupling.pdf}
+    \caption{底盤側移時之手臂構型調整與末端位置保持}
+    \label{fig:ch3_wholebody_motion_coupling}
+\end{figure}
 
 將末端線速度與角速度均表示於世界座標，定義六維幾何速度 ${}^{W}\nu_E$。其與底盤本體速度及實際關節速度之關係為
 \begin{equation}
@@ -363,6 +387,15 @@
     \label{eq:ch3_augmented_tcp_reconstruction}
 \end{equation}
 其中 ${}^{W}T_B(X_{B,k})$ 為平面位姿的三維嵌入。位置設定點 $s_{a,k}$ 經由追蹤模型影響後續的 $q_{a,k}$，不直接代入正向運動學。雖然底盤與手臂的狀態轉移以分塊形式表示，兩者仍透過共同的末端目標形成控制耦合，相關目標函數於下一節建立。
+
+位置設定點與實際關節位置的追蹤關係如\cref{fig:ch3_arm_setpoint_tracking}所示。圖中以單軸一階追蹤模型呈現設定點固定後，實際關節仍逐步接近設定點的情形，說明預測時需分別保留實際關節位置 $q_a$ 與位置設定點 $s_a$。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/arm_setpoint_tracking.pdf}
+    \caption{手臂設定點與實際關節位置之追蹤關係}
+    \label{fig:ch3_arm_setpoint_tracking}
+\end{figure}
 
 % ==================================================
 % 3.2.3 多步預測模型建立與參數辨識
@@ -618,6 +651,18 @@
 本研究的全身耦合問題採用 Goldfarb 與 Idnani\cite{goldfarb1983dual}之對偶作用集法進行數值求解；未取得通過驗證的解時，再以 Stellato 等人\cite{stellato2020osqp}提出之 OSQP 求解相同問題。作用集法所得解以原始問題檢查可行性與 Karush--Kuhn--Tucker（KKT）條件。接受全身控制解前，另檢查命令有限值、預測關節與設定點之限制殘差，以及輸出命令與求解序列的一致性。未通過接受條件時，交由既定的保持或減速機制處理，相關流程於執行動態補償與控制實現一節說明。
 
 % ==================================================
+% 3.3.3 底盤與手臂於同一全身控制問題中共同求解
+% ==================================================
+共同求解的輸入與輸出關係如\cref{fig:ch3_joint_optimization}所示。導航參考與末端操作目標共同作用於同一控制序列，配合增廣模型及限制條件，同時決定底盤速度命令與手臂設定點變化率。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/joint_optimization.pdf}
+    \caption{底盤與手臂於同一全身控制問題中共同求解}
+    \label{fig:ch3_joint_optimization}
+\end{figure}
+
+% ==================================================
 % 3.3.4 滾動時域控制原則
 % ==================================================
 \subsection{滾動時域控制原則}
@@ -733,6 +778,14 @@
 \end{equation}
 其中 $\mathcal G_k$ 為本次納入的障礙群。側移方向可由主要衝突物件決定，但 $D_c$ 同時考量集合內的其他障礙，以降低避開單一物件卻接近另一物件的情況。此評估使用局部走向與離散取樣近似；實際路徑彎曲、障礙變速與遮蔽的影響，仍需在後續控制與實驗中檢查。
 
+不同候選運動與行人的預測位置如\cref{fig:ch3_dynamic_obstacle_prediction}所示。(a) 為目前觀測，(b) 至 (d) 分別比較原速度、減速與側移在相同未來時刻的位置。減速改變抵達交會區的時間，側移則改變通行位置；實際候選評估依式\eqref{eq:ch3_candidate_clearance_margin}共同考量各障礙與全部選定取樣時刻。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/dynamic_obstacle_prediction.pdf}
+    \caption{同一未來時刻下原速度、減速與側移候選之位置比較}
+    \label{fig:ch3_dynamic_obstacle_prediction}
+\end{figure}
 
 % ==================================================
 % 3.4.3 速度與側移候選評估及導航參考更新
@@ -930,3 +983,16 @@
 底盤命令依序經過速度平滑、雷射防護及最終輪級限制，再送至底盤執行介面。防護層以最近的最終放行命令作為輪級變化限制的基準，並記錄回退來源與命令修正量。若後處理改變原本的最佳化命令，其對底盤與末端預測的影響，需配合執行端回報於後續控制週期處理，相關方法於執行動態補償一節說明。
 
 上述雷射防護用於抑制機器人對可見回波的接近運動，未直接估測回波所屬障礙的速度，因此需與前述動態障礙預測配合。其效能與適用範圍，於第四章依避障距離、命令修正及任務表現進行評估。
+
+% ==================================================
+% 3.4.5 導航參考調整、預測避障與底盤命令處理之分層關係
+% ==================================================
+各層的作用位置如\cref{fig:ch3_navigation_command_layers}所示。參考調整改變導航目標序列，CBF 作用於全身最佳化問題，雷射防護與輪級限制則依序處理待執行底盤命令；最終放行值回報後，供後續命令限制與運動預測使用。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/navigation_command_layers.pdf}
+    \caption{導航參考調整、預測避障與底盤命令處理之分層關係}
+    \label{fig:ch3_navigation_command_layers}
+\end{figure}
+

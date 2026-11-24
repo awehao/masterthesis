@@ -18,6 +18,7 @@ import drawer_scene as D
 D.install(WB)
 OPEN_M = float(D.SPEC['target_open_m']) if D.SPEC else 0.2
 PRE_M = 0.08
+PRE_TIERS = [float(x) for x in os.environ.get('DR_PRE_TIERS', '0.08,0.12').split(',') if x]   # 取筆預抓高度（依序試）
 OBS_H = float(os.environ.get('DR_OBS_H', '0.20'))                     # 觀察時 TCP 高於底板頂
 GRASP_DEPTH = float(os.environ.get('PICK_GRASP_DEPTH', '0.004'))
 CAM_OFF = np.array([0.0675, -0.0325])                                 # 相機光學框原點在 link_eef 的 x, y（URDF；光軸∥工具 z）
@@ -138,14 +139,16 @@ YAW_TIERS = ((0.0,), (-20.0, 20.0))                                    # s89d：
 
 
 def select_marker(c, yaw, q_open, b_now, w_dist=1.0, w_sig=0.02, R_ref=None, T_from=None):
-    for yt in YAW_TIERS:
-        r = _select_marker(c, yaw, q_open, b_now, w_dist, w_sig, R_ref, T_from, yt)
-        if r is not None:
-            return r
+    for pre in PRE_TIERS:                                              # Isaac 98：筆滑近抽屜前板 9 mm ⇒ 預抓 0.08 m 時手臂淨空最多 28 mm（門檻 30）全不可行；改從較高預抓（0.12 m）下降淨空 38.5 mm
+        for yt in YAW_TIERS:
+            r = _select_marker(c, yaw, q_open, b_now, w_dist, w_sig, R_ref, T_from, yt, pre)
+            if r is not None:
+                r['pre_m'] = float(pre)
+                return r
     return None
 
 
-def _select_marker(c, yaw, q_open, b_now, w_dist, w_sig, R_ref, T_from, yaws):
+def _select_marker(c, yaw, q_open, b_now, w_dist, w_sig, R_ref, T_from, yaws, pre=PRE_M):
     best = None
     flips = (False, True)
     if R_ref is not None:                                              # 先試與俯視姿態轉角較小的夾爪方向（少轉手腕）
@@ -156,10 +159,10 @@ def _select_marker(c, yaw, q_open, b_now, w_dist, w_sig, R_ref, T_from, yaws):
         g = _ik_ok(lambda f: grasp_T(c, yaw, f), b, q_open, flips=flips[:1])
         if g is None:
             continue
-        gp = _ik_ok(grasp_T(c, yaw, g['flip'], PRE_M), b, q_open, ENV_SEL)
+        gp = _ik_ok(grasp_T(c, yaw, g['flip'], pre), b, q_open, ENV_SEL)
         if gp is None:
             continue
-        if T_from is not None and not _path_ok(T_from, grasp_T(c, yaw, g['flip'], PRE_M), b, q_open, gp['q']):
+        if T_from is not None and not _path_ok(T_from, grasp_T(c, yaw, g['flip'], pre), b, q_open, gp['q']):
             continue
         dyaw = abs((float(b[2]) - float(b_now[2]) + math.pi) % (2 * math.pi) - math.pi)
         sc = w_dist * (float(np.hypot(*(b[:2] - np.asarray(b_now[:2], float)))) + 0.3 * dyaw) + w_sig / min(g['sigma'], gp['sigma']) - W_ENV * gp['env']   # 偏航差折 0.3 m/rad（少轉底盤、手腕分支連續）

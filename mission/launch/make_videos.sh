@@ -10,6 +10,7 @@ RUN=m8house_d2_unified_$N; RD=$WS/evaluation/runs/$RUN; OUT=$MISSION/logs/replay
 rm -rf "$OUT"
 load_env task.env
 cd "$WS"
+bash "$MISSION/tools/clean_carb_shm.sh" > /dev/null 2>&1
 REPLAY_VIEWS=top,follow ~/venvs/isaacsim-6.0.1/bin/python -u evaluation/isaac_m8_house_d2_replay.py --run $RUN --out "$OUT" > "$MISSION/logs/replay_$N.log" 2>&1 || { echo "重播失敗，看 mission/logs/replay_$N.log"; exit 1; }
 STAMP=$(date -r "$RD/initpose.log" +%Y%m%d_%H%M%S 2>/dev/null || date +%Y%m%d_%H%M%S)
 V=$WS/第八次進度報告素材/影片; mkdir -p "$V"

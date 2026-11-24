@@ -48,6 +48,14 @@
 
 底盤命令經防護與輪級限制後，執行端回報最終放行值；手臂則回報實際位置設定點與關節位置。前者更新命令差分及執行紀錄，後者維持增廣模型中 $q_a$ 與 $s_a$ 的區分。各資料以來源時間與序號管理，障礙及視覺資訊另依其有效時間判定。
 
+控制計算與命令接續的時序如\cref{fig:ch3_command_execution_timeline}所示。計算期間既定命令持續執行，控制器依其作用預測新控制段生效時刻的狀態。新結果通過期限與可行性核對後才接續執行；若拒絕或逾時，則沿已核對的停止尾段減速。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/command_execution_timeline.pdf}
+    \caption{控制計算期間之命令接續與停止備援}
+    \label{fig:ch3_command_execution_timeline}
+\end{figure}
 
 % ==================================================
 % 3.7.2 模型偏置估測與末端追蹤補償
@@ -89,6 +97,18 @@
 
 啟用此估測的接近階段，在閉爪開始後凍結估計，並依配置承接至機構操作。更新後的偏置由 QP 預測、在途命令前推與停止軌跡核對共用。此偏移描述指定區間內的等效追蹤差異，其物理來源可能包含負載、伺服追蹤與模型近似。
 
+% ==================================================
+% 3.7.2 模型偏置估測之區間殘差與共用模型更新
+% ==================================================
+模型偏置估測的更新位置如\cref{fig:ch3_model_bias_estimation}所示。區間末殘差先由更新前的偏置估計計算，經平滑與限幅後，再將新偏置提供給後續 QP 預測、在途命令前推與停止軌跡核對使用。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/model_bias_estimation.pdf}
+    \caption{模型偏置估測之區間殘差與共用模型更新}
+    \label{fig:ch3_model_bias_estimation}
+\end{figure}
+
 此外，接近末段可對 TCP 的持續位置誤差施加有界積分補償。令 $\iota_k$ 為目標修正量，在符合接近進度、誤差及低 TCP 速度條件時，更新
 \begin{equation}
     \begin{aligned}
@@ -102,6 +122,18 @@
     \label{eq:ch3_bounded_tcp_target_compensation}
 \end{equation}
 其中 $K_I^{d}$ 為每次更新的離散增益，$\bar\iota$ 為逐軸修正上限。未滿足更新條件時保持補償量，閉爪與確認期間依配置凍結。控制器使用修正後目標產生命令，完成與否仍對原始幾何目標判定。
+
+% ==================================================
+% 3.7.2 末端原始幾何目標與有界命令目標補償
+% ==================================================
+末端目標修正的作用如\cref{fig:ch3_tcp_target_compensation}所示。圖中以單一位置分量說明原始幾何目標、實際末端位置及補償後命令目標的差異；補償量只改變控制器追蹤的命令目標，完成條件仍以原始幾何目標判定。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/tcp_target_compensation.pdf}
+    \caption{末端原始幾何目標與有界命令目標補償}
+    \label{fig:ch3_tcp_target_compensation}
+\end{figure}
 
 模型偏置估測改變關節狀態轉移，TCP 補償則改變追蹤目標，兩者的作用位置、啟用階段及消融比較分別記錄。
 
@@ -150,7 +182,18 @@
 \subsection{整體控制流程與演算法}
 \label{subsec:overall_control_algorithm}
 
-整體方法以任務階段更新參考與限制，以共用模型預測底盤及手臂運動，再由執行端核對與回授形成閉迴路。每一控制週期的運作如下：
+整體方法以任務階段更新參考與限制，以共用模型預測底盤及手臂運動，再由執行端核對與回授形成閉迴路。
+
+整體控制流程如\cref{fig:ch3_wholebody_control_workflow}所示。系統由狀態與感知更新開始，建立生效起點與任務參考後求解全身 GMPC，再依候選核對結果執行新控制段或停止備援，最後以實際命令與新狀態形成回授。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/wholebody_control_workflow.pdf}
+    \caption{全身預測控制之計算、命令核對與執行回授流程}
+    \label{fig:ch3_wholebody_control_workflow}
+\end{figure}
+
+每一控制週期的運作如下：
 
 \begin{enumerate}
     \item 取得機器人位姿、關節位置、位置設定點、障礙與視覺資料，保留來源時間及序號，檢查資料有效性。

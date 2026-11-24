@@ -29,6 +29,17 @@
 
 目前模擬在抓持證據成立後，依任務使用夾爪與物件間的理想固定連接。連接建立與解除皆由執行端回報確認，控制器再更新抓持狀態。此假設用於研究抓持後的協同運動，其影響於第四章的限制分析說明。
 
+% ==================================================
+% 3.6.1 接近、閉爪確認與抓持成立之狀態轉移
+% ==================================================
+抓持狀態的轉移如\cref{fig:ch3_grasp_state_transition}所示。閉爪命令發出後，需檢查手指位置與接觸證據，待條件持續成立並取得必要的連接確認後，才銜接抓持後的機構操作或持物運送。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/grasp_state_transition.pdf}
+    \caption{接近、閉爪確認與抓持成立之狀態轉移}
+    \label{fig:ch3_grasp_state_transition}
+\end{figure}
 
 % ==================================================
 % 3.6.2 門與抽屜之機構約束建模
@@ -61,6 +72,18 @@
 \end{equation}
 其中 $R_{a_h}$ 為繞軸 $a_h$ 的旋轉矩陣。開門與關門分別依目標門角更新參考；回程操作前重新估計門扇開度，以處理放手後的門角變化。
 
+% ==================================================
+% 3.6.2 開門前後之門扇、底盤與手臂構型
+% ==================================================
+不同門角下的協同構型如\cref{fig:ch3_door_operation_sequence}所示。把手繞鉸鏈運動時，底盤位置與手臂構型配合調整，並維持式\eqref{eq:ch3_grasp_closed_chain}所定義的抓持相對位姿。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/door_operation_sequence.pdf}
+    \caption{開門前後之門扇、底盤與手臂構型}
+    \label{fig:ch3_door_operation_sequence}
+\end{figure}
+
 對平移抽屜，令 $a_d$ 為拉出方向，$d$ 為相對初始位置的位移，則
 \begin{equation}
     p_H(d)=p_{H,0}+d a_d,
@@ -68,6 +91,20 @@
     \label{eq:ch3_prismatic_handle_model}
 \end{equation}
 拉開與推回依位移參考的方向處理，並共同更新底盤與末端參考。物件機構參數、有效行程及家具幾何屬於已知模型或觀測後更新的資訊，實驗中分別揭露其來源。
+
+% ==================================================
+% 3.6.2 抽屜拉出前後之滑軌位移與全身構型
+% ==================================================
+抽屜拉出前後的機構位移與全身構型如\cref{fig:ch3_drawer_operation_sequence}所示。抽屜沿滑軌平移並保持機構姿態，底盤與手臂則依操作進度更新參考，以維持抓持及所需的運動空間。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/drawer_operation_sequence.pdf}
+    \caption{抽屜拉出前後之滑軌位移與全身構型}
+    \label{fig:ch3_drawer_operation_sequence}
+\end{figure}
+
+
 
 開門階段以把手機構產生末端目標，並可在選定預測步加入閉鏈位姿容許範圍。沿用式\eqref{eq:ch3_tcp_affine_residual}的局部近似，限制為
 \begin{equation}
@@ -112,6 +149,17 @@
 
 抬升、退出家具、移至收納區及收臂依階段產生參考，並檢查手臂、持物與家具的淨空。當物件放入收納區時，先確認連接解除與釋放狀態，再轉入空手收臂或後續操作。不同實驗採用直接持物返回或先收納再返回時，依各自流程評估。
 
+% ==================================================
+% 3.6.3 相對底盤目標下之持物運送與構型保持
+% ==================================================
+相對底盤目標下的運送關係如\cref{fig:ch3_base_relative_carrying}所示。手臂維持相對底盤的末端構型時，物件在世界座標中的位置隨底盤一起改變。此關係由式\eqref{eq:ch3_base_relative_carry_target}建立，與前述世界固定操作目標分別處理。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/base_relative_carrying.pdf}
+    \caption{相對底盤目標下之持物運送與構型保持}
+    \label{fig:ch3_base_relative_carrying}
+\end{figure}
 
 % ==================================================
 % 3.6.4 任務階段切換與控制狀態延續

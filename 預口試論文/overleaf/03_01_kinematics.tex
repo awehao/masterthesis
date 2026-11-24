@@ -141,6 +141,18 @@
 其中 $k$ 為離散時間索引，$A_{B,k}$ 隨參考速度更新。此模型用於建立有限時域內的底盤誤差預測；對數映射採用主值，局部近似之適用性需配合相對位姿誤差及預測時域評估。
 
 % ==================================================
+% 3.1.2 底盤參考位姿、實際位姿與相對幾何關係
+% ==================================================
+底盤位姿的相對幾何關係如\cref{fig:ch3_base_pose_error}所示。圖中 $t_E=R_r^{\top}(p_B-p_r)$ 為相對變換的平移分量；幾何誤差 $e_B$ 則由完整相對位姿的對數映射取得，兩者依各自定義使用。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/base_pose_error.pdf}
+    \caption{底盤參考位姿、實際位姿與相對幾何關係}
+    \label{fig:ch3_base_pose_error}
+\end{figure}
+
+% ==================================================
 % 3.1.3 移動機械臂正向運動學與全身雅可比矩陣
 % ==================================================
 \subsection{移動機械臂正向運動學與全身雅可比矩陣}
@@ -167,6 +179,18 @@
     \label{eq:ch3_wholebody_forward_kinematics}
 \end{equation}
 式\eqref{eq:ch3_wholebody_forward_kinematics}表示相同末端目標可由底盤位姿與手臂構型共同達成，亦說明底盤移動時，手臂需要配合修正其相對構型。
+
+% ==================================================
+% 3.1.3 底盤側移時之手臂構型調整與末端位置保持
+% ==================================================
+底盤與手臂的運動學耦合如\cref{fig:ch3_wholebody_motion_coupling}所示。兩個構型對應相同的世界座標末端目標；底盤側移時，手臂配合調整關節構型，使末端保持在操作目標附近。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/wholebody_motion_coupling.pdf}
+    \caption{底盤側移時之手臂構型調整與末端位置保持}
+    \label{fig:ch3_wholebody_motion_coupling}
+\end{figure}
 
 將末端線速度與角速度均表示於世界座標，定義六維幾何速度 ${}^{W}\nu_E$。其與底盤本體速度及實際關節速度之關係為
 \begin{equation}

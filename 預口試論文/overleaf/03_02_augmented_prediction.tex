@@ -146,6 +146,15 @@
 \end{equation}
 其中 ${}^{W}T_B(X_{B,k})$ 為平面位姿的三維嵌入。位置設定點 $s_{a,k}$ 經由追蹤模型影響後續的 $q_{a,k}$，不直接代入正向運動學。雖然底盤與手臂的狀態轉移以分塊形式表示，兩者仍透過共同的末端目標形成控制耦合，相關目標函數於下一節建立。
 
+位置設定點與實際關節位置的追蹤關係如\cref{fig:ch3_arm_setpoint_tracking}所示。圖中以單軸一階追蹤模型呈現設定點固定後，實際關節仍逐步接近設定點的情形，說明預測時需分別保留實際關節位置 $q_a$ 與位置設定點 $s_a$。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/arm_setpoint_tracking.pdf}
+    \caption{手臂設定點與實際關節位置之追蹤關係}
+    \label{fig:ch3_arm_setpoint_tracking}
+\end{figure}
+
 % ==================================================
 % 3.2.3 多步預測模型建立與參數辨識
 % ==================================================

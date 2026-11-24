@@ -66,6 +66,8 @@ if DRAWER:
         _dt = [float(x) for x in os.environ['D2_DRAWER_TRUE'].split(',')]
         DRS.set_pose(*DRS.offset_pose(*_dt))
         MK0 = DRS.marker_nominal(0.0); MK_YAW += math.radians(_dt[2])
+    if os.environ.get('STUB_MK_SLIDE'):                                # 筆在抽屜內沿拉出方向滑動（m；Isaac 98 拉開後筆滑近前板約 9 mm ⇒ 預抓 0.08 m 淨空不足）
+        MK0 = MK0 + float(os.environ['STUB_MK_SLIDE']) * np.r_[np.asarray(DRS.PULL, float)[:2] / max(float(np.linalg.norm(np.asarray(DRS.PULL, float)[:2])), 1e-9), 0.0]
     F_CONTACT_H, F_CONTACT_M = 0.0018, 0.0038                          # 26 mm 橫桿／筆對角 30.02 mm 的接觸開度（資產檔頭的官方網格推導）
 CHAIN = DRAWER and os.environ.get('D2_CHAIN', '0') == '1'             # Howard 11/19：同趟 茶几圓柱 → 車尾收納盒 → 抽屜筆 → 收納盒 → 返回
 BIN = os.environ.get('D2_BIN', '0') == '1'

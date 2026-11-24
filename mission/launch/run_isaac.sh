@@ -14,5 +14,5 @@ apply_overrides "$@"
 export RUN_ID=m8house_d2_unified_$N FREEZE=$FRZ
 K=$(grep -l k10temp /sys/class/hwmon/*/name | head -1 | xargs dirname)
 cd "$WS"
-(until [ $(( $(cat $K/temp1_input) / 1000 )) -le 55 ]; do sleep 15; done; setsid bash evaluation/run_guarded_v3.sh > "$MISSION/logs/isaac_$N.out" 2>&1 < /dev/null; echo rc=$? >> "$MISSION/logs/isaac_$N.out") > /dev/null 2>&1 &
+(until [ $(( $(cat $K/temp1_input) / 1000 )) -le 55 ]; do sleep 15; done; bash "$MISSION/tools/clean_carb_shm.sh" > /dev/null 2>&1; setsid bash evaluation/run_guarded_v3.sh > "$MISSION/logs/isaac_$N.out" 2>&1 < /dev/null; echo rc=$? >> "$MISSION/logs/isaac_$N.out") > /dev/null 2>&1 &
 echo "$(date +%H:%M) Isaac 第 $N 趟已排入（等 CPU ≤55 °C）；看進度：tail -f mission/logs/isaac_$N.out"

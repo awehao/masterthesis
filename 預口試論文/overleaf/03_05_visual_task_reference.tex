@@ -60,6 +60,17 @@
 
 底盤相機與手腕相機依可見性及任務階段提供觀測。當次實驗使用的來源、更新時機及保留策略分別記錄，避免將不同來源的結果視為同一時刻的量測。
 
+% ==================================================
+% 3.5.2 視覺量測與相機位姿依觀測時間配對之流程
+% ==================================================
+視覺量測與相機位姿的時間配對如\cref{fig:ch3_visual_time_alignment}所示。影像處理完成後仍保留原觀測時間 $t_o$，並使用該時刻的相機位姿進行座標轉換，再將世界座標中的目標提供給操作參考生成。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/visual_time_alignment.pdf}
+    \caption{視覺量測與相機位姿依觀測時間配對之流程}
+    \label{fig:ch3_visual_time_alignment}
+\end{figure}
 
 % ==================================================
 % 3.5.3 可行操作區域與底盤目標選擇
@@ -84,6 +95,14 @@
 
 選定候選提供導航目標、操作朝向與可用構型，實際接近路徑仍由導航前端更新。候選區域與路線需配合新觀測重新核對；式\eqref{eq:ch3_operation_base_selection}的選擇範圍為當次已生成且已檢查的候選集合。
 
+底盤選位前後的操作關係如\cref{fig:ch3_visual_operation_reference}所示。系統依已定位目標與家具幾何產生底盤候選，通過淨空、路線與手臂構型檢查後，再依評分選擇操作位姿。選定結果提供導航接近目標與可用手臂構型，後續仍依實際狀態更新控制參考。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/visual_operation_reference.pdf}
+    \caption{操作目標導引之底盤選位與手臂接近}
+    \label{fig:ch3_visual_operation_reference}
+\end{figure}
 
 % ==================================================
 % 3.5.4 導航路徑下之朝向與末端參考生成
