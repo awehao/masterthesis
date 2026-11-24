@@ -155,7 +155,10 @@ _DET_P = _mp.get_context('fork').Process(target=_det_worker, args=(_det_child, o
 _DET_P.start()
 
 from isaacsim import SimulationApp                               # noqa: E402
-sim_app = SimulationApp({'headless': False, 'width': 1280, 'height': 720})
+_ZD = os.environ.get('D2_ZERO_DELAY', '0') == '1'                    # Howard 11/24「為什麼都不能 RTF 1」：Isaac 內建 zero-delay 設定（hydra 等算圖完成、無幀延遲）⇒ 稀疏算圖（D2_RENDER_EVERY>1）時影像與狀態同一幀（第 77／78 趟稀疏算圖深度彩色錯位）
+import isaacsim as _isaacsim_pkg                                   # noqa: E402
+_ZD_KIT = os.path.join(os.path.dirname(_isaacsim_pkg.__file__), 'apps', 'isaacsim.exp.base.zero_delay.kit')
+sim_app = SimulationApp({'headless': False, 'width': 1280, 'height': 720}, experience=os.path.normpath(_ZD_KIT)) if (_ZD and os.path.exists(os.path.normpath(_ZD_KIT))) else SimulationApp({'headless': False, 'width': 1280, 'height': 720})
 import numpy as np                                               # noqa: E402
 import rclpy                                                     # noqa: E402  先匯入真正的 rclpy（部分專案模組會在缺 rclpy 時裝替身）
 from geometry_msgs.msg import Twist                              # noqa: E402

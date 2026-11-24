@@ -35,6 +35,8 @@ H_FQ, H_FQ_TOL, H_FSUM = 0.0018, 0.0006, 1.0                         # 把手夾
 Q_UNFOLD = np.array([float(x) for x in os.environ.get('DR_Q_UNFOLD', '-0.0128,-0.0519,0.086,0.0116,-1.6249,-0.0018').split(',')])   # 抓把手前展開到原收臂構型（第二十三趟：緊湊收臂直接接近 ⇒ 自身淨空 4.9 mm）
 UNFOLD_TOL = 0.03
 CLOSE_UNF_ANCHOR = os.environ.get('DR_CLOSE_UNF_ANCHOR', '1') == '1'
+REGRASP_HOLD = os.environ.get('DR_REGRASP_HOLD', '1') == '1'
+CLOSE_UNF_V = float(os.environ.get('DR_CLOSE_UNF_V', '0.15'))        # 關抽屜展開段退到關抽屜站位的參考速度（m/s）
 OBS_QD = float(os.environ.get('DR_OBS_QD', '0.6'))                    # 俯視關節空間移動峰速上限（rad/s）
 UNF_QD = float(os.environ.get('DR_UNF_QD', '1.2'))                    # 展開關節空間峰速（rad/s）：Howard「依照硬體限制」，Lite 6 手冊 180°/s＝3.14 rad/s，取 38%（原沿用俯視 0.6 ⇒ 展開 7.25 s，照導航接近時底盤已到站等手臂）
 W_Q_OBS = float(os.environ.get('DR_W_Q_OBS', '5.0'))
@@ -81,6 +83,21 @@ class DrawerCtrl(PK.TablePickCtrl):
             self.app_qpost = self._handle_qpost
         self._ev('pick_dr_start', T_grasp=[round(float(x), 4) for x in self.T_grasp[:3, 3]], pull=[round(float(x), 4) for x in self.pull[:2]], open_m=self.open_m)
 
+    def _bg_window(self, qp, v_max=None):
+        """底盤參考：自預測起點直線減速收斂到 app_prof base_goal（同 nav_window 到點後分支；偏航差取模、限 0.3 rad/s）。"""
+        bg = np.asarray(self.app_prof['base_goal'], float); X, xi = [], []
+        p = np.asarray(qp[:3], float).copy()
+        for k in range(XO.N + 1):
+            d_ = bg[:2] - p[:2]; dist = float(np.linalg.norm(d_)); dth = (bg[2] - p[2] + math.pi) % (2 * math.pi) - math.pi
+            v = min(G.BG_V if v_max is None else v_max, 0.8 * dist / 0.5)
+            w = max(-0.3, min(0.3, dth / 0.5))
+            X.append(XO.from_xytheta(float(p[0]), float(p[1]), float(p[2])))
+            vw_ = (v * d_ / dist) if dist > 1e-6 else np.zeros(2)
+            c_, s_ = math.cos(p[2]), math.sin(p[2])
+            xi.append(np.array([c_ * vw_[0] + s_ * vw_[1], -s_ * vw_[0] + c_ * vw_[1], w]))
+            p = p + DT * np.array([vw_[0], vw_[1], w])
+        return X, xi
+
     # ---- 監督送的下一段封包（observe／marker）
     def next_app(self, app, t0):
         kind = app.get('kind')
@@ -101,6 +118,12 @@ class DrawerCtrl(PK.TablePickCtrl):
             self.pull = self.pull / max(float(np.linalg.norm(self.pull)), 1e-9)
             self.open_m = max(0.0, self.open0 - CLOSE_LEAVE_M)              # 留 5 mm 不撞關閉限位（理想連接下硬推限位會拉扯手臂）
             self.T_grasp = np.asarray(app['T_grasp'], float).copy()
+            Tb_ = getattr(self, 'T_bar_hold', None)
+            if REGRASP_HOLD and Tb_ is not None and float(np.linalg.norm(Tb_[:3, 3] - self.T_grasp[:3, 3])) <= 0.02:   # Isaac 103：選位抓取位＋估計開度（0.2003，真值 0.1989）⇒ 深度淺 1.9 mm、側向差 2.2 mm ⇒ 夾空；改用拉開終點實際握桿 TCP（重現第一次抓的相對位姿）
+                pu_ = np.r_[np.asarray(app['pull'], float)[:2], 0.0]; pu_ = pu_ / max(float(np.linalg.norm(pu_)), 1e-9)
+                dd_ = float(np.dot(Tb_[:3, 3] - self.T_grasp[:3, 3], pu_))   # 只取沿拉出（＝接近深度）軸的差：深度重現第一次抓（第 103 趟成敗差在深度 3.1 vs 1.3 mm），側向／高度仍用名目中心（替身 s217d：整個位姿照搬 ⇒ 側向偏移帶過去、超出 6 mm）
+                self._ev('pick_dr_regrasp_hold', d_mm=round(float(np.linalg.norm(Tb_[:3, 3] - self.T_grasp[:3, 3])) * 1e3, 2), d_pull_mm=round(dd_ * 1e3, 2))
+                self.T_grasp = self.T_grasp.copy(); self.T_grasp[:3, 3] = self.T_grasp[:3, 3] + dd_ * pu_
             self.dr_attach, self.dr_release, self.dr_unbound = False, False, False
             self.T_p0, self.b_p0, self.T_rel_r0, self.dvec_b, self.n_ev, self.T_hold = None, None, None, None, 0, None   # T_hold 必清（s80：確認段保持舊退出位姿 ⇒ 手臂抬走、證據逾時）
             self.finger_cmd = P.FINGER_OPEN
@@ -245,6 +268,8 @@ class DrawerCtrl(PK.TablePickCtrl):
                 if el >= self.T_pull and ep <= PULL_TOL:
                     self.b_anchor = np.asarray(q[:3], float).copy()
                     self.T_hold = Tc.copy()
+                    if not getattr(self, 'close_mode', False):
+                        self.T_bar_hold = Tc.copy()                         # 拉開終點握著橫桿時的實際 TCP（關抽屜再夾的目標，見 next_app dr_close）
                     self.dr_release = True
                     self._ev('pick_dr_closed_pushed' if getattr(self, 'close_mode', False) else 'pick_dr_pulled', q_open=round(self.q_open, 4), err_mm=round(ep * 1e3, 2))
                     self._goto('UNBIND')
@@ -366,10 +391,9 @@ class DrawerCtrl(PK.TablePickCtrl):
             if getattr(self, 'close_mode', False) and CLOSE_UNF_ANCHOR:  # 關抽屜再夾：已在櫃前（離把手底盤位 ~0.3 m）⇒ 展開段底盤錨定（Isaac 102／替身 s216d：展開 3.9 s 中照導航轉走 2.5–2.7 rad ⇒ 接近第一拍邊大轉邊伸手、自身淨空 5 mm／計算 >125 ms）
                 if getattr(self, 'b_unf', None) is None:
                     self.b_unf = np.asarray(q[:3], float).copy()
-                    self._ev('pick_close_unfold_anchor', base=[round(float(x), 4) for x in self.b_unf])
-                X = [XO.from_xytheta(*self.b_unf)] * (XO.N + 1)
-                xi = [np.zeros(3)] * (XO.N + 1)
-                umin0, src = float('nan'), 'anchor'
+                    self._ev('pick_close_unfold_anchor', base=[round(float(x), 4) for x in self.b_unf], goal=[round(float(x), 4) for x in self.app_prof['base_goal']])
+                X, xi = self._bg_window(qp, CLOSE_UNF_V)                               # Isaac 104：原地錨定（取筆站位離櫃近）⇒ 展開掃到抽屜前板 4.3 mm ⇒ 改為直線收斂到關抽屜站位、偏航取模限 0.3 rad/s（不吃導航路徑方向）
+                umin0, src = float('nan'), 'base_goal'
         elif self.task == 'observe' and self.q_obs is not None and self.q_obs0 is not None and self.phase in ('APPROACH', 'OBSERVE'):
             if self.phase == 'APPROACH':
                 Ts = [self._obs_rel(t_eff + k * DT) for k in range(XO.N + 1)]

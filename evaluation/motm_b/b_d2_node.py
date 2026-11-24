@@ -52,7 +52,8 @@ NOPATH_RECOVER = os.environ.get('B_NOPATH_RECOVER', '1') == '1'       # 穿門�
 NOPATH_S = float(os.environ.get('B_NOPATH_S', '4.0'))
 HO_LEAD = int(os.environ.get('B_HO_LEAD', '3'))
 PICK_FLOW = os.environ.get('PICK_FLOW', '0') == '1'                 # Howard 11/21 晚：移動中夾取但不要經過線——底盤照導航（目標＝下一站、途經抓取點附近），夾時才轉、限速，閉爪看狀態
-FLOW_V = float(os.environ.get('PICK_FLOW_V', '0.06'))                 # 抓取點附近底盤限速（m/s）
+FLOW_V = float(os.environ.get('PICK_FLOW_V', '0.06'))
+FLOW_V_CYL = float(os.environ.get('PICK_FLOW_V_CYL', '0')) or FLOW_V   # 茶几圓柱照導航夾取的抓取點限速（Howard 11/24「路過夾了就走」；抽屜把手維持 FLOW_V）                 # 抓取點附近底盤限速（m/s）
 FLOW_AHEAD = float(os.environ.get('PICK_FLOW_AHEAD', '0.35'))         # 途經點＝抓取點沿行進方向再往前（讓路徑穿過抓取點、不在抓取點停）
 DR_FLOW = PICK_FLOW and os.environ.get('DR_FLOW', '1') == '1'        # 抽屜把手（開、關）同樣照導航：邊走邊展開（早送封包），導航目標＝把手底盤位，近把手只轉偏航與限速，閉爪看狀態
 DR_OBS_PRE = os.environ.get('DR_OBS_PRE', '1') == '1'                # 抽屜觀察位背景先算
@@ -1072,7 +1073,7 @@ def main():
                     self.event('pick_scan_unknown_pts', n=int(n_unk_))
                     def _sel(box=self.pick_box, c=est, b=b_now):
                         w0 = time.perf_counter()
-                        box['sel'] = CR.select(c[:2], b) if (PICK_MOTM_V is None and not PICK_FLOW) else CR.select_motm(c[:2], b, PICK_MOTM_V if PICK_MOTM_V is not None else FLOW_V, goal_next=np.asarray(DR_PRIOR[:2], float) if CHAIN else None)
+                        box['sel'] = CR.select(c[:2], b) if (PICK_MOTM_V is None and not PICK_FLOW) else CR.select_motm(c[:2], b, PICK_MOTM_V if PICK_MOTM_V is not None else FLOW_V_CYL, goal_next=np.asarray(DR_PRIOR[:2], float) if CHAIN else None)
                         if box['sel'] is None and PICK_LINE:            # Howard 11/21「不要寫死」：位置隨機時可能沒有可行經過線 ⇒ 退回收斂抓取選位（不中止）
                             box['sel'] = CR.select(c[:2], b)
                             if box['sel'] is not None:
@@ -1227,7 +1228,7 @@ def main():
                     self.pick_Tg_od = Tg_od.copy()
                     app = dict(T_grasp=Tg_od.tolist(), base_goal=[float(Tb_od[0, 3]), float(Tb_od[1, 3]), math.atan2(Tb_od[1, 0], Tb_od[0, 0])], T=Tapp, T_b=max(1.5, Tapp - 1.5), t_l0=max(0.5, Tapp - 2.5))
                     if PICK_FLOW and self.pick_sel.get('e') is not None and not self.pick_sel.get('convergent') and not getattr(self, '_flow_missed', False):
-                        app['flow'] = dict(b0=app['base_goal'], v_cap=FLOW_V, r_turn=1.3, r_in=0.4, q_grasp=[float(x) for x in self.pick_sel['q']] if self.pick_sel.get('q') is not None else None)   # 底盤照導航；控制器只在抓取點附近改偏航與限速；q_grasp＝選位抓取解（手臂關節內插展開終點，Howard 11/24 順暢）
+                        app['flow'] = dict(b0=app['base_goal'], v_cap=FLOW_V_CYL, r_turn=1.3, r_in=0.4, q_grasp=[float(x) for x in self.pick_sel['q']] if self.pick_sel.get('q') is not None else None)   # 底盤照導航；控制器只在抓取點附近改偏航與限速；q_grasp＝選位抓取解（手臂關節內插展開終點，Howard 11/24 順暢）
                     self.p_ho.publish(String(data=json.dumps(dict(what='pick_app', app=app))))
                     self.pick_app_t = t
                     self.event('pick_app_sent', dist=round(dist_, 3), T=round(Tapp, 3))
