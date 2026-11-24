@@ -750,7 +750,7 @@ class TablePickCtrl(P.DoorPassCtrl):
                 self._pull_ev_t = self.t; self._ev('flow_pull', phase=self.phase, shift_m=round(mx_, 3))
         if P.REF_VCAP and src in ('nav', 'base_goal'):                   # 參考先時間縮放到限速內（不讓兩軸速度框同時貼滿 ⇒ 斜走、左右翻）；框照舊當上限
             vr_ = self._ref_vcap(qp)
-            X, sc_ = P.ref_speed_cap(list(X), None if vr_ is None else P.REF_VCAP_K * vr_, DT, P.REF_WCAP, yaw0=float(qp[2]))
+            X, sc_ = P.ref_speed_cap(list(X), None if vr_ is None else P.REF_VCAP_K * vr_, DT, P.REF_WCAP, yaw0=P.yaw_ref_state(self, qp, X, P.REF_WCAP, DT))
             if sc_:
                 xi = xi_from_X(X, DT)
         if self.flow and self.phase in ('APPROACH', 'CLOSE', 'CONFIRM', 'LIFT', 'VERIFY') and src in ('nav', 'base_goal'):   # 照導航移動中夾取：位置照導航；離抓取點 r_turn 內偏航依距離轉到抓取朝向（要夾時才轉），夾到抬起後交回路徑朝向
@@ -882,7 +882,7 @@ class TablePickCtrl(P.DoorPassCtrl):
             xi = xi_from_X(X, DT)
         if BIN_MOVE and src == 'nav' and P.REF_VCAP:                  # 參考先時間縮放到本段速度框（含起步斜坡）內，偏航速率限 REF_WCAP（第 123／124 趟抓完以 0.5 rad/s 轉 90°、兩軸貼框斜走）
             vb_ = self._bin_vlim(qp)
-            X, sc_ = P.ref_speed_cap(list(X), P.REF_VCAP_K * float(vb_[0]), DT, min(P.REF_WCAP, float(vb_[2])), yaw0=float(qp[2]))
+            X, sc_ = P.ref_speed_cap(list(X), P.REF_VCAP_K * float(vb_[0]), DT, min(P.REF_WCAP, float(vb_[2])), yaw0=P.yaw_ref_state(self, qp, X, min(P.REF_WCAP, float(vb_[2])), DT))
             if sc_:
                 xi = xi_from_X(X, DT)
         if BIN_MOVE and src == 'nav':                                   # s150d：放盒中底盤照導航（限速 0.15）沒接會車選邊 ⇒ 橫越行人從側後方追上撞到；同 RETURN 段接上

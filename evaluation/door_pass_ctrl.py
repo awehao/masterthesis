@@ -91,6 +91,25 @@ def ref_speed_cap(X, v_cap, dt, w_cap=None, yaw0=None):
     return (out if ch_ else X), (sc0_ or ch_)
 
 
+YREF_RESET = float(os.environ.get('D2_YREF_RESET', '0.6'))            # 參考偏航狀態離實際車頭超過此值（rad）或停用超過 0.3 s ⇒ 重設為實際車頭
+
+
+def yaw_ref_state(ctrl, qp, X, w_cap, dt):
+    """偏航參考的持續狀態（第 127 趟：每拍以實際車頭為起點 ⇒ 多一個回授、與管線延遲疊成約 1 Hz ±2.5° 擺動）：
+    狀態自上一拍的參考偏航每拍最多轉 w_cap·dt 追向導航視窗第一點偏航；不黏回實際車頭（只在差太多或久未使用時重設）。回本拍視窗起點偏航。"""
+    th0 = math.atan2(float(X[0][1, 0]), float(X[0][0, 0]))
+    yr, tl = getattr(ctrl, '_yref', None), getattr(ctrl, '_yref_t', -9.0)
+    if yr is not None and abs(float(ctrl.t) - tl) < 1e-9:
+        return yr                                                    # 同一拍重複求解（候選尾段等）不重複推進
+    q2 = float(qp[2])
+    if yr is None or float(ctrl.t) - tl > 0.3 or abs((yr - q2 + math.pi) % (2 * math.pi) - math.pi) > YREF_RESET:
+        yr = q2
+    e = (th0 - yr + math.pi) % (2 * math.pi) - math.pi
+    yr = yr + max(-w_cap * dt, min(w_cap * dt, e))
+    ctrl._yref, ctrl._yref_t = yr, float(ctrl.t)
+    return yr
+
+
 def _ref_speed_cap(X, v_cap, dt, w_cap=None):
     n = len(X)
     if n < 2:
@@ -376,7 +395,7 @@ class DoorPassCtrl:
             vd_ = (DOOR_V if float(qp[1]) < DONE_Y_MIN else DOOR_V + (max(CAP_TOP, DOOR_V) - DOOR_V) * _ss((float(qp[1]) - DONE_Y_MIN) / CAP_BLEND)) if dc_ else 9.0
             nvr_ = near_v(qp[:3])
             vr_ = min(STOW_V if (STOW_MOVE and self.phase == 'STOW') else 9.0, vd_, nvr_ if nvr_ is not None else 9.0)
-            X, sc_ = ref_speed_cap(list(X), None if vr_ >= 9.0 else REF_VCAP_K * vr_, DT, min(REF_WCAP, STOW_WZ), yaw0=float(qp[2]))
+            X, sc_ = ref_speed_cap(list(X), None if vr_ >= 9.0 else REF_VCAP_K * vr_, DT, min(REF_WCAP, STOW_WZ), yaw0=yaw_ref_state(self, qp, X, min(REF_WCAP, STOW_WZ), DT))
             if sc_:
                 xi = G_xi_from_X(X, DT)
         if src == 'nav':                                              # 會車選邊（s92d）：行人正面迎來且側向不足 ⇒ 依地圖淨空選邊平移參考
