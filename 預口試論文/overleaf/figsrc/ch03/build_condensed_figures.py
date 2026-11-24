@@ -108,7 +108,7 @@ def rotation_comparison():
     path(ax, np.c_[1.12*np.cos(theta), 1.12*np.sin(theta)], lw=1.25)
     arrow(ax, (1.12*np.cos(theta[-3]), 1.12*np.sin(theta[-3])),
           (1.12*np.cos(theta[-1]), 1.12*np.sin(theta[-1])))
-    txt(ax, 0, -1.38, "(a)", 11)
+    txt(ax, 0, -1.38, "(a)", 12)
     ax.set(xlim=(-1.5, 1.4), ylim=(-1.58, 1.4))
     ax.axis("off")
     ax = fig.add_axes([.56, .24, .405, .62])
@@ -122,8 +122,8 @@ def rotation_comparison():
     ax.set(xlim=(0, 1), ylim=(-3.7, 3.7), xticks=[],
            yticks=[-np.pi, 0, np.pi], yticklabels=[r"$-\pi$", "$0$", r"$\pi$"])
     ax.spines[["top", "right"]].set_visible(False)
-    ax.tick_params(labelsize=11)
-    txt(ax, .5, -.18, "(b)", size=11, transform=ax.transAxes)
+    ax.tick_params(labelsize=12)
+    txt(ax, .5, -.18, "(b)", size=12, transform=ax.transAxes)
     export(fig, "rotation_representation_redrawn",
            "Original SO(2)/wrapped-angle illustration based on Tang et al. (2024).")
 
@@ -207,7 +207,7 @@ def dynamic_row():
                 b = future-.25*v
                 ax.add_patch(FancyArrowPatch(a, b, arrowstyle="<->", mutation_scale=6,
                                             color=INK, lw=.7, zorder=12))
-        fig.text(.125+i*.25, .04, f"({chr(97+i)})", fontsize=11, ha="center", va="center")
+        fig.text(.125+i*.25, .055, f"({chr(97+i)})", fontsize=11, ha="center", va="center")
     export(fig, "dynamic_obstacle_prediction",
            "Original four-panel schematic: current observation and three candidates at one future time.")
 
@@ -231,7 +231,21 @@ def mask_architecture():
         else:
             arrow(ax, (centers[i-1]+.89, 10.85), (x-.89, 10.85))
     # Lateral transforms, top-down additions and output convolutions.
-    txt(ax, 1.88, 9.22, "FPN\n"+r"$3\times3$ outputs", 11)
+    # Bottleneck detail fits in the unused space beside the FPN lateral layers.
+    txt(ax, 2.04, 10.17, "Residual block", 10.7)
+    for x, kernel in [(.70, r"$1\times1$"), (1.90, r"$3\times3$"), (3.10, r"$1\times1$")]:
+        box(ax, x, 9.35, .92, .60, kernel, 10.7)
+    arrow(ax, (.05, 9.35), (.24, 9.35))
+    arrow(ax, (1.16, 9.35), (1.44, 9.35))
+    arrow(ax, (2.36, 9.35), (2.64, 9.35))
+    ax.add_patch(Circle((3.94, 9.35), .17, ec=INK, fc="white", lw=.8, zorder=10))
+    txt(ax, 3.94, 9.35, "+", 10.7)
+    arrow(ax, (3.56, 9.35), (3.77, 9.35))
+    path(ax, [(.12, 9.35), (.12, 9.85), (3.94, 9.85)])
+    arrow(ax, (3.94, 9.85), (3.94, 9.52))
+    txt(ax, 2.00, 9.85, "skip / proj.", 10.7,
+        bbox=dict(fc="white", ec="none", pad=1.3))
+    txt(ax, 2.03, 8.55, "FPN: "+r"$3\times3$ Conv", 10.7)
     for i, x in enumerate(centers):
         box(ax, x, 9.25, 1.42, .52, r"$1\times1$", 11)
         arrow(ax, (x, 10.30), (x, 9.51))
@@ -251,7 +265,7 @@ def mask_architecture():
     txt(ax, .30, 6.55, "(b)", 11, ha="left")
     box(ax, 1.25, 5.93, 2.0, .80, "P2--P6\nfeatures", 11, fill=LIGHT)
     box(ax, 4.00, 5.93, 2.9, .80, "RPN\n"+r"$2\times(3\times3)$ Conv", 10.7)
-    box(ax, 7.48, 5.93, 3.15, .80, "Objectness\nBox offsets", 11)
+    box(ax, 7.48, 5.93, 3.15, .80, r"$1\times1$ Conv"+"\nObjectness / box", 10.7)
     box(ax, 10.65, 5.93, 2.05, .80, "NMS\nProposals", 11)
     arrow(ax, (2.25, 5.93), (2.55, 5.93))
     arrow(ax, (5.45, 5.93), (5.905, 5.93))
