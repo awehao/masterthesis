@@ -32,6 +32,8 @@ OBS_TOL_M, OBS_TOL_DEG = 0.010, 5.0
 RET_LIFT = float(os.environ.get('DR_RET_LIFT', '0.18'))              # 放手退出時另抬高（越過抽屜面板頂再去俯視；s39 直接混接 ⇒ 手指掃到面板被停）
 T_RET_DR = float(os.environ.get('DR_T_RET', '2.5'))
 H_FQ, H_FQ_TOL, H_FSUM = 0.0018, 0.0006, 1.0                         # 把手夾持證據：兩指開度在 26 mm 橫桿接觸開度 1.8 mm ±0.6 mm、兩指合力 ≥1.0 N（第二十趟 Isaac：開度 1.74/1.75 mm 但力 4.8／0.22 N 不對稱 ⇒ 原「兩指各 ≥0.5 N」判逾時）
+H_FQ_TOL = float(os.environ.get('DR_H_FQ_TOL', '0.0008'))            # 11/25：實際夾橫桿開度 1.2–1.45 mm（139／142／145／150），原 ±0.6 mm 下限 1.2 mm 貼邊 ⇒ 第 150 趟拉開中 1.17 mm 判脫手；夾空時兩指閉到 ≈0，下限 1.0 mm 仍可分辨
+LOST_TICKS = int(os.environ.get('DR_LOST_TICKS', '3'))                 # 拉開中連續幾拍不符才判脫手（單拍跳動不停）
 Q_UNFOLD = np.array([float(x) for x in os.environ.get('DR_Q_UNFOLD', '-0.0128,-0.0519,0.086,0.0116,-1.6249,-0.0018').split(',')])   # 抓把手前展開到原收臂構型（第二十三趟：緊湊收臂直接接近 ⇒ 自身淨空 4.9 mm）
 UNFOLD_TOL = 0.03
 CLOSE_UNF_ANCHOR = os.environ.get('DR_CLOSE_UNF_ANCHOR', '1') == '1'
@@ -307,6 +309,7 @@ class DrawerCtrl(PK.TablePickCtrl):
                         s_c = self._motm_s(self.t)
                         self.b_p0 = np.array([b0_[0] + s_c * e_[0], b0_[1] + s_c * e_[1], float(b0_[2])])
                     self.dr_attach = True                             # 夾住證據成立 ⇒ 執行端 FixedJoint 夾爪↔抽屜（理想抓持，同門把）
+                    self._n_lost = 0
                     self._goto('PULL', finger=None if self.finger_meas is None else [round(float(x), 5) for x in self.finger_meas],
                                force=None if self.finger_force is None else [round(float(x), 3) for x in self.finger_force])
                 elif el > (PK.MOTM_EVID_TO_S if self.motm is not None else PK.EVID_TO_S) and self.task == 'handle' and getattr(self, 'regrasp_n', 0) < REGRASP_MAX:
@@ -338,7 +341,11 @@ class DrawerCtrl(PK.TablePickCtrl):
                 elif el > self.T_pull + PK.PH_TO_S:
                     self._stop('pull_not_reached', err_mm=round(ep * 1e3, 2), q_open=round(self.q_open, 4))
                 if not self._held_handle():
-                    self._stop('lost_handle_during_pull')
+                    self._n_lost = getattr(self, '_n_lost', 0) + 1
+                    if self._n_lost >= LOST_TICKS:
+                        self._stop('lost_handle_during_pull')
+                else:
+                    self._n_lost = 0
                 return
             if self.phase == 'UNBIND':
                 if self.dr_unbound:
