@@ -39,6 +39,7 @@ REGRASP_HOLD = os.environ.get('DR_REGRASP_HOLD', '1') == '1'
 CLOSE_UNF_V = float(os.environ.get('DR_CLOSE_UNF_V', '0.15'))        # 關抽屜展開段退到關抽屜站位的參考速度（m/s）
 REGRASP_MAX = int(os.environ.get('DR_REGRASP_MAX', '2'))
 REGRASP_DZ = float(os.environ.get('DR_REGRASP_DZ', '0.006'))           # 每次重夾沿工具軸再深（m）；第 110 趟：第一次夾空時手指把抽屜推進 12.6 mm，2 mm 步長兩次重試追不上 ⇒ 6 mm
+REGRASP_DZ_OPEN = float(os.environ.get('DR_REGRASP_DZ_OPEN', '0.002'))   # 開抽屜（第一次抓把手）重夾每次再深：11/25 第 146、148 趟開抽屜重夾用 6 mm ⇒ 橫桿卡進手指根部、放手後退不出來、抬升時下指頂橫桿 42–49 N 鎖存；6 mm 是為關抽屜（抽屜被推動）設的，開抽屜回到原 2 mm
 REGRASP_DEEP = float(os.environ.get('DR_REGRASP_DEEP', '0.004'))       # 關抽屜再夾：沿工具軸預先再深（m）。放手退開會使抽屜漂移（第 105 趟拖出 7.3 mm 仍夾到、第 110 趟推進 3.1 mm ⇒ 淺 3 mm 夾空）；
                                                                       #   抽屜半開可滑動，夾深只會把抽屜往關的方向推（不像第一次抓時抽屜頂住限位會卡指根）⇒ 偏深是安全側
 OBS_QD = float(os.environ.get('DR_OBS_QD', '0.6'))                    # 俯視關節空間移動峰速上限（rad/s）
@@ -242,10 +243,14 @@ class DrawerCtrl(PK.TablePickCtrl):
         T[:3, 3] = T[:3, 3] + self._pull_s(t_abs) * self.pull
         return T
 
+    def _regrasp_dz(self):
+        """重夾每次再深：關抽屜（close_mode）6 mm 追抽屜被推動；開抽屜 2 mm。"""
+        return REGRASP_DZ if getattr(self, 'close_mode', False) else REGRASP_DZ_OPEN
+
     def _lift_delay(self):
         """抬升起點（退出名目時間比例）：重夾每次再深 REGRASP_DZ ⇒ 手指多跨在橫桿上，要先多退這麼多才抬（11/25 第 146 趟重夾一次後退出中抬升，下指頂到橫桿 42 N 鎖存）。
         取 r 使 minjerk(r)·S_RET ≥ 名目退量（minjerk(LIFT_DELAY)·S_RET）＋額外深度＋2 mm。"""
-        extra_ = REGRASP_DZ * float(getattr(self, 'regrasp_n', 0) or 0)
+        extra_ = self._regrasp_dz() * float(getattr(self, 'regrasp_n', 0) or 0)
         if extra_ <= 0.0 or RET_LIFT_DEPTH_K <= 0.0:
             return LIFT_DELAY
         need_ = XE.minjerk(LIFT_DELAY)[0] * P.S_RET + RET_LIFT_DEPTH_K * (extra_ + 0.002)
@@ -289,9 +294,9 @@ class DrawerCtrl(PK.TablePickCtrl):
                 if getattr(self, '_reopen_t', None) is not None:          # 重夾：等手指張開（≥7.5 mm 或 0.8 s）⇒ 目標沿工具軸再深 REGRASP_DZ ⇒ 回閉爪
                     fm_ = self.finger_meas
                     if (fm_ is not None and float(np.min(fm_)) >= 0.0075) or self.t - self._reopen_t > 0.8:
-                        self.T_grasp = self.T_grasp.copy(); self.T_grasp[:3, 3] = self.T_grasp[:3, 3] + REGRASP_DZ * self.T_grasp[:3, 2]
+                        self.T_grasp = self.T_grasp.copy(); self.T_grasp[:3, 3] = self.T_grasp[:3, 3] + self._regrasp_dz() * self.T_grasp[:3, 2]
                         self._reopen_t, self.n_ev = None, 0
-                        self._goto('CLOSE', retry=int(self.regrasp_n), dz_mm=round(REGRASP_DZ * 1e3, 1))
+                        self._goto('CLOSE', retry=int(self.regrasp_n), dz_mm=round(self._regrasp_dz() * 1e3, 1))
                     return
                 self.n_ev = self.n_ev + 1 if self._held_handle() else 0
                 if self.n_ev * DT >= PK.EVID_S - 1e-9:
