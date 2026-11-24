@@ -3,6 +3,7 @@ from pathlib import Path
 import json,re,zipfile
 from PIL import Image,ImageDraw,ImageFont
 from validate_chapter_additions import PARTS,uncomment,main as validate
+from build_overleaf_handoff import main as make_handoff
 
 ROOT=Path(__file__).resolve().parent
 
@@ -16,6 +17,7 @@ def package(path,files,note):
     print(path.name,path.stat().st_size)
 
 def main():
+    make_handoff()
     validate()
     manifest=json.loads((ROOT/'figsrc/chapter_additions_manifest.json').read_text())
     manifest.insert(2,dict(chapter='ch02',file='mask_rcnn_class_examples'))
@@ -30,10 +32,16 @@ def main():
     preview=ROOT/'figsrc/新增圖表預覽.png';tiles.save(preview)
     images=re.findall(r'\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}',uncomment('\n'.join(p.read_text() for p in PARTS)))
     shared=PARTS+[ROOT/n for n in ['thesis_references.bib','algorithm_preamble.tex',
-        '第一至三章_新增內容與插圖位置.md','20261124_修訂核對紀錄.json','README.md',
+        '第一至三章_新增內容與插圖位置.md','Overleaf_從第三章插圖開始_修改清單.md',
+        '第三章_現行22張圖_插入片段.tex','build_overleaf_handoff.py','overleaf_handoff_manifest.json',
+        'abstract_zh.tex','abstract_en.tex','20261124_修訂核對紀錄.json','README.md',
         'validate_chapter_additions.py','package_chapter_additions.py','build_manuscript_materials.py',
         '第三章_3.1至3.4完整稿.tex','第三章_3.4至3.7完整稿.tex','chapters_outline.tex']]
     shared+=[ROOT/p for p in images]
+    preserved=[ROOT/n for n in ['第二章_架構圖插入.tex','第二章_模擬環境地圖插入.tex','第二章_新增照片插入.tex']]
+    shared+=preserved
+    shared+=[ROOT/p for src in preserved for p in re.findall(
+        r'\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}',uncomment(src.read_text()))]
     shared+=list((ROOT/'figsrc').rglob('SOURCES*.md'))
     shared+=[preview,ROOT/'figsrc/build_chapter_additions.py',ROOT/'figsrc/make_mask_examples.py',
         ROOT/'figsrc/chapter_additions_manifest.json',ROOT/'figsrc/ch02/mask_examples_evidence.json',
@@ -42,7 +50,8 @@ def main():
     shared+=[ROOT/'figsrc'/i['chapter']/(i['file']+'.svg') for i in manifest if i['file']!='mask_rcnn_class_examples']
     # The original drawing helpers are needed to reproduce the new vector drawings.
     shared+=[ROOT/'figsrc/ch03'/n for n in ['method_diagrams.py','method_scene_geometry.py']]
-    note='''先看 第一至三章_新增內容與插圖位置.md。
+    note='''先看 Overleaf_從第三章插圖開始_修改清單.md。
+第三章_現行22張圖_插入片段.tex 含全部現行圖的複製格式與位置；整節替換後不重貼。
 更新學姐專案的對應小節並上傳 figsrc，不要同時載入正文與目錄骨架。
 第一章提供 1.1–1.2、1.3.5、1.4；未包含 1.3.1–1.3.4 全文。
 第二章 2.5 全文亦未收錄。這不是完整五章論文。
