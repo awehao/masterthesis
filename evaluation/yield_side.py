@@ -13,6 +13,7 @@
 座標＝里程（替身／Isaac 里程與地圖原點一致；地圖只用來看牆，誤差由 WALL_PAD 吸收）。"""
 import math
 import os
+import time as _time
 
 import numpy as np
 
@@ -133,6 +134,7 @@ PRED_V_FAST = float(os.environ.get('YS_PRED_V_FAST', '0.18'))
 PRED_HYST = float(os.environ.get('YS_PRED_HYST', '0.10'))
 PRED_LAT_W = float(os.environ.get('YS_PRED_LAT_W', '1.0'))           # 側移代價（s／m）
 CROSS_MAX_S = float(os.environ.get('YS_CROSS_MAX_S', '15.0'))
+PRED_BUDGET_MS = float(os.environ.get('YS_PRED_BUDGET_MS', '15'))   # 預測選動作每拍時間預算（ms；0＝不限）
 PRED_MIN_AGE = float(os.environ.get('YS_PRED_MIN_AGE', '0.8'))       # 預測選動作只看追蹤滿此秒數的群（＝0.8×V_WIN，速度改由群中心位移估）
 GHOST_CLR = float(os.environ.get('YS_GHOST_CLR', '0.10'))            # 移動群的點離地圖佔據格（家具、牆）中位距離小於此 ⇒ 視為靜物假移動（0＝關）
 if GHOST_CLR > 0.0:                                                  # 匯入時先載地圖（第一次載入約 40 ms，不要落在控制拍裡）
@@ -393,7 +395,11 @@ class YieldSide:
         lats = [(0.0, None)] if manip_ else [(0.0, None)] + [(sg, sc + sg * (need_l + ex)) for sg in (1.0, -1.0) for ex in (0.0, 0.3)] + [(2.0, float(q[:2] @ u) - dl) for dl in PRED_BEHIND]   # sg=2：往行人來的方向（−u）偏 dl（絕對座標線：沿 u 座標 ≤ 目前−dl），從它背後繞過
         prev = getattr(self, 'pchoice', None); off0 = self.p_off
         best = None
+        t_b0_ = _time.perf_counter()
         for rho in rhos:
+            if PRED_BUDGET_MS > 0 and best is not None and (_time.perf_counter() - t_b0_) * 1e3 > PRED_BUDGET_MS:
+                self.n_pred_budget = getattr(self, 'n_pred_budget', 0) + 1   # 11/25 第 155 趟：未知箱假移動群觸發預測，每拍 40–60 ms、一拍 121 ms 超 120 ms 期限 ⇒ 預測限時，超時取目前最佳（ρ 由大到小，已含名目速度）
+                break
             base = q[:2] + np.outer(taus, e) * v_nav * rho
             for sg, st in lats:
                 P = base.copy()
