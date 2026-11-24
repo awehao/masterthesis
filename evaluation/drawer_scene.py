@@ -62,11 +62,15 @@ def marker_nominal(q_open):
     return to_world(SPEC['marker_placement']['center'], q_open, True)
 
 
+BOX_MARGIN = float(os.environ.get('D2_DR_BOX_MARGIN', '0.03'))        # 11/25 第 137／138 趟：內部範圍四邊貼著前後板與側壁，開度或位姿差約 1 cm 就把板面點框進來 ⇒ 筆形狀不符（22×9.5 cm）、10 s 看不到筆中止 ⇒ 橫向與深度各內縮
+
+
 def interior_box(q_open):
-    """抽屜內部（世界，供偵測濾點）：中心、R、半尺寸（x 橫向、y 深度、z 底板頂以上 0–0.06）。"""
+    """抽屜內部（世界，供偵測濾點）：中心、R、半尺寸（x 橫向、y 深度、z 底板頂以上 0–0.06；x、y 各內縮 BOX_MARGIN）。"""
     it = SPEC['interior']
     cl = np.array([(it['x'][0] + it['x'][1]) / 2, (it['y'][0] + it['y'][1]) / 2, it['bottom_top_z'] + 0.03])
-    return to_world(cl, q_open, True), RZ.copy(), np.array([(it['x'][1] - it['x'][0]) / 2, (it['y'][1] - it['y'][0]) / 2, 0.03])
+    hx_, hy_ = (it['x'][1] - it['x'][0]) / 2 - BOX_MARGIN, (it['y'][1] - it['y'][0]) / 2 - BOX_MARGIN
+    return to_world(cl, q_open, True), RZ.copy(), np.array([max(hx_, 0.02), max(hy_, 0.02), 0.03])
 
 
 def marker_T(c, axis_yaw, flip=False):
