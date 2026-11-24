@@ -54,7 +54,7 @@ T_CARRY_DR = float(os.environ.get('DR_T_CARRY', '4.0'))
 CLOSE_LEAVE_M = float(os.environ.get('DR_CLOSE_LEAVE_M', '0.005'))
 LIFT_DELAY = 0.35                                                     # 抬升自退出名目時間的 35% 起（先水平離開橫桿）
 RET_LIFT_DEPTH_K = float(os.environ.get('DR_RET_LIFT_DEPTH_K', '1.0'))   # 重夾加深量對抬升起點的補償倍率（0＝原固定 35%）
-RET_CLEAR = float(os.environ.get('DR_RET_CLEAR', '0.03'))             # 放手退出：實測沿退出方向退滿此距離才開始抬（0＝原依時間 35% 抬）
+RET_CLEAR = float(os.environ.get('DR_RET_CLEAR', '0'))                # 放手退出：實測沿退出方向退滿此距離才開始抬（0＝原依時間抬）；11/25 第 152–154 趟：低位伸手夾橫桿時手臂不先抬就幾乎退不動（3.65 s 只退 1.2–10 mm），閘門反而逾時 ⇒ 預設關，靠開抽屜重夾只再深 2 mm 避免卡桿
 RET_CENTER = os.environ.get('DR_RET_CENTER', '1') == '1'
 RET_CENTER_MAX = float(os.environ.get('DR_RET_CENTER_MAX', '0.008'))
 
