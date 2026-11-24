@@ -50,6 +50,8 @@ CARRY_POS = np.array([float(x) for x in os.environ.get('DR_CARRY_POS', '0.30,0.0
 T_CARRY_DR = float(os.environ.get('DR_T_CARRY', '4.0'))
 CLOSE_LEAVE_M = float(os.environ.get('DR_CLOSE_LEAVE_M', '0.005'))
 LIFT_DELAY = 0.35                                                     # 抬升自退出名目時間的 35% 起（先水平離開橫桿）
+RET_LIFT_DEPTH_K = float(os.environ.get('DR_RET_LIFT_DEPTH_K', '1.0'))   # 重夾加深量對抬升起點的補償倍率（0＝原固定 35%）
+RET_CLEAR = float(os.environ.get('DR_RET_CLEAR', '0.03'))             # 放手退出：實測沿退出方向退滿此距離才開始抬（0＝原依時間 35% 抬）
 RET_CENTER = os.environ.get('DR_RET_CENTER', '1') == '1'
 RET_CENTER_MAX = float(os.environ.get('DR_RET_CENTER_MAX', '0.008'))
 
@@ -240,10 +242,27 @@ class DrawerCtrl(PK.TablePickCtrl):
         T[:3, 3] = T[:3, 3] + self._pull_s(t_abs) * self.pull
         return T
 
+    def _lift_delay(self):
+        """抬升起點（退出名目時間比例）：重夾每次再深 REGRASP_DZ ⇒ 手指多跨在橫桿上，要先多退這麼多才抬（11/25 第 146 趟重夾一次後退出中抬升，下指頂到橫桿 42 N 鎖存）。
+        取 r 使 minjerk(r)·S_RET ≥ 名目退量（minjerk(LIFT_DELAY)·S_RET）＋額外深度＋2 mm。"""
+        extra_ = REGRASP_DZ * float(getattr(self, 'regrasp_n', 0) or 0)
+        if extra_ <= 0.0 or RET_LIFT_DEPTH_K <= 0.0:
+            return LIFT_DELAY
+        need_ = XE.minjerk(LIFT_DELAY)[0] * P.S_RET + RET_LIFT_DEPTH_K * (extra_ + 0.002)
+        for r_ in np.linspace(LIFT_DELAY, 0.85, 51):
+            if XE.minjerk(r_)[0] * P.S_RET >= need_:
+                return float(r_)
+        return 0.85
+
     def _ret_target(self, t_abs):
         r = min(max((t_abs - self.t_ph0) / T_RET_DR, 0.0), 1.0)
         ux = XE.minjerk(r)[0]
-        uz = XE.minjerk(min(max((r - LIFT_DELAY) / (1.0 - LIFT_DELAY), 0.0), 1.0))[0]
+        if RET_CLEAR > 0.0:                                            # 11/25 第 146 趟：退出依時間 35% 就抬，實際 TCP 只退 3 mm 仍跨在橫桿上 ⇒ 下指頂橫桿 42 N 鎖存（142 也是先抬後退、僅剛好沒碰）⇒ 實測沿退出方向退滿 RET_CLEAR 才開始抬
+            lt_ = getattr(self, '_lift_t0', None)
+            uz = 0.0 if lt_ is None else XE.minjerk(min(max((t_abs - lt_) / max(T_RET_DR * (1.0 - LIFT_DELAY), 1e-3), 0.0), 1.0))[0]
+        else:
+            ld_ = self._lift_delay()
+            uz = XE.minjerk(min(max((r - ld_) / (1.0 - ld_), 0.0), 1.0))[0]
         T = self.T_rel_r0.copy()
         uc = XE.minjerk(min(r / 0.15, 1.0))[0]                         # 開合軸對中：退開前段把張開的兩指移回橫桿中心（Isaac 97：上指只剩 ~2.5 mm 餘隙，水平退開時壓著橫桿把抽屜拖出 6.7 mm）
         T[:3, 3] = T[:3, 3] + ux * self.dvec_b + uz * np.array([0.0, 0.0, RET_LIFT]) + uc * getattr(self, 'dc_b', np.zeros(3))
@@ -337,6 +356,7 @@ class DrawerCtrl(PK.TablePickCtrl):
                         d_ = float(np.clip(float((c_ - Tc[:3, 3]) @ yv_), -RET_CENTER_MAX, RET_CENTER_MAX))
                         self.dc_b = _T3(q[:3])[:3, :3].T @ (d_ * yv_)
                         self._ev('dr_ret_center', dy_mm=round(d_ * 1e3, 2))
+                    self._lift_t0 = None
                     self._goto('RETREAT', finger=[round(float(x), 5) for x in fm])
                 elif el > P.FINGER_TO_S:
                     self._stop('finger_open_timeout', finger=None if fm is None else [round(float(x), 5) for x in fm])
@@ -346,6 +366,9 @@ class DrawerCtrl(PK.TablePickCtrl):
                 d_ = T_now[:3, 3] - self.T_rel_r0[:3, 3]
                 moved = float(np.dot(d_, self.dvec_b)) / P.S_RET
                 lifted = float(d_[2])
+                if RET_CLEAR > 0.0 and getattr(self, '_lift_t0', None) is None and (moved * P.S_RET >= RET_CLEAR or el >= 2.0 * T_RET_DR):
+                    self._lift_t0 = float(self.t)
+                    self._ev('dr_ret_lift_start', moved_mm=round(moved * P.S_RET * 1e3, 1), el=round(el, 2))
                 if el >= T_RET_DR and moved >= 0.9 * P.S_RET and lifted >= 0.9 * RET_LIFT:
                     self.T_hold = K.fk(q, 'link_tcp')
                     if getattr(self, 'close_mode', False):            # 關抽屜完成 ⇒ 關節收臂回導航姿勢（底盤照導航）⇒ RETURN
