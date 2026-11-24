@@ -98,6 +98,7 @@ CLOSE_WAIT_S = float(os.environ.get('GRASP_CLOSE_WAIT_S', '2.0'))   # 插入名�
 BG_V = 0.06                                                          # 導航到點後收斂到抓取底盤位姿的參考速度上限（m/s）
 BG_CONT = os.environ.get('D2_BG_CONT', '1') == '1'                  # Howard 11/25「開門前先衝過頭再倒車」：導航到點（容許 0.30 m）時底盤 0.24 m/s，參考一拍降到 BG_V 0.06 ⇒ 煞不住衝過 5.5 cm 再挪回（Isaac 124）⇒ 交接延續當下速率、等減速到點
 BG_A = float(os.environ.get('D2_BG_A', '0.15'))                      # 交接後等減速（m/s²）
+POST_INTERP = os.environ.get('D2_POST_INTERP', '1') == '1'          # 門把接近姿態引導逐步內插（見 _track_unified）
 
 
 def _T3_(p):
@@ -466,7 +467,13 @@ class MovingGraspCtrl:
                 if rN < 1e-6 and np.isfinite(qN).all() and float(np.abs(qN - seed_).max()) <= 0.5:
                     self.q_post = np.asarray(qN, float).copy()
                 if getattr(self, 'q_post', None) is not None:
-                    arm.update(q_post=np.tile(self.q_post, (XO.N, 1)), w_q=float(self.w_post))
+                    if POST_INTERP:                                  # 逐步內插：目前關節→末端構型，進度＝TCP 參考位置進度（原：末端構型鋪滿整段 ⇒ 抓取線一開始手臂被提早拉直、TCP 會超前 ⇒ 底盤倒退 3–4 cm 補償，Isaac 124／125）
+                        p0_ = np.asarray(Ts[0], float)[:3, 3]; pN_ = np.asarray(Ts[-1], float)[:3, 3]; LN_ = float(np.linalg.norm(pN_ - p0_))
+                        qa_ = np.asarray(qp[3:], float)
+                        fs_ = [1.0 if LN_ < 1e-4 else min(max(float(np.linalg.norm(np.asarray(Ts[k], float)[:3, 3] - p0_)) / LN_, 0.0), 1.0) for k in range(1, XO.N + 1)]
+                        arm.update(q_post=np.array([qa_ + f_ * (self.q_post - qa_) for f_ in fs_]), w_q=float(self.w_post))
+                    else:
+                        arm.update(q_post=np.tile(self.q_post, (XO.N, 1)), w_q=float(self.w_post))
         u_min_saved = np.asarray(mpc.cfg.u_min, float).copy()
         if math.isfinite(umin0):
             mpc.cfg.u_min = np.array([umin0, u_min_saved[1], u_min_saved[2]])   # 導航繞行速度下限（同導航節點）
