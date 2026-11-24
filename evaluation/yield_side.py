@@ -133,7 +133,13 @@ PRED_V_FAST = float(os.environ.get('YS_PRED_V_FAST', '0.18'))
 PRED_HYST = float(os.environ.get('YS_PRED_HYST', '0.10'))
 PRED_LAT_W = float(os.environ.get('YS_PRED_LAT_W', '1.0'))           # 側移代價（s／m）
 CROSS_MAX_S = float(os.environ.get('YS_CROSS_MAX_S', '15.0'))
+PRED_MIN_AGE = float(os.environ.get('YS_PRED_MIN_AGE', '0.8'))       # 預測選動作只看追蹤滿此秒數的群（＝0.8×V_WIN，速度改由群中心位移估）
 GHOST_CLR = float(os.environ.get('YS_GHOST_CLR', '0.10'))            # 移動群的點離地圖佔據格（家具、牆）中位距離小於此 ⇒ 視為靜物假移動（0＝關）
+if GHOST_CLR > 0.0:                                                  # 匯入時先載地圖（第一次載入約 40 ms，不要落在控制拍裡）
+    try:
+        _load_map()
+    except Exception:                                                # noqa: BLE001
+        pass
 
 
 class YieldSide:
@@ -175,7 +181,7 @@ class YieldSide:
             if float(t) - h_[0][0] >= 0.8 * V_WIN:                     # s178d：移動中感測時追蹤速度 0.525（真值 0.19）⇒ 改用群中心在 V_WIN 秒內的位移（世界座標，與機器人運動無關）
                 v_m = (m_ - h_[0][1]) / (float(t) - h_[0][0])
             v_ = v_m if best is None else best['v'] + a_ * (v_m - best['v'])
-            gp['v_raw'] = gp['v']; gp['v'] = v_
+            gp['v_raw'] = gp['v']; gp['v'] = v_; gp['age'] = float(t) - h_[0][0]
             new.append(dict(m=m_, v=v_, h=h_))
         self._trk, self._G, self._t_G = new, G, float(t)
 
@@ -361,7 +367,7 @@ class YieldSide:
         for gp in self._G:
             vo = gp['v']; sp = float(np.linalg.norm(vo))
             m_ = gp['P'].mean(axis=0); d_ = m_ - q[:2]; nd_ = float(np.linalg.norm(d_))
-            if sp < V_MIN or nd_ > PRED_R:
+            if sp < V_MIN or nd_ > PRED_R or float(gp.get('age', 9.0)) < PRED_MIN_AGE:   # 新群速度仍是追蹤器原始值（Isaac 126：未知箱 unknown_l1 剛出現 0.44 m/s）⇒ 追到 PRED_MIN_AGE 改用群中心位移速度後才參與預測
                 continue
             m_ = m_ + (R_MIN * d_ / nd_ if nd_ > 1e-6 else 0.0)
             G.append((m_, vo, R_BASE + R_MIN + PAD))

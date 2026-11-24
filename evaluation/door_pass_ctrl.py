@@ -68,9 +68,30 @@ def G_xi_from_X(X, dt):
     return xi
 
 
-def ref_speed_cap(X, v_cap, dt, w_cap=None):
+def ref_speed_cap(X, v_cap, dt, w_cap=None, yaw0=None):
     """參考視窗時間縮放（不改幾何）：沿視窗依序走，每段實際用時＝max(原 dt, 段長／v_cap, |偏航變化|／w_cap)，再以原拍距 dt 重新取樣（分數索引內插位置與偏航）。
-    回 (新視窗, 是否有縮放)。v_cap 或 w_cap 為 None ⇒ 該項不限。"""
+    yaw0（目前車頭）＋w_cap：參考偏航改為自 yaw0 出發、每拍最多轉 w_cap·dt 追向原偏航（第 126 趟抓完時視窗第一點即路徑方向，與車頭差 85° ⇒ 偏航框 0.5 打滿）。
+    回 (新視窗, 是否有改)。v_cap 或 w_cap 為 None ⇒ 該項不限。"""
+    n = len(X)
+    if n < 2:
+        return X, False
+    X, sc0_ = _ref_speed_cap(X, v_cap, dt, w_cap)
+    if yaw0 is None or w_cap is None or w_cap <= 1e-6:
+        return X, sc0_
+    th_ = [math.atan2(float(Xk[1, 0]), float(Xk[0, 0])) for Xk in X]
+    out, ch_ = [], False
+    for k, Xk in enumerate(X):
+        e_ = (th_[k] - float(yaw0) + math.pi) % (2 * math.pi) - math.pi
+        lim_ = float(w_cap) * k * float(dt)
+        if abs(e_) > lim_ + 1e-9:
+            ch_ = True
+            out.append(XO.from_xytheta(float(Xk[0, 2]), float(Xk[1, 2]), float(yaw0) + math.copysign(lim_, e_)))
+        else:
+            out.append(Xk)
+    return (out if ch_ else X), (sc0_ or ch_)
+
+
+def _ref_speed_cap(X, v_cap, dt, w_cap=None):
     n = len(X)
     if n < 2:
         return X, False
@@ -355,7 +376,7 @@ class DoorPassCtrl:
             vd_ = (DOOR_V if float(qp[1]) < DONE_Y_MIN else DOOR_V + (max(CAP_TOP, DOOR_V) - DOOR_V) * _ss((float(qp[1]) - DONE_Y_MIN) / CAP_BLEND)) if dc_ else 9.0
             nvr_ = near_v(qp[:3])
             vr_ = min(STOW_V if (STOW_MOVE and self.phase == 'STOW') else 9.0, vd_, nvr_ if nvr_ is not None else 9.0)
-            X, sc_ = ref_speed_cap(list(X), None if vr_ >= 9.0 else REF_VCAP_K * vr_, DT, min(REF_WCAP, STOW_WZ))
+            X, sc_ = ref_speed_cap(list(X), None if vr_ >= 9.0 else REF_VCAP_K * vr_, DT, min(REF_WCAP, STOW_WZ), yaw0=float(qp[2]))
             if sc_:
                 xi = G_xi_from_X(X, DT)
         if src == 'nav':                                              # 會車選邊（s92d）：行人正面迎來且側向不足 ⇒ 依地圖淨空選邊平移參考
