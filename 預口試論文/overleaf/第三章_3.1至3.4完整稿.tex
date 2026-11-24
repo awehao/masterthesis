@@ -1,5 +1,13 @@
 % !TeX program = xelatex
-% 已同步第三章方法示意圖。
+% 由 build_manuscript_materials.py 自動整併；修改請回各分節來源。
+% 來源：03_01_kinematics.tex、03_02_augmented_prediction.tex、03_03_objective_constraints.tex、03_04_dynamic_obstacle_avoidance.tex
+% 3.5.4 採第 101 趟已執行之圓柱展開方法；整趟任務未通過。
+
+% !TeX program = xelatex
+% 第三章開頭與 3.1 完整初稿，接在第二章之後。
+% 章、節及公式均由 LaTeX 自動編號，不手動寫入數字。
+% 需要 amsmath、amssymb（學姐範本已有），不新增自訂數學巨集。
+% 引用鍵：tang2024gmpc（第一章共用）、sola2018micro（本次新增）。
 
 % ==================================================
 % 第三章 研究方法與全身模型預測控制器設計
@@ -46,6 +54,18 @@
 其中 $p_B=[x_B,y_B]^{\top}$ 為底盤平面位置。本節以李群與李代數描述底盤位姿及其局部誤差，其中指數映射、對數映射與局部擾動之數學定義，參照 Sol\`a 等人\cite{sola2018micro}之整理。
 
 手臂關節角以 $q_a=[q_1,\ldots,q_6]^{\top}\in\mathbb{R}^{6}$ 表示。末端工具之世界位姿則以 ${}^{W}T_E\in\mathrm{SE}(3)$ 描述，包含三維位置 ${}^{W}p_E$ 與姿態 ${}^{W}R_E$。本研究使用的固定安裝變換、關節軸向與 TCP 偏移，由機器人模型的運動鏈取得。
+
+% ==================================================
+% 3.1.1 英文參考圖：旋轉群與角度參數
+% ==================================================
+旋轉群與角度參數的表示差異如\cref{fig:ref_rotation_representation}所示。角度在選定的主值區間邊界會出現包絡跳變，對應的旋轉矩陣則維持連續。此圖說明本研究採用幾何位姿表示的背景；底盤的全向運動模型仍依本研究輪系建立。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.95\textwidth]{figsrc/reference_figures/rotation_representation_tang2024.pdf}
+    \caption{旋轉群與角度參數表示之比較（引自文獻\cite{tang2024gmpc}之圖~1）}
+    \label{fig:ref_rotation_representation}
+\end{figure}
 
 % ==================================================
 % 3.1.2 底盤 SE(2) 運動模型與追蹤誤差
@@ -244,6 +264,12 @@
 因此，世界座標的位置變化率與底盤本體速度須經相應轉換，才能使用同一末端運動方程。
 
 上述運動學以實際關節速度 $\dot{q}_a$ 表示手臂運動。本研究採用位置命令介面，控制器產生的設定點變化率 $u_a$ 需經設定點積分及位置追蹤後才影響實際關節，兩者之關係將於下一節建立，以供全身預測模型使用。
+
+
+% !TeX program = xelatex
+% 第三章 3.2：接在 03_01_kinematics.tex 之後，不另加 chapter。
+% 需要 amsmath、amssymb；章節與公式由 LaTeX 自動編號。
+% 引用沿用第一章已定義之 grandia2019frequency，不重複新增 BibTeX。
 
 % ==================================================
 % 3.2 手臂設定點追蹤與增廣預測模型
@@ -449,6 +475,12 @@
 
 本研究以既有模擬紀錄建立初始模型參數，辨識設定、預測誤差及適用範圍於第四章說明。透過上述增廣模型，後續控制問題可同時考量實際關節位置與位置設定點，並保留兩者在追蹤動態及運動限制上的差異。
 
+
+% !TeX program = xelatex
+% 第三章 3.3：接在 03_02_augmented_prediction.tex 之後。
+% 需要 amsmath、amssymb；章節與公式由 LaTeX 自動編號。
+% 新增引用鍵：goldfarb1983dual、stellato2020osqp。
+
 % ==================================================
 % 3.3 全身預測控制之目標函數與限制條件
 % ==================================================
@@ -576,6 +608,25 @@
 其中 $\bar{\omega}_w$ 與 $\bar{\alpha}_w$ 分別為輪速及輪速命令變化率上限。將此限制直接納入最佳化問題，可使底盤平移與旋轉共同使用輪系可用範圍；此處描述的是命令可行性，實際輪速追蹤與運動誤差仍由實驗評估。
 
 % ==================================================
+% 3.3.2 十字全向輪之速度可行域
+% ==================================================
+當四輪採相同角速度上限時，式\eqref{eq:ch3_wheel_command_mapping}可整理為
+\begin{equation}
+    |v_x|+L|\omega|\leq r_w\bar\omega_w,
+    \qquad
+    |v_y|+L|\omega|\leq r_w\bar\omega_w.
+    \label{eq:ch3_omni_velocity_feasible_region}
+\end{equation}
+因此，固定旋轉速度下的平移可行域為軸向方框，其邊界隨 $|\omega|$ 增加而縮小；在 $v_y=0$ 的 $v_x$--$\omega$ 剖面則呈菱形，如\cref{fig:ch3_omni_velocity_feasible_set}所示。以 $r_w=0.05$ m、$L=0.245$ m 與 $\bar\omega_w=5.55$ rad/s 為例，獨立速度框內的 $v_x=0.24$ m/s、$\omega=0.8$ rad/s 需要的輪緣速度達 $0.436$ m/s，超過 $0.2775$ m/s 上限。圖中使用未內縮之幾何界限，實驗中的控制餘裕及輪加速度限制另行列示。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/omni_wheel_velocity_feasible_set.pdf}
+    \caption{四輪十字配置之速度可行域與各軸獨立速度框；菱形為 $v_x$--$\omega$ 剖面}
+    \label{fig:ch3_omni_velocity_feasible_set}
+\end{figure}
+
+% ==================================================
 % 3.3.3 最佳化問題建構與數值求解
 % ==================================================
 \subsection{最佳化問題建構與數值求解}
@@ -680,6 +731,12 @@
 
 上述方法以同一有限時域問題協調底盤與手臂，並以命令及狀態限制約束可用運動。後續將加入障礙運動預測與避障條件，進一步說明環境資訊如何轉換為控制問題中的限制。
 
+
+% !TeX program = xelatex
+% 第三章 3.4：接在 03_03_objective_constraints.tex 之後。
+% 需要 amsmath、amssymb；章節與公式由 LaTeX 自動編號。
+% 引用鍵：kalman1960filter（新增）、ames2019cbf（沿用第一章）。
+
 % ==================================================
 % 3.4 動態障礙預測與導航參考調整
 % ==================================================
@@ -716,6 +773,18 @@
     \label{eq:ch3_obstacle_tracking_model}
 \end{equation}
 其中 $\Delta\tau$ 為相鄰追蹤更新的時間間隔，$y_g$ 為群集中心量測，$w_g$ 與 $n_g$ 分別表示程序與量測雜訊。追蹤更新間隔與控制週期 $\Delta t$ 分別處理，避免將不同更新頻率視為相同。
+
+% ==================================================
+% 3.4.1 英文參考圖：卡爾曼濾波循環
+% ==================================================
+卡爾曼濾波的預測與量測更新流程如\cref{fig:ref_kalman_predict_update}所示。圖中的 $A$ 與 $H$ 分別對應本節的 $F_o(\Delta\tau)$ 與 $H_o$；障礙物運動未設定外部控制輸入，因此圖中的 $Bu$ 項取零。追蹤器先將位置與速度向前預測，再以新群集中心量測修正估計。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/reference_figures/kalman_predict_update_welch2004.pdf}
+    \caption{卡爾曼濾波之預測與量測更新流程（引自文獻\cite{welch2004kalman}之圖~1-2）}
+    \label{fig:ref_kalman_predict_update}
+\end{figure}
 
 以 $\ell$ 表示送入控制器的障礙幾何樣本，令 $\hat{o}_{\ell,k}\in\mathbb{R}^{2}$ 為其目前估計位置，$\hat{v}_{\ell,k}\in\mathbb{R}^{2}$ 為所屬物件的速度估計。預測時域內的位置為
 \begin{equation}

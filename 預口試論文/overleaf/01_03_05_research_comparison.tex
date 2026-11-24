@@ -1,0 +1,50 @@
+% !TeX program = xelatex
+% ==================================================
+% 1.3.5 現有研究比較與研究缺口
+% ==================================================
+% 取代學姐專案內既有的 1.3.5，不新增第二個同名小節。
+% 本資料夾未收錄 1.3.1--1.3.4 全文；此檔只含 1.3.5。
+% 排版使用 graphicx、array；不需新增表格套件。
+\subsection{現有研究比較與研究缺口}
+\label{subsec:research_comparison_gap}
+
+\cref{tab:related_research_comparison}比較與本研究相關之底盤追蹤、全身控制及視覺操作方法。比較中的「全身」指底盤與手臂之運動協調；「移動中操作」分別標示連續取放、操作期間底盤移動或協同搬運，避免將不同任務視為相同的驗證。「視覺」指以影像取得操作目標或物件幾何，底盤外部光學定位另行區分。「未明示」表示本次核對的公開方法說明未提供足以判定的內容；「未評估」表示該項目未列入所述實驗，均不代表該方法無法擴充。
+
+\begin{table}[htbp]
+    \centering
+    \caption{相關研究之處理範圍與方法比較}
+    \label{tab:related_research_comparison}
+    \begingroup
+    \small
+    \renewcommand{\arraystretch}{1.35}
+    \setlength{\tabcolsep}{3pt}
+    \resizebox{\textwidth}{!}{%
+    \begin{tabular}{|l|c|c|c|c|c|c|}
+        \hline
+        研究 & 動態障礙 & 全身 & 致動／介面處理 & 關節式物件 & 移動中操作 & 視覺 \\
+        \hline
+        GMPC\cite{tang2024gmpc}
+        & 未評估 & 底盤追蹤 & 速度輸入 & 未評估 & 未評估 & 未評估 \\
+        \hline
+        Burgess MotM\cite{burgess2023motm}
+        & 未專門評估 & 共同 QP & 速度介面 & 未評估 & 連續取放 & RGB \\
+        \hline
+        Mittal 等人\cite{mittal2022articulated}
+        & 反應式 & 全身 MPC & 運動學速度模型 & 門、抽屜 & 操作中移動 & RGB-D \\
+        \hline
+        Minniti 等人\cite{minniti2019wholebody}
+        & 未評估 & 動力學 MPC & 頻率整形 & 開門 & 操作中移動 & 未明示 \\
+        \hline
+        Du 等人\cite{du2026wholebody}
+        & 有 & 分層全身 MPC & 混合命令一致性 & 未專門評估 & 雙臂搬運 & 未明示 \\
+        \hline
+        Sun 等人\cite{sun2026motion}
+        & 即時反應受限 & 分階段協調 & 未明示 & 未評估 & 連續抓取 & 視覺伺服 \\
+        \hline
+    \end{tabular}}
+    \endgroup
+\end{table}
+
+GMPC 著重輪式底盤之幾何追蹤；Burgess MotM 透過共同速度控制實現行進中取放，其動態障礙擴充另見後續研究\cite{burgess2024reactive}。Mittal 等人已處理視覺感知、機構操作與動態避障，但其障礙處理以即時地圖更新為主，未預測移動障礙的未來位置。Minniti 等人則透過動力學與頻率整形協調平衡及操作。Du 等人考量混合位置／速度介面之狀態轉移與命令一致性；Sun 等人以視覺伺服及受約束取樣規劃處理短暫抓取窗口，並指出對突發動態障礙的即時反應仍受限制。
+
+上述研究分別提供幾何追蹤、全身協調與視覺操作基礎。本研究據此聚焦於全向底盤與位置命令手臂的共同預測，將設定點追蹤、在途命令與實際放行輸入納入控制，並串接動態避障、移動中抓取及門與抽屜操作。研究差異在於這些方法於指定命令介面及住宅任務中的整合與驗證，效能與適用範圍由第四章之比較結果判定。

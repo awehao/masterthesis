@@ -2,7 +2,7 @@
 % 第二章 2.3、2.4 完整純文字稿。
 % 接在既有 2.1、2.2 之後；不含 chapter 或手動章節編號。
 % 資料記錄與實驗重現方式另安排於 2.7。
-% 引用鍵：macenski2022ros2、nvidiaisaacsim、tang2024gmpc。
+% 書目統一使用 thesis_references.bib。
 
 \section{軟體架構與模擬環境}
 \label{sec:software_simulation}
@@ -23,6 +23,8 @@
 
 場景依研究任務配置牆面、門扇、桌面、抽屜與障礙物等元素。其中，門扇與抽屜分別以旋轉及移動關節描述其機構運動，並依各實驗條件設定碰撞幾何、摩擦及關節參數。相機影像與深度資料用於視覺目標定位，底盤位姿、關節狀態與接觸資訊則支援控制及結果分析；各項資訊的使用方式與假設於第四章說明。前期動態導航測試另使用 Gazebo Harmonic，相關結果依其實際模擬平台與配置分別呈現。
 
+手臂平台採用 Lite6，其硬體規格來源為 UFACTORY 官方技術文件\cite{ufactorylite6specs}。模擬中的手指狀態與接觸資訊由模擬器提供，與實機夾爪可取得的訊號分別說明。
+
 物理更新、感測更新與控制求解具有不同的執行週期，因此，實驗中分別記錄模擬時間與主機實際運算時間，並保存物理步長、控制週期及模擬執行方式，作為分析運動表現與計算成本之依據。
 
 \section{導航、視覺與操作之系統整合}
@@ -35,12 +37,90 @@
 
 全域路徑規劃模組依據環境地圖、機器人起始位置與任務目的地，建立底盤的行進路徑。控制端根據當前位姿取得機器人在路徑上的進度，再沿路徑擷取預測時域內的參考點，形成位置、航向與速度參考，供底盤幾何模型預測控制使用。底盤追蹤之建模以 Tang 等人\cite{tang2024gmpc}提出的 GMPC 為相關基礎，並依本研究之全向底盤運動能力配置輸入限制。
 
+導航前端採用 Navigation2（Nav2）提供全域路徑規劃與代價地圖管理\cite{macenski2020nav2}，其中全域規劃器為 Smac Planner 2D，利用二維代價地圖搜尋全向底盤可行路徑；局部追蹤與動態避障由本研究控制架構處理。定位配置以自適應蒙地卡羅定位（Adaptive Monte Carlo Localization, AMCL）提供全域位置觀測，再由擴展卡爾曼濾波（Extended Kalman Filter, EKF）融合里程與 AMCL 位姿，產生控制所需之連續位姿估計。AMCL 的粒子數調整以 KLD 取樣方法為理論基礎\cite{fox2003kld}。
+
+上述 AMCL 與 EKF 分工對應導航啟動檔中的定位配置：AMCL 發布位姿觀測，EKF 管理融合後的地圖與里程轉換。Isaac 另提供控制及驗收記錄所需的模擬狀態；各模組使用估測位姿或模擬狀態的通道，於第四章依批次列明，避免將模擬狀態回授等同於定位演算法的精度驗證。
+% 配置：src/my_omnibot_description/config/nav2_localization.yaml（SmacPlanner2D）；
+% launch/omni_bot_dynamic.launch.py 與 config/ekf_fusion.yaml（AMCL + EKF）。
+
+% ==================================================
+% 2.4.1 英文參考圖：Navigation2 既有架構
+% ==================================================
+Nav2 的既有模組分工如\cref{fig:ref_nav2_architecture}所示，由任務協調層連結規劃、控制與恢復等服務。本研究使用其全域規劃與代價地圖功能，並以本文的預測控制與任務邏輯銜接後續導航及操作；圖中完整架構不等同於本研究各階段的實際啟用配置。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.86\textwidth]{figsrc/reference_figures/nav2_architecture_macenski2020.pdf}
+    \caption{Navigation2 既有系統之模組分工（引自文獻\cite{macenski2020nav2}之圖~2）}
+    \label{fig:ref_nav2_architecture}
+\end{figure}
+
 在整合架構中，導航目的地可設定為門前、桌側或指定任務區域，精確的操作接近位置則依後續視覺量測與機器人狀態更新。當環境中存在移動障礙物時，障礙位置與運動估測提供予控制端，於追蹤導航參考的同時考量避障限制。進入操作區域後，底盤參考還需配合手臂可達範圍與物件機構條件調整，使移動與操作需求能夠共同進入控制問題。
 
 \subsection{視覺感知與操作目標資訊}
 \label{subsec:visual_perception_operation_targets}
 
 視覺模組利用相機影像與深度資訊取得操作目標的三維位置，並將量測結果轉換至控制所使用的座標框架。底盤相機主要支援區域觀測與接近導引，手腕相機則提供近距離的目標確認與定位。目標資訊保留來源相機、影像擷取時間及量測有效性，使參考生成模組能依觀測時刻的機器人位姿進行座標轉換，並檢查不同來源之間的一致性。
+
+住宅整合任務採用 Mask R-CNN\cite{he2017maskrcnn}進行六類目標的實例分割，包含門把、門扇、圓柱、抽屜把手、筆狀代理物及抽屜面板，另設背景類別。模型以 COCO 預訓練的 ResNet-50-FPN v2 為初始權重，使用 Isaac Sim 渲染影像及語意標註建立實例遮罩後微調；模擬影像測試集的類別平均遮罩 IoU 約為 0.754。此數值描述分割表現，完整操作仍依幾何估測與任務條件判定。
+% 本研究數據來源：evaluation/experiments/20261119_m8_house_d2_unified91_result.json；
+% 訓練與類別定義：evaluation/house_seg.py、evaluation/house_seg_ckpt/run2/meta.json。
+
+推論時由 RGB 影像取得遮罩，再選取對應的有效深度點進行幾何估測；門把則由遮罩外框建立擴張的感興趣區域（Region of Interest, ROI），保留門板及端部背景供既有幾何偵測使用。語意標註僅用於訓練與評估，線上估測使用模型輸出。模型目前僅在模擬影像上訓練與測試，真實影像及跨場域泛化尚未驗證。
+
+% ==================================================
+% 2.4.2 六類分割示例、資料集與評估紀錄
+% ==================================================
+\cref{fig:mask_rcnn_class_examples}呈現固定模型於六個測試集影像上的離線推論示例，各類以顏色疊加預測遮罩。範例依標註面積及物件完整性挑選，並確認有可辨識的預測輸出，供觀察分割範圍；圖中個別畫面的表現不作為整體測試準確度。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=1.0\textwidth]{figsrc/ch02/mask_rcnn_class_examples.pdf}
+    \caption{六類目標之 RGB 影像與 Mask R-CNN 預測遮罩示例；影像取自模擬測試集}
+    \label{fig:mask_rcnn_class_examples}
+\end{figure}
+
+資料依來源趟次劃分，避免同一趟影像分散於訓練及測試集合，如\cref{tab:mask_dataset_split}所示。這種劃分仍使用相同住宅模擬環境，不代表已完成跨場景或真實影像驗證。
+
+\begin{table}[htbp]
+    \centering
+    \caption{模擬影像資料集之劃分}
+    \label{tab:mask_dataset_split}
+    \begin{tabular}{|l|r|l|}
+        \hline
+        集合 & 影像張數 & 來源趟次 \\
+        \hline
+        訓練集 & 4432 & 排除驗證與測試趟次之收集資料 \\
+        驗證集 & 166 & 第 84 趟 \\
+        測試集 & 595 & 第 85、86、87 趟 \\
+        \hline
+    \end{tabular}
+\end{table}
+
+\cref{tab:mask_class_iou}列出模型選擇時留存之逐類驗證結果。對各類別，在含有該類標註且面積至少 $25$ 像素的畫面，分別計算該類所有預測實例聯集與標註聯集之 IoU，再對畫面取平均；六類平均為 $0.8012$。既有測試紀錄另留存類別平均 IoU 約 $0.754$，但未附逐類測試結果，因此表中不將驗證數值列為測試成績。分數與遮罩二值化門檻均為 $0.5$。
+
+\begin{table}[htbp]
+    \centering
+    \caption{六類目標之訓練可見畫面數與驗證集遮罩 IoU}
+    \label{tab:mask_class_iou}
+    \begin{tabular}{|l|r|r|r|}
+        \hline
+        類別 & 訓練可見畫面 & 驗證有效畫面 & 驗證 IoU \\
+        \hline
+        門把 & 2101 & 40 & 0.7068 \\
+        門扇 & 2421 & 57 & 0.8738 \\
+        圓柱 & 589 & 39 & 0.8278 \\
+        抽屜把手 & 558 & 39 & 0.6998 \\
+        筆狀代理物 & 177 & 13 & 0.8555 \\
+        抽屜面板 & 749 & 54 & 0.8435 \\
+        \hline
+        六類平均 & --- & --- & 0.8012 \\
+        \hline
+    \end{tabular}
+\end{table}
+% meta.json / best_dev.json：選中第 10000 次更新的權重；
+% 各類可見畫面可能重疊，表中計數不相加為影像總數。
+% test mean：20261119_m8_house_d2_unified91_result.json seg.test_iou_mean。
 
 本研究以指定任務區域與物件類型作為先驗資訊，再由當次視覺量測更新操作目標。參考生成模組結合目標位置、物件幾何及機器人構型，建立底盤接近參考與末端執行器目標。對於開門等受機構限制的操作，還需利用物件機構資訊描述抓持後允許的運動。目標資料的有效性與可執行條件作為參考承接的依據，使視覺量測能夠連結至後續控制。
 

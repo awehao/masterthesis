@@ -1,70 +1,38 @@
-# Overleaf：Tsai 版中英文摘要與關鍵字
+# Overleaf 現行檔案與編輯方式
 
-版本：v0.7（格式沿用 v0.5），2026-11-17。**以使用者提供的 `Tsai_thesis.zip` 為主要格式來源**，`NTHU_PME_thesis_main.zip` 僅作差異比對。摘要更新為 `00_摘要.md` v0.7，以「本研究旨在建立一套」開頭，聚焦導航、執行動態建模與協同操作方法。最後僅交代模擬評估範圍，成果數據與比較由本機結果章呈現。
-
-## 上傳與編譯
-
-1. 在 Overleaf 選擇 **New Project → Upload Project**，上傳工作目錄的 `thesis_abstract_overleaf.zip`。
-2. 將 **Compiler** 設為 **XeLaTeX**，**Main document** 設為 **main.tex**。
-3. 按 **Recompile**。預設只輸出中英文摘要與關鍵字。
-
-ZIP 根目錄含 `main.tex`，由它載入 `thesis.tex`。TeX 編輯器魔法註解不會自動修改 Overleaf 的編譯器設定。[上傳專案](https://docs.overleaf.com/managing-projects-and-files/uploading-a-project)、[選擇編譯器](https://docs.overleaf.com/getting-started/recompiling-your-project/selecting-a-tex-live-version-and-latex-compiler)
-
-## 檔案分工
+更新：2026-11-24。格式沿用使用者提供的 `Tsai_thesis.zip`，Compiler 選 XeLaTeX。`main.tex` 載入 `thesis.tex`，目前預設仍只編譯摘要。
 
 | 檔案 | 用途 |
 |---|---|
-| `main.tex` | Overleaf 入口，載入 `thesis.tex` |
-| `thesis.tex` | 使用 Tsai 的 `nthuthesis` 類別及摘要載入流程 |
-| `nthuthesis.cls` | 從 Tsai 包原樣取用，保留授權文字及新版封面定義 |
-| `preamble.tex` | 字型、標題、行距、摘要環境修正與關鍵字排版 |
-| `nthuvars.tex` | 目前論文題目與待填封面資料 |
-| `00_abstract.tex` | 摘要入口，依序載入中英文分檔 |
-| `abstract_zh.tex` | 中文摘要及 `\keywordzh` 關鍵字 |
-| `abstract_en.tex` | 英文摘要及 `\keyworden` 關鍵字 |
-| `fonts/kaiu.ttf`、`fonts/times.ttf` | Tsai 包附的標楷體與 Times New Roman |
-| `latexmkrc` | latexmk 的 XeLaTeX 設定 |
-| `template/格式套用紀錄.md` | 範本比對、沿用項目及必要修正 |
-| `template/README_Tsai_original.md` | 原範本說明與來源資訊 |
+| `abstract_zh.tex`、`abstract_en.tex` | 現行中英文摘要，含住宅整合任務 |
+| `nthuvars.tex`、`nthuthesis.cls`、`preamble.tex` | 封面變數、學姐範本及字型／排版設定 |
+| `第一章_前言與動機_含圖.tex`、`第一章_本文架構.tex` | 第一章 1.1–1.2、1.4；1.3.5 比較表另見 01_03_05_research_comparison.tex |
+| `02_platform_and_interfaces.tex` | 2.1–2.2；平台規格、座標配置與命令鏈 |
+| `02_software_and_integration.tex` | 2.3–2.4；含 Smac 2D、AMCL + EKF、Mask R-CNN 資料與示例 |
+| `02_workflow_and_recording.tex` | 2.6–2.7；住宅任務與記錄方式 |
+| `03_01_kinematics.tex` 至 `03_07_execution_compensation.tex` | 第三章唯一分節來源 |
+| `第三章_3.1至3.4完整稿.tex`、`第三章_3.4至3.7完整稿.tex` | 自動整併，供複製；兩者包含重疊的 3.4，不可整份同時載入 |
+| `chapters_outline.tex` | 標題骨架；不要與完整正文同時載入 |
+| `thesis_references.bib` | 全論文唯一書目主檔 |
+| `第三章_示意圖插入.tex` | 16 張原創方法圖的片段；正文已含圖，不重複貼入 |
+| `第一至三章_新增內容與插圖位置.md` | 本次八張新增圖、四份表格與演算法框的使用位置及證據 |
+| `algorithm_preamble.tex` | 演算法框導言設定；本地 preamble 已載入 |
 
-## 本次沿用的 Tsai 格式
+在學姐專案上修改時，上傳所需分節及 `figsrc` 圖片，再替換對應內容。書目統一使用：
 
-- A4、`extbook` 14 pt；左邊界 3.17 cm，其餘邊界 1 inch。
-- 中文標楷體、英文 Times New Roman；字型由專案內檔案載入。
-- 中文摘要沿用 `\linespread{2.0}`；英文摘要使用 `spacing{1.5}`。
-- 沿用章節標題格式、`\raggedbottom`、前置單面排版與小寫羅馬頁碼，中文摘要從 i 開始。
-- 沿用 `abstractzh`、`abstracten`、`keywordzh`、`keyworden` 介面；關鍵字續行對齊內容。
+```latex
+\bibliographystyle{IEEEtran}
+\bibliography{thesis_references}
+```
 
-這是對使用者提供範本的套用，正式送審仍依系所要求核對。原版浮水印預設關閉，本專案沿用此設定。
+若原 `thesis.bib` 有學姐專案其他章節仍需要的條目，先將獨有條目併入主檔，再切換；不要重複定義相同引用鍵。引用顯示問號時，確認 `\cite{key}` 與主檔鍵名一致，再於 Overleaf 使用 Recompile from scratch。
 
-## 封面與正文後續擴充
+修改第三章分節後執行 `python3 預口試論文/overleaf/build_manuscript_materials.py`，更新合併稿及目錄。3.5.4 已依第 101 趟圓柱階段紀錄改為關節空間展開；該趟整體任務未完成。
 
-`nthuvars.tex` 已填目前中英文題目；姓名、學號、組別、指導教授與口試年月保留明確待填欄位。`thesis.tex` 預設 `\includecoverfalse`，補齊資料後可改為 `\includecovertrue`，使用 Tsai 新版封面。
+2.1、2.2 與 1.3.5 已補入；2.5 完整 LaTeX 及第一章 1.3.1–1.3.4 未在本資料夾收錄。本資料夾尚不是完整五章的可直接編譯論文。第三章圖面為原創方法圖，PDF 已嵌入標楷體，與實驗結果截圖分別使用。
 
-目前只載入摘要。第一至第五章仍以本機 Markdown 分章檔為撰寫來源，之後逐章轉為 LaTeX 並加入 `thesis.tex`。原範本的學長姓名、論文內容、實驗圖與參考文獻不載入此專案。
+本次檢查範圍與證據見 [20261124_內容修訂說明.md](20261124_內容修訂說明.md)。舊分章書目及舊 Markdown 已留存上層歷史版本。本機無 XeLaTeX/BibTeX，本次未產生新版摘要或整份論文 PDF。
 
-中英文摘要文字與本機 `00_摘要.md` 同步；之後在 Overleaf 修改摘要分檔時，也請同步本機工作稿。
+另補四張英文參考方法圖：Nav2（2.4.1）、旋轉表示（3.1.1）、卡爾曼濾波（3.4.1）、Mask R-CNN（3.5.1）。[插入片段](英文參考圖_插入格式.tex)及[來源清單](figsrc/reference_figures/SOURCES.md)均已整理；分節稿已含圖，不重複貼入。
 
-## 編譯檢查
-
-2026-11-17 以 Tectonic 0.17.0（XeTeX 核心）完成本機編譯，輸出兩頁 A4 PDF：中文摘要與英文摘要各一頁，含各自關鍵字及 i、ii 頁碼。已檢查兩頁版面、輸出文字與字型嵌入；編譯記錄未出現缺字、Overfull 或 Underfull 警告。
-
-本機檢查沒有登入 Overleaf；上傳後仍須選擇 XeLaTeX。封面預設關閉，本次檢查範圍為摘要頁。
-
-## 前言圖文稿（2026-11-21）
-
-新增 `01_background.tex`，將產業需求與 AMMR 背景整合成單一「前言」節，配合兩張 IFR 官方原圖。文字對應上層 `1.1_前言_圖文稿.md`；圖檔位於 `figsrc/ch01/`，來源見同資料夾 `SOURCES.md`；本節引用集中於 `background_references.bib`。
-
-可將獨立交付的 `前言_Overleaf圖文稿.zip` 上傳至 Overleaf，Compiler 選 XeLaTeX、Main document 選 `main.tex`；包內入口會載入 `background_preview.tex`，輸出第一章前言與參考文獻。若直接使用本資料夾，將 Main document 改選 `background_preview.tex` 即可。原 `main.tex` 仍為摘要入口。
-
-合併到完整論文時，在第一章中 `\input{01_background}`，並將本節書目合併到全論文使用的 `.bib`。本輪已檢查引用鍵、圖檔路徑、原圖尺寸與來源，尚未於本機編譯此新稿。
-
-### 前言引用格式（v0.3）
-
-本節採 IEEE 數字引用，依首次引用順序編為 [1]–[6]。`background_preview.tex` 已使用 `\bibliographystyle{IEEEtran}`；標準 `IEEEtran.bst` 隨包提供，取自 [CTAN](https://ctan.math.illinois.edu/macros/latex/contrib/IEEEtran/bibtex/IEEEtran.bst)，原始標頭與授權保留。原範本說明亦建議一般使用者採 IEEEtran。
-
-IFR 公開發布頁以線上資料引用，附公開日期、存取日期及網址；2025 年資料為線上簡報。兩篇期刊的 68 與 210 為文章編號，不是頁碼。標準 IEEEtran 1.14 不讀取 DOI／eid 欄位，因此本節 `.bib` 將文章編號與 DOI 同時放入 note 供列印，並保留 doi／eid 原始欄位。來源主清單保留原工作編號供對照，不當作最終排版編號。
-
-網頁存取日期採實際核對的台灣日期 2026-11-21。新樣式與書目尚未於本機編譯 PDF。
-
-前言插圖已依參考範例使用 `figure[htbp]`、`\includegraphics`、圖說內 `\cite`、`\label` 及正文 `\cref`。`preamble.tex` 在 hyperref 後載入 cleveref，並將 figure 名稱設為「圖」；不需在正文額外寫「圖」再接 `\cref`。
+本次新增圖表及重製來源見 [第一至三章_新增內容與插圖位置.md](第一至三章_新增內容與插圖位置.md)。第三章現在共 22 張圖（原創方法圖 19 張、英文參考圖 3 張）；舊的「16 張」插圖包只包含原先 16 張，不包含本次新增三張。新包為上層 `第一至三章_新增圖表與Overleaf內容.zip`。遮罩例圖執行既有權重的離線推論，未啟動模擬或訓練。

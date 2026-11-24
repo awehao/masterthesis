@@ -40,6 +40,18 @@
 \end{equation}
 其中 $\Delta\tau$ 為相鄰追蹤更新的時間間隔，$y_g$ 為群集中心量測，$w_g$ 與 $n_g$ 分別表示程序與量測雜訊。追蹤更新間隔與控制週期 $\Delta t$ 分別處理，避免將不同更新頻率視為相同。
 
+% ==================================================
+% 3.4.1 英文參考圖：卡爾曼濾波循環
+% ==================================================
+卡爾曼濾波的預測與量測更新流程如\cref{fig:ref_kalman_predict_update}所示。圖中的 $A$ 與 $H$ 分別對應本節的 $F_o(\Delta\tau)$ 與 $H_o$；障礙物運動未設定外部控制輸入，因此圖中的 $Bu$ 項取零。追蹤器先將位置與速度向前預測，再以新群集中心量測修正估計。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/reference_figures/kalman_predict_update_welch2004.pdf}
+    \caption{卡爾曼濾波之預測與量測更新流程（引自文獻\cite{welch2004kalman}之圖~1-2）}
+    \label{fig:ref_kalman_predict_update}
+\end{figure}
+
 以 $\ell$ 表示送入控制器的障礙幾何樣本，令 $\hat{o}_{\ell,k}\in\mathbb{R}^{2}$ 為其目前估計位置，$\hat{v}_{\ell,k}\in\mathbb{R}^{2}$ 為所屬物件的速度估計。預測時域內的位置為
 \begin{equation}
     o_{\ell,i|k}

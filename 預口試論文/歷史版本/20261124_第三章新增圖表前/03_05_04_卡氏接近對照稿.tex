@@ -1,0 +1,46 @@
+% ==================================================
+% 3.5.4 導航路徑下之朝向與末端參考生成
+% ==================================================
+\subsection{導航路徑下之朝向與末端參考生成}
+\label{subsec:navigation_manipulation_reference}
+
+% 版本邊界（2026-11-24）：下列卡氏位姿內插描述已完成批次的既有版本，
+% 不代表新關節展開法。新版可替換全文另存於：
+% 待驗證修訂/03_05_04_關節展開與後段併線.tex。
+% 新版須完成 Isaac 驗證並保存結果、配置與程式版本後，才替換本小節。
+本小節先保留已完成批次所用的參考生成方式，作為改版對照。既有方法在展開段直接內插末端卡氏位姿，未明確指定中間關節構型；目前改版以關節空間展開並於後段併入抓取線，以處理展開過程中的構型選擇問題。新版已進入程式測試，其 Isaac 驗證尚未確認通過，故以下公式不作為新版展開方法的描述。
+
+移動中接近時，底盤平移參考沿用導航前端提供的路徑，操作端依剩餘距離調整朝向、速度上限與末端展開進度。令 $\theta_{\mathrm{nav},i}$ 為導航朝向，$\theta_g$ 為操作朝向，則以距離權重 $w_i\in[0,1]$ 建立
+\begin{equation}
+    \theta_{r,i}
+    =\theta_{\mathrm{nav},i}
+     +w_i\operatorname{wrap}
+       (\theta_g-\theta_{\mathrm{nav},i}),
+    \label{eq:ch3_operation_heading_reference}
+\end{equation}
+其中 $\operatorname{wrap}(\cdot)$ 將角度差映射至 $(-\pi,\pi]$。接近操作區域時逐步增加 $w_i$，物件抬升並離開抓取階段後，再依任務條件交回導航朝向。
+
+既有版本的末端展開採用五次端點平滑函數 $\psi(\nu)=10\nu^3-15\nu^4+6\nu^5$，其形式參照最小急動軌跡\cite{flash1985coordination}。本研究進度依距離與狀態更新，不據此宣稱實際運動皆具有最小急動性質。令 $d_i$ 為參考底盤至操作位置的距離，定義
+\begin{equation}
+    \nu_i=
+    \operatorname{clip}
+      \left(\frac{d_{\mathrm{out}}-d_i}
+      {d_{\mathrm{out}}-d_{\mathrm{in}}},0,1\right),
+    \qquad \beta_i=\psi(\nu_i).
+    \label{eq:ch3_distance_based_arm_progress}
+\end{equation}
+預測進度另依目前進度與最短展開時間限制其增加速度。令 $(p_{\mathrm{rel},i},R_{\mathrm{rel},i})$ 為起始相對構型隨底盤移動所形成的世界位姿，$(p_{\mathrm{line},i},R_{\mathrm{line},i})$ 為預抓或抓取接近線上的目標，則
+\begin{equation}
+    \begin{aligned}
+        p_{E,i}^{d}
+        &=(1-\beta_i)p_{\mathrm{rel},i}
+          +\beta_i p_{\mathrm{line},i},\\
+        R_{E,i}^{d}
+        &=R_{\mathrm{rel},i}
+          \exp\!\left(
+            \beta_i\log(R_{\mathrm{rel},i}^{\top}R_{\mathrm{line},i})
+          \right).
+    \end{aligned}
+    \label{eq:ch3_continuous_approach_reference}
+\end{equation}
+最後接近線的推進另由底盤位置與 TCP 到位狀態觸發。若導航因避障而改變進度，手臂展開亦隨距離與狀態更新。朝向或位置參考變更後，依式\eqref{eq:ch3_reference_velocity_reconstruction}重新計算底盤參考速度，再建立末端追蹤與命令限制。

@@ -1,5 +1,12 @@
 % !TeX program = xelatex
-% 已同步第三章方法示意圖；接在 3.3 之後。
+% 由 build_manuscript_materials.py 自動整併；修改請回各分節來源。
+% 來源：03_04_dynamic_obstacle_avoidance.tex、03_05_visual_task_reference.tex、03_06_mobile_constrained_operation.tex、03_07_execution_compensation.tex
+% 3.5.4 採第 101 趟已執行之圓柱展開方法；整趟任務未通過。
+
+% !TeX program = xelatex
+% 第三章 3.4：接在 03_03_objective_constraints.tex 之後。
+% 需要 amsmath、amssymb；章節與公式由 LaTeX 自動編號。
+% 引用鍵：kalman1960filter（新增）、ames2019cbf（沿用第一章）。
 
 % ==================================================
 % 3.4 動態障礙預測與導航參考調整
@@ -37,6 +44,18 @@
     \label{eq:ch3_obstacle_tracking_model}
 \end{equation}
 其中 $\Delta\tau$ 為相鄰追蹤更新的時間間隔，$y_g$ 為群集中心量測，$w_g$ 與 $n_g$ 分別表示程序與量測雜訊。追蹤更新間隔與控制週期 $\Delta t$ 分別處理，避免將不同更新頻率視為相同。
+
+% ==================================================
+% 3.4.1 英文參考圖：卡爾曼濾波循環
+% ==================================================
+卡爾曼濾波的預測與量測更新流程如\cref{fig:ref_kalman_predict_update}所示。圖中的 $A$ 與 $H$ 分別對應本節的 $F_o(\Delta\tau)$ 與 $H_o$；障礙物運動未設定外部控制輸入，因此圖中的 $Bu$ 項取零。追蹤器先將位置與速度向前預測，再以新群集中心量測修正估計。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/reference_figures/kalman_predict_update_welch2004.pdf}
+    \caption{卡爾曼濾波之預測與量測更新流程（引自文獻\cite{welch2004kalman}之圖~1-2）}
+    \label{fig:ref_kalman_predict_update}
+\end{figure}
 
 以 $\ell$ 表示送入控制器的障礙幾何樣本，令 $\hat{o}_{\ell,k}\in\mathbb{R}^{2}$ 為其目前估計位置，$\hat{v}_{\ell,k}\in\mathbb{R}^{2}$ 為所屬物件的速度估計。預測時域內的位置為
 \begin{equation}
@@ -317,13 +336,18 @@
     \label{fig:ch3_navigation_command_layers}
 \end{figure}
 
+
+
+% !TeX program = xelatex
+% 接在 3.4 之後，沿用 amsmath、amssymb 與既有論文主檔。
+
 % ==================================================
 % 3.5 視覺目標估測與任務參考生成
 % ==================================================
 \section{視覺目標估測與任務參考生成}
 \label{sec:visual_task_reference}
 
-移動操作所需的參考包含物件位置、抓取方向、底盤接近位置及操作進度。Mittal 等人\cite{mittal2022articulated}將 RGB-D 感知、物件操作規劃與全身控制整合，呈現感知資訊與操作模型銜接的重要性。本研究以已知類型的門把手、抽屜把手、圓柱及筆狀代理物為對象，利用深度幾何估測更新操作目標，再依導航可達性與手臂構型產生控制參考。
+移動操作所需的參考包含物件位置、抓取方向、底盤接近位置及操作進度。Mittal 等人\cite{mittal2022articulated}將 RGB-D 感知、物件操作規劃與全身控制整合，呈現感知資訊與操作模型銜接的重要性。本研究結合 Mask R-CNN 實例分割與深度幾何估測更新操作目標，再依導航可達性與手臂構型產生控制參考。
 
 
 % ==================================================
@@ -332,6 +356,24 @@
 \subsection{任務目標之視覺定位與幾何估測}
 \label{subsec:visual_geometric_estimation}
 
+住宅整合任務以 Mask R-CNN\cite{he2017maskrcnn}分割門把、門扇、圓柱、抽屜把手、筆狀代理物及抽屜面板六類目標。網路採 ResNet-50-FPN v2，以 COCO 預訓練權重初始化，再由 Isaac Sim 渲染 RGB 影像與語意標註建立訓練資料；同類的不同連通區域分別建立實例標註。模型輸出類別、信心分數、外框及遮罩，線上推論不使用語意真值。模擬影像測試集的類別平均遮罩 IoU 約為 0.754，真實影像及跨場域表現尚未驗證。
+% 來源：evaluation/house_seg.py、evaluation/seg_vision.py、
+% evaluation/experiments/20261119_m8_house_d2_unified91_result.json。
+
+% ==================================================
+% 3.5.1 英文參考圖：Mask R-CNN 原理
+% ==================================================
+Mask R-CNN 的原始流程如\cref{fig:ref_mask_rcnn_framework}所示，對候選區域同時提供類別、外框與實例遮罩。此圖用於說明原方法概念；本研究採用前述 ResNet-50-FPN v2 實作，並將遮罩連結至深度幾何估測。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.95\textwidth]{figsrc/reference_figures/mask_rcnn_framework_he2017.pdf}
+    \caption{Mask R-CNN 實例分割方法之原理示意（引自文獻\cite{he2017maskrcnn}之圖~1）}
+    \label{fig:ref_mask_rcnn_framework}
+\end{figure}
+
+圓柱、筆、抽屜把手、面板及門扇以預測遮罩選取深度點，並依幾何估測需求進行遮罩內縮、有效距離及深度離群篩選。門把的幾何偵測需要保留門板平面與橫桿端部背景，因此以遮罩外框建立擴張 ROI 視窗，再於視窗內使用有效深度資料。遮罩決定待估測區域，物件半徑、高度、橫桿尺寸與機構軸向等已知資訊則提供幾何先驗。
+
 令深度影像中像素座標為 $(u,v)$，其光軸深度為 $z(u,v)$，相機內參矩陣為 $K_C$。有效深度點在相機座標中的位置為
 \begin{equation}
     {}^{C}p(u,v)
@@ -339,7 +381,7 @@
       \begin{bmatrix}u&v&1\end{bmatrix}^{\top}.
     \label{eq:ch3_depth_backprojection}
 \end{equation}
-量測先經距離與任務區域篩選，再依目標類型估計幾何。家具登錄位置用於限制搜尋範圍，精確操作目標由當次有效觀測修正；物件尺寸、家具外形與機構軸向等已知資訊則作為先驗。
+深度點經式\eqref{eq:ch3_visual_timestamp_transform}轉換至世界座標後，再依目標類型估計幾何。家具登錄資訊可提供任務導引與局部座標基準，住宅分割版本的深度點選取則由模型遮罩或門把 ROI 決定；較早以家具範圍進行幾何搜尋的版本另依其實際設定說明。
 
 抽屜把手以面板點群估計櫃面方向，再由面板前方的橫桿點群取得桿心與高度。門扇開度則由鉸鏈附近的點群主方向估計，並核對可見長度及擬合直線與鉸鏈的距離。筆狀物件以點群主成分取得長軸方向，再利用長寬條件與頂面點估計中心。
 
@@ -351,8 +393,17 @@
     \left(\|P_\ell^{xy}-c\|-r_o\right)^2.
     \label{eq:ch3_known_radius_object_fit}
 \end{equation}
-式中以高斯牛頓法由初值迭代取得局部解。圓柱中心高度依桌面高度與已知物件高度建立，繞對稱軸的方向則由抓取需求選擇。筆狀物件的主軸具有 $\pi$ 方向歧義，需由可行抓取構型選擇對應方向。上述估測只輸出各物件可觀測且任務所需的幾何量，其餘分量由已知模型與操作條件決定。
+式中以高斯牛頓法由初值迭代取得局部解。分割版本以可見點高度的高分位數估計頂面，再配合已知物件高度取得圓柱中心高度；繞對稱軸的方向由抓取需求選擇。筆狀物件的主軸具有 $\pi$ 方向歧義，需由可行抓取構型選擇對應方向。上述估測只輸出各物件可觀測且任務所需的幾何量，其餘分量由已知模型與操作條件決定。
 
+
+本研究由分割至操作目標的資料流程如\cref{fig:ch3_mask_rcnn_target_pipeline}所示。遮罩與同一畫面的深度對應後，先建立相機座標中的幾何量，再以影像擷取時間對齊機器人狀態與相機外參，得到帶有來源時間的世界座標目標。門把分支保留擴張 ROI 所需的背景深度，各類目標依其幾何特性採用相應估測。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.98\textwidth]{figsrc/ch03/mask_rcnn_target_pipeline.pdf}
+    \caption{本研究之實例分割、深度點選取與帶時間戳操作目標生成流程}
+    \label{fig:ch3_mask_rcnn_target_pipeline}
+\end{figure}
 
 % ==================================================
 % 3.5.2 影像、機器人狀態與座標轉換之時間對齊
@@ -404,10 +455,23 @@
         w_L L_{\mathrm{route}}(b)
         +\frac{w_\sigma}
          {\max(\sigma_{\min}(J_{\mathrm{sel}}(q_a)),\epsilon_\sigma)}
+        +w_{\mathrm{ext}}\ell_{\mathrm{ext}}^2(b,q_a)
       \right],
     \label{eq:ch3_operation_base_selection}
 \end{equation}
-其中 $b=[x_B,y_B,\theta_B]^{\top}$，$L_{\mathrm{route}}$ 為路線長度估計，$J_{\mathrm{sel}}$ 為選位評估使用的手臂雅可比，$\epsilon_\sigma>0$ 用於避免分母接近零。啟用格點路線評估時，由已知家具及未知回波建立可行域，並以 Dijkstra 最短路徑方法\cite{dijkstra1959note}取得路線成本。不同任務可依後續目標及朝向增加評分項。
+其中 $b=[x_B,y_B,\theta_B]^{\top}$，$L_{\mathrm{route}}$ 為路線長度估計，$J_{\mathrm{sel}}$ 為選位評估使用的手臂雅可比，$\epsilon_\sigma>0$ 用於避免分母接近零。$\ell_{\mathrm{ext}}$ 定義為手臂基座至 TCP 的水平伸展距離：
+\begin{equation}
+    \ell_{\mathrm{ext}}(b,q_a)
+    =\left\|\Pi_{xy}\left({}^{W}p_E(b,q_a)-{}^{W}p_A(b)\right)\right\|_2,
+    \qquad
+    \Pi_{xy}=\begin{bmatrix}1&0&0\\0&1&0\end{bmatrix}.
+    \label{eq:ch3_operation_extension_cost}
+\end{equation}
+此項用於在可行候選中降低過度伸展的偏好；權重為非負值，依實驗設定揭露。既有選位程式及已完成對照批次對應 $w_{\mathrm{ext}}=0$；正權重伸展項為本次新增設計，尚待實作與 Isaac 驗證，不回溯套用於既有結果。
+% 狀態：evaluation/cyl_reach_map.py 的 select() 目前只有路線與奇異值項。
+% 新伸展項需接入程式、保存配置並完成 Isaac 驗證後，才改述為已啟用。
+
+啟用格點路線評估時，由已知家具及未知回波建立可行域，並以 Dijkstra 最短路徑方法\cite{dijkstra1959note}取得路線成本。不同任務可依後續目標及朝向增加評分項。
 
 選定候選提供導航目標、操作朝向與可用構型，實際接近路徑仍由導航前端更新。候選區域與路線需配合新觀測重新核對；式\eqref{eq:ch3_operation_base_selection}的選擇範圍為當次已生成且已檢查的候選集合。
 
@@ -426,40 +490,79 @@
 \subsection{導航路徑下之朝向與末端參考生成}
 \label{subsec:navigation_manipulation_reference}
 
-移動中接近時，底盤平移參考沿用導航前端提供的路徑，操作端依剩餘距離調整朝向、速度上限與末端展開進度。令 $\theta_{\mathrm{nav},i}$ 為導航朝向，$\theta_g$ 為操作朝向，則以距離權重 $w_i\in[0,1]$ 建立
+圓柱接近階段採用關節空間展開與後段併線；第 101 趟 Isaac 紀錄已出現對應分支事件並完成圓柱抓取、抬升與放盒。該趟回程因門扇視覺估測錯誤而停止，故此處僅確認圓柱階段的執行，不視為整趟任務通過。移動中接近時，底盤沿導航路徑行進，操作端依剩餘距離調整朝向、手臂展開進度及抓取線的推進。對已啟用此改版的圓柱接近階段，先指定中間關節構型，再由全身正向運動學建立末端參考；其他任務仍依各自啟用的參考策略處理。
+
+令 $\theta_{\mathrm{nav},i}$ 為導航朝向，$\theta_g$ 為操作朝向，以距離權重 $w_i\in[0,1]$ 建立
 \begin{equation}
-    \theta_{r,i}
-    =\theta_{\mathrm{nav},i}
-     +w_i\operatorname{wrap}
-       (\theta_g-\theta_{\mathrm{nav},i}),
+    \theta_{r,i}=\theta_{\mathrm{nav},i}
+    +w_i\operatorname{wrap}(\theta_g-\theta_{\mathrm{nav},i}),
     \label{eq:ch3_operation_heading_reference}
 \end{equation}
-其中 $\operatorname{wrap}(\cdot)$ 將角度差映射至 $(-\pi,\pi]$。接近操作區域時逐步增加 $w_i$，物件抬升並離開抓取階段後，再依任務條件交回導航朝向。
+其中 $\operatorname{wrap}(\cdot)$ 將角度差映射至 $(-\pi,\pi]$。接近時逐步增加 $w_i$，離開抓取階段後再依任務條件交回導航朝向。
 
-末端展開採用五次平滑函數 $\psi(\nu)=10\nu^3-15\nu^4+6\nu^5$；此函數對應固定端點且端點速度與加速度為零的最小急動軌跡\cite{flash1985coordination}。令 $d_i$ 為參考底盤至操作位置的距離，定義
+採用五次端點平滑函數 $\psi(\nu)=10\nu^3-15\nu^4+6\nu^5$\cite{flash1985coordination}。令 $d_i$ 為預測底盤至操作位置的距離，定義距離進度並限制其增加速度：
 \begin{equation}
-    \nu_i=
-    \operatorname{clip}
-      \left(\frac{d_{\mathrm{out}}-d_i}
-      {d_{\mathrm{out}}-d_{\mathrm{in}}},0,1\right),
-    \qquad \beta_i=\psi(\nu_i).
+    \begin{aligned}
+        \nu_i^{\mathrm{dist}}
+        &=\operatorname{clip}\!\left(
+          \frac{d_{\mathrm{out}}-d_i}{d_{\mathrm{out}}-d_{\mathrm{in}}},0,1\right),\\
+        \nu_i&=\min\!\left(\nu_i^{\mathrm{dist}},
+          \nu_k+\frac{t_i-t_k}{T_{\mathrm{exp,min}}}\right),
+        \qquad \beta_i=\psi(\nu_i).
+    \end{aligned}
     \label{eq:ch3_distance_based_arm_progress}
 \end{equation}
-預測進度另依目前進度與最短展開時間限制其增加速度。令 $(p_{\mathrm{rel},i},R_{\mathrm{rel},i})$ 為起始相對構型隨底盤移動所形成的世界位姿，$(p_{\mathrm{line},i},R_{\mathrm{line},i})$ 為預抓或抓取接近線上的目標，則
+其中 $\nu_k$ 為目前已承接的展開進度，$T_{\mathrm{exp,min}}>0$ 為最短展開時間參數；實作以基準最短時間及最大關節位移所需時間之較大者設定，關節速度目標另由控制限制處理。進度由距離與狀態更新，五次函數用於平滑端點，不將整段運動等同於固定時間的最小急動軌跡。
+
+令 $q_{a,0}$ 為展開開始時的實際關節構型，$q_a^g$ 為選位所得的抓取構型，關節展開參考為
+\begin{equation}
+    q_{a,i}^{\mathrm{exp}}
+      =q_{a,0}+\beta_i(q_a^g-q_{a,0}),
+    \qquad
+    T_{E,i}^{\mathrm{exp}}
+      =\operatorname{FK}_{\mathrm{WB}}(\widehat b_i,q_{a,i}^{\mathrm{exp}}),
+    \label{eq:ch3_joint_space_unfold_reference}
+\end{equation}
+其中 $\widehat b_i$ 為相應預測時刻的底盤位姿。由此建立的末端參考保留展開構型與底盤運動的對應關係；關節構型參考亦可作為同一全身控制問題的姿態引導，與末端目標共同使用。展開路徑仍需核對關節限制、環境及自身淨空。
+
+後段再銜接世界座標中的預抓或抓取線。令 $\beta_0\in[0,1)$ 為開始併線的進度，定義
+\begin{equation}
+    \gamma_i=\psi\!\left(\operatorname{clip}
+        \left(\frac{\beta_i-\beta_0}{1-\beta_0},0,1\right)\right).
+    \label{eq:ch3_late_merge_weight}
+\end{equation}
+將 $T_{E,i}^{\mathrm{exp}}$ 的位置與姿態記為 $(p_{\mathrm{exp},i},R_{\mathrm{exp},i})$，抓取線目標記為 $(p_{\mathrm{line},i},R_{\mathrm{line},i})$，則最終末端參考為
 \begin{equation}
     \begin{aligned}
         p_{E,i}^{d}
-        &=(1-\beta_i)p_{\mathrm{rel},i}
-          +\beta_i p_{\mathrm{line},i},\\
+        &=(1-\gamma_i)p_{\mathrm{exp},i}+\gamma_i p_{\mathrm{line},i},\\
         R_{E,i}^{d}
-        &=R_{\mathrm{rel},i}
-          \exp\!\left(
-            \beta_i\log(R_{\mathrm{rel},i}^{\top}R_{\mathrm{line},i})
-          \right).
+        &=R_{\mathrm{exp},i}\exp\!\left(
+          \gamma_i\log(R_{\mathrm{exp},i}^{\top}R_{\mathrm{line},i})\right).
     \end{aligned}
     \label{eq:ch3_continuous_approach_reference}
 \end{equation}
-最後接近線的推進另由底盤位置與 TCP 到位狀態觸發。若導航因避障而改變進度，手臂展開亦隨距離與狀態更新。朝向或位置參考變更後，依式\eqref{eq:ch3_reference_velocity_reconstruction}重新計算底盤參考速度，再建立末端追蹤與命令限制。
+前段依關節構型展開，後段隨 $\gamma_i$ 增加而併入抓取線；$\beta_i=1$ 時直接採用抓取線目標。抓取線推進仍由底盤位置及 TCP 到位狀態觸發，閉爪依抓持條件判定。朝向或位置參考變更後，依式\eqref{eq:ch3_reference_velocity_reconstruction}重新計算底盤參考速度，再建立末端追蹤與命令限制。
+
+
+% ==================================================
+% 3.5.4 距離限速與手臂展開進度示意
+% ==================================================
+\cref{fig:ch3_mobile_approach_distance_profile}以第 101 趟圓柱參考封包的參數說明距離剖面。逐軸平移速度上限在剩餘距離 $1.3$ 至 $0.4$ m 間，以三次平滑函數由 $0.26$ 降至 $0.06$ m/s；距離展開進度則在 $1.2$ 至 $0.3$ m 間由零增加至一，超過 $\beta_0=0.55$ 後逐步併入抓取線。圖中顯示距離規則的設計曲線，實際進度另受最短展開時間限制，最終速度由導航、障礙、家具鄰近條件及輪級限制共同決定。閉爪與確認仍依實測到位及抓持條件觸發。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.94\textwidth]{figsrc/ch03/mobile_approach_distance_profile.pdf}
+    \caption{圓柱接近時之逐軸速度上限與距離展開進度；設計曲線取第 101 趟參數，實際進度另受時間及狀態限制}
+    \label{fig:ch3_mobile_approach_distance_profile}
+\end{figure}
+% 證據：evaluation/runs/m8house_d2_unified_101/world.log，
+% pick_jblend_start t=90.06、CLOSE t=105.46（位置誤差 1.27 mm）、BIN_MOVE t=107.96。
+% 此圖不是量測速度曲線，亦未由真實軌跡重建未記錄的 beta。
+
+
+% !TeX program = xelatex
+% 接在 3.5 之後，沿用既有論文主檔。
 
 % ==================================================
 % 3.6 移動中操作與機構約束控制
@@ -478,7 +581,9 @@
 
 物件尚未抓持時，末端目標以世界座標表示。即使底盤持續移動，手臂仍需配合補償底盤造成的相對位移，使 TCP 接近物件。抓取階段依物件外形設定位置容許區域、姿態誤差及適用的相對速度條件；固定橫桿把手另檢查沿夾爪開合軸的誤差。
 
-閉爪時機由接近進度與狀態判定，抓持成立則需持續取得符合條件的手指位置與接觸證據。以 $\gamma_f(t)\in\{0,1\}$ 表示該任務的抓持證據判定，要求
+圓柱的移動中接近採用第 3.5.4 節之距離展開及後段併線，底盤逐軸限速與手臂進度的關係見\cref{fig:ch3_mobile_approach_distance_profile}。底盤可在接近與閉爪期間繼續行進，手臂則以世界座標抓取目標補償其運動；抓持成立後，再依抬升及運送階段更新為適用的底盤相對參考。
+
+閉爪時機由接近進度與狀態判定。目前模擬利用模擬器提供的手指位置與接觸力資訊確認抓持，不將閉爪命令回傳成功視為夾持成功。以 $\gamma_f(t)\in\{0,1\}$ 表示該任務的抓持證據判定，要求
 \begin{equation}
     \gamma_f(t)=1,
     \qquad
@@ -487,7 +592,7 @@
 \end{equation}
 其中 $T_{\mathrm{ev}}$ 為確認時間，$t_b$ 為判定成立時刻。手指位置、接觸力及持續時間的門檻依物件類型設定，並於第四章揭露。移動中抓取另受可達時間窗約束，錯過時依既定策略重新接近或轉為收斂抓取，並記錄原移動中操作未完成的原因。
 
-目前模擬在抓持證據成立後，依任務使用夾爪與物件間的理想固定連接。連接建立與解除皆由執行端回報確認，控制器再更新抓持狀態。此假設用於研究抓持後的協同運動，其影響於第四章的限制分析說明。
+目前模擬在抓持證據成立後，依任務使用夾爪與物件間的理想固定連接。連接建立與解除皆由執行端回報確認，控制器再更新抓持狀態。此假設用於研究抓持後的協同運動，其影響於第四章的限制分析說明。上述手指狀態與接觸力為模擬資訊；實機部署須另以視覺觀測或外加感測器建立對應的抓持確認機制。
 
 % ==================================================
 % 3.6.1 接近、閉爪確認與抓持成立之狀態轉移
@@ -607,7 +712,7 @@
 \end{equation}
 因此，持物任務以相對構型維持物件位置，導航則繼續調整底盤運動。相對模式的殘差與雅可比需共同更新，以符合式\eqref{eq:ch3_base_relative_carry_target}的座標關係。
 
-抬升、退出家具、移至收納區及收臂依階段產生參考，並檢查手臂、持物與家具的淨空。當物件放入收納區時，先確認連接解除與釋放狀態，再轉入空手收臂或後續操作。不同實驗採用直接持物返回或先收納再返回時，依各自流程評估。
+抬升、退出家具、移至收納區及收臂依階段產生參考，並檢查手臂、持物與家具的淨空。住宅整合任務將茶几圓柱及抽屜內的筆狀代理物依序放入車尾收納盒，確認連接解除與釋放後，再轉入後續操作。收納後持續承接關閉抽屜、回程推門通行、關門及返回起點等階段；較早的直接持物返回實驗依其原流程另行比較。
 
 % ==================================================
 % 3.6.3 相對底盤目標下之持物運送與構型保持
@@ -632,6 +737,10 @@
 切換時承接實際關節位置、位置設定點、在途命令、最近放行輸入及模型偏置，並保留可沿用的初始控制序列。新的接近參考由切換時實際相對位姿建立；抓持成立後再依式\eqref{eq:ch3_grasp_closed_chain}建立機構關係。狀態延續使各任務可使用共用全身控制核心，同時維持實際命令的時間順序。
 
 當新階段尚未取得有效目標或未通過交接檢查時，執行端依目前已接受的控制段與停止備援處理。任務切換、求解接受與實際生效分別記錄，以供第四章分析動作接續與非必要等待。
+
+
+% !TeX program = xelatex
+% 接在 3.6 之後；主檔導言區需載入 algorithm_preamble.tex。
 
 % ==================================================
 % 3.7 執行動態補償與控制實現
@@ -825,16 +934,39 @@
     \label{fig:ch3_wholebody_control_workflow}
 \end{figure}
 
-每一控制週期的運作如下：
+演算法\ref{alg:wholebody_predictive_control}以非阻塞求解及逐步執行兩部分呈現運作關係。背景求解期間，執行端繼續沿既定控制段運動；新結果只有在期限與交接條件成立時才承接。
 
-\begin{enumerate}
-    \item 取得機器人位姿、關節位置、位置設定點、障礙與視覺資料，保留來源時間及序號，檢查資料有效性。
-    \item 使用完整量測區間更新允許啟用的模型偏置估測，再依已排定命令前推至新控制段的生效起點。
-    \item 更新任務階段、操作目標與可行底盤候選；依導航路徑產生接近、抓持、機構操作或持物參考。
-    \item 預測動態障礙並評估速度與偏移候選，更新導航參考及對應速度；依任務啟用範圍處理門區與操作限制。
-    \item 建立增廣預測、末端局部近似及目標函數，加入命令、關節、輪級、CBF 與適用的機構限制後求解。
-    \item 核對求解結果、候選控制段及停止尾段，將合格結果連同版本與生效步提交執行端。
-    \item 於指定時刻判定是否接受新控制段；執行後回報最終放行命令、設定點及任務事件，未通過時沿既定停止策略處理。
-\end{enumerate}
+\begin{algorithm}[htbp]
+    \small
+    \setstretch{1.15}
+    \caption{具命令承接與停止備援之全身預測控制}
+    \label{alg:wholebody_predictive_control}
+    \begin{algorithmic}[1]
+        \Require 狀態與感測快照、導航路徑、任務狀態、既定命令佇列
+        \Ensure 最終放行命令、更新之設定點及任務事件
+        \State 保存目前已接受控制段及其停止尾段
+        \While{任務尚未結束}
+            \Statex \textbf{控制更新與背景求解}
+            \If{到達控制更新時刻且可啟動新求解}
+                \State 核對資料時間與版本，更新允許啟用之偏置估測
+                \State 依既定命令前推至生效起點，更新任務與視覺目標
+                \State 預測障礙運動，更新導航參考及任務限制
+                \State 建立增廣模型、目標函數及全身限制
+                \State 非阻塞送出 QP 求解及候選／停止尾段核對工作
+            \EndIf
+            \If{背景工作完成且候選核對通過}
+                \State 送出帶版本、預定生效步與停止尾段之候選封包
+            \EndIf
+            \Statex \textbf{執行端：每一物理步持續運作}
+            \If{新封包在期限內到達，且生效步與交接條件成立}
+                \State 接續新控制段，更新已接受之停止尾段
+            \ElsIf{目前控制段將耗盡或要求停止}
+                \State 沿已核對停止尾段減速；必要時工程中止
+            \EndIf
+            \State 依當步排程執行底盤速度與手臂設定點命令
+            \State 回報實際放行輸入、設定點、狀態及任務事件
+        \EndWhile
+    \end{algorithmic}
+\end{algorithm}
 
 透過上述流程，導航參考、操作目標與執行模型可在同一控制迴圈中更新。第三章建立各方法及其實現關係；實際使用的版本、參數、比較條件與結果，於第四章依模型預測、動態導航、協同操作及整合任務分別驗證。

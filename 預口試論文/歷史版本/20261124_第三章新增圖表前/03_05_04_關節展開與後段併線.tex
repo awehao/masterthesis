@@ -1,0 +1,67 @@
+% !TeX program = xelatex
+% ==================================================
+% 3.5.4 待驗證修訂：關節空間展開與後段併線
+% ==================================================
+% 此檔為替換整個 3.5.4 的候選稿，不是額外新增的小節。
+% 勿與正式稿同時 input，以免章節與公式標籤重複。
+% 2026-11-24：程式已有 PICK_JBLEND 分支，但尚無本次改版通過
+% Isaac 的核對結論；完成驗證後再以本檔替換正式 3.5.4。
+% 程式依據：evaluation/door_pick_ctrl.py 的 _app_target()、_jb_active()。
+% 不將替身測試或程式存在視為 Isaac 通過。
+
+\subsection{導航路徑下之朝向與末端參考生成}
+\label{subsec:navigation_manipulation_reference}
+
+本小節為關節空間展開與後段併線的修訂設計，尚待 Isaac 驗證。移動中接近時，底盤沿導航路徑行進，操作端依剩餘距離調整朝向、手臂展開進度及抓取線的推進。對已啟用此改版的圓柱接近階段，先指定中間關節構型，再由全身正向運動學建立末端參考；其他任務仍依各自啟用的參考策略處理。
+
+令 $\theta_{\mathrm{nav},i}$ 為導航朝向，$\theta_g$ 為操作朝向，以距離權重 $w_i\in[0,1]$ 建立
+\begin{equation}
+    \theta_{r,i}=\theta_{\mathrm{nav},i}
+    +w_i\operatorname{wrap}(\theta_g-\theta_{\mathrm{nav},i}),
+    \label{eq:ch3_operation_heading_reference}
+\end{equation}
+其中 $\operatorname{wrap}(\cdot)$ 將角度差映射至 $(-\pi,\pi]$。接近時逐步增加 $w_i$，離開抓取階段後再依任務條件交回導航朝向。
+
+採用五次端點平滑函數 $\psi(\nu)=10\nu^3-15\nu^4+6\nu^5$\cite{flash1985coordination}。令 $d_i$ 為預測底盤至操作位置的距離，定義距離進度並限制其增加速度：
+\begin{equation}
+    \begin{aligned}
+        \nu_i^{\mathrm{dist}}
+        &=\operatorname{clip}\!\left(
+          \frac{d_{\mathrm{out}}-d_i}{d_{\mathrm{out}}-d_{\mathrm{in}}},0,1\right),\\
+        \nu_i&=\min\!\left(\nu_i^{\mathrm{dist}},
+          \nu_k+\frac{t_i-t_k}{T_{\mathrm{exp,min}}}\right),
+        \qquad \beta_i=\psi(\nu_i).
+    \end{aligned}
+    \label{eq:ch3_distance_based_arm_progress}
+\end{equation}
+其中 $\nu_k$ 為目前已承接的展開進度，$T_{\mathrm{exp,min}}>0$ 為最短展開時間參數。進度由距離與狀態更新，五次函數用於平滑端點，不將整段運動等同於固定時間的最小急動軌跡。
+
+令 $q_{a,0}$ 為展開開始時的實際關節構型，$q_a^g$ 為選位所得的抓取構型，關節展開參考為
+\begin{equation}
+    q_{a,i}^{\mathrm{exp}}
+      =q_{a,0}+\beta_i(q_a^g-q_{a,0}),
+    \qquad
+    T_{E,i}^{\mathrm{exp}}
+      =\operatorname{FK}_{\mathrm{WB}}(\widehat b_i,q_{a,i}^{\mathrm{exp}}),
+    \label{eq:ch3_joint_space_unfold_reference}
+\end{equation}
+其中 $\widehat b_i$ 為相應預測時刻的底盤位姿。由此建立的末端參考保留展開構型與底盤運動的對應關係；關節構型參考亦可作為同一全身控制問題的姿態引導，與末端目標共同使用。展開路徑仍需核對關節限制、環境及自身淨空。
+
+後段再銜接世界座標中的預抓或抓取線。令 $\beta_0\in[0,1)$ 為開始併線的進度，定義
+\begin{equation}
+    \gamma_i=\psi\!\left(\operatorname{clip}
+        \left(\frac{\beta_i-\beta_0}{1-\beta_0},0,1\right)\right).
+    \label{eq:ch3_late_merge_weight}
+\end{equation}
+將 $T_{E,i}^{\mathrm{exp}}$ 的位置與姿態記為 $(p_{\mathrm{exp},i},R_{\mathrm{exp},i})$，抓取線目標記為 $(p_{\mathrm{line},i},R_{\mathrm{line},i})$，則最終末端參考為
+\begin{equation}
+    \begin{aligned}
+        p_{E,i}^{d}
+        &=(1-\gamma_i)p_{\mathrm{exp},i}+\gamma_i p_{\mathrm{line},i},\\
+        R_{E,i}^{d}
+        &=R_{\mathrm{exp},i}\exp\!\left(
+          \gamma_i\log(R_{\mathrm{exp},i}^{\top}R_{\mathrm{line},i})\right).
+    \end{aligned}
+    \label{eq:ch3_continuous_approach_reference}
+\end{equation}
+前段依關節構型展開，後段隨 $\gamma_i$ 增加而併入抓取線；$\beta_i=1$ 時直接採用抓取線目標。抓取線推進仍由底盤位置及 TCP 到位狀態觸發，閉爪依抓持條件判定。朝向或位置參考變更後，依式\eqref{eq:ch3_reference_velocity_reconstruction}重新計算底盤參考速度，再建立末端追蹤與命令限制。

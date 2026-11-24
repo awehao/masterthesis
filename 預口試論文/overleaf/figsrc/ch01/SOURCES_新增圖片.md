@@ -42,6 +42,6 @@
 ## 引用與檔案
 
 - 正文與圖說片段：`overleaf/第一章_新增插圖片段.tex`。
-- BibTeX：`overleaf/第一二章_新增圖片參考文獻.bib`；只將尚未存在的引用鍵加入學姐專案的 `thesis.bib`，不新增第二套 bibliography 指令。
+- BibTeX：`overleaf/thesis_references.bib`；只將尚未存在的引用鍵加入學姐專案的 `thesis.bib`，不新增第二套 bibliography 指令。
 - 檔案大小、SHA-256 及原始網址記錄於同資料夾的 `supplementary_images_metadata.json`。
 - 原有兩張 IFR 圖的來源仍見 `SOURCES.md`。
