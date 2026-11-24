@@ -34,6 +34,7 @@ T_RET_DR = float(os.environ.get('DR_T_RET', '2.5'))
 H_FQ, H_FQ_TOL, H_FSUM = 0.0018, 0.0006, 1.0                         # 把手夾持證據：兩指開度在 26 mm 橫桿接觸開度 1.8 mm ±0.6 mm、兩指合力 ≥1.0 N（第二十趟 Isaac：開度 1.74/1.75 mm 但力 4.8／0.22 N 不對稱 ⇒ 原「兩指各 ≥0.5 N」判逾時）
 Q_UNFOLD = np.array([float(x) for x in os.environ.get('DR_Q_UNFOLD', '-0.0128,-0.0519,0.086,0.0116,-1.6249,-0.0018').split(',')])   # 抓把手前展開到原收臂構型（第二十三趟：緊湊收臂直接接近 ⇒ 自身淨空 4.9 mm）
 UNFOLD_TOL = 0.03
+CLOSE_UNF_ANCHOR = os.environ.get('DR_CLOSE_UNF_ANCHOR', '1') == '1'
 OBS_QD = float(os.environ.get('DR_OBS_QD', '0.6'))                    # 俯視關節空間移動峰速上限（rad/s）
 UNF_QD = float(os.environ.get('DR_UNF_QD', '1.2'))                    # 展開關節空間峰速（rad/s）：Howard「依照硬體限制」，Lite 6 手冊 180°/s＝3.14 rad/s，取 38%（原沿用俯視 0.6 ⇒ 展開 7.25 s，照導航接近時底盤已到站等手臂）
 W_Q_OBS = float(os.environ.get('DR_W_Q_OBS', '5.0'))
@@ -103,7 +104,7 @@ class DrawerCtrl(PK.TablePickCtrl):
             self.dr_attach, self.dr_release, self.dr_unbound = False, False, False
             self.T_p0, self.b_p0, self.T_rel_r0, self.dvec_b, self.n_ev, self.T_hold = None, None, None, None, 0, None   # T_hold 必清（s80：確認段保持舊退出位姿 ⇒ 手臂抬走、證據逾時）
             self.finger_cmd = P.FINGER_OPEN
-            self.q_unf0 = None
+            self.q_unf0, self.b_unf = None, None
             self.app_prof = dict(base_goal=list(app['base_goal']), door=None)
             self.T_app, self.T_b, self.t_l0 = float(app['T']), float(app['T_b']), float(app['t_l0'])
             self._bg, self._t_arr, self._t_line0, self._bp = np.asarray(app['base_goal'], float)[:2].copy(), None, None, 0.0   # 關抽屜把手也走狀態閘門
@@ -362,6 +363,13 @@ class DrawerCtrl(PK.TablePickCtrl):
             Ts = [K.fk(np.r_[np.zeros(3), self._unf_q(t_eff + k * DT)], 'link_tcp') for k in range(XO.N + 1)]
             q_post = np.array([self._unf_q(t_eff + (k + 1) * DT) for k in range(XO.N)])
             tcp_rel, w_p = True, C0.W_FAR                             # 底盤照導航前端／收斂到把手底盤位（nav_window）
+            if getattr(self, 'close_mode', False) and CLOSE_UNF_ANCHOR:  # 關抽屜再夾：已在櫃前（離把手底盤位 ~0.3 m）⇒ 展開段底盤錨定（Isaac 102／替身 s216d：展開 3.9 s 中照導航轉走 2.5–2.7 rad ⇒ 接近第一拍邊大轉邊伸手、自身淨空 5 mm／計算 >125 ms）
+                if getattr(self, 'b_unf', None) is None:
+                    self.b_unf = np.asarray(q[:3], float).copy()
+                    self._ev('pick_close_unfold_anchor', base=[round(float(x), 4) for x in self.b_unf])
+                X = [XO.from_xytheta(*self.b_unf)] * (XO.N + 1)
+                xi = [np.zeros(3)] * (XO.N + 1)
+                umin0, src = float('nan'), 'anchor'
         elif self.task == 'observe' and self.q_obs is not None and self.q_obs0 is not None and self.phase in ('APPROACH', 'OBSERVE'):
             if self.phase == 'APPROACH':
                 Ts = [self._obs_rel(t_eff + k * DT) for k in range(XO.N + 1)]
