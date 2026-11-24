@@ -410,7 +410,7 @@ class MovingGraspCtrl:
             bg = np.asarray(bg, float); X, xi = [], []
             p = np.asarray(qp[:3], float).copy()
             v_in = None
-            if BG_CONT:
+            if BG_CONT and isinstance(self, MovingGraspCtrl):             # 只用在開門前的門把接近（第 127 趟：關門控制也走這裡，底盤提早 3.5 s 到位 ⇒ 手臂按原時間展開時掃到門扇、門被推 85°→76° ⇒ 夾空）
                 if getattr(self, '_bg_v0', None) is None:                # 導航到點交接當下的底盤速率（此後只用來封頂，不再加速）
                     up_ = getattr(self, 'u_prev', None)
                     self._bg_v0 = float(np.hypot(up_[0], up_[1])) if up_ is not None else 0.0
