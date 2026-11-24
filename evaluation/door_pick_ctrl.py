@@ -72,7 +72,7 @@ FLOW_VRAMP = os.environ.get('PICK_FLOW_VRAMP', '1') == '1'             # 照導�
 FLOW_V_HI = float(os.environ.get('PICK_FLOW_V_HI', '0.26'))           # 進場限速上端（＝導航名目）
 FLOW_PULL = os.environ.get('PICK_FLOW_PULL', '1') == '1'             # Howard 11/25 選 A（不要經過線）：導航路徑在抓取位附近側向平順拉近抓取底盤位 b0，離開後退回導航路徑（路徑形狀、方向、速度照導航；Isaac 124／126 導航離桌 0.75 m、手臂要 0.46 m ⇒ 底盤被 TCP 拉出 L 形）
 FLOW_PULL_DIN = float(os.environ.get('PICK_FLOW_PULL_DIN', '0.25'))   # 沿路徑離 b0 此距離內 ⇒ 全量拉到 b0 的側向位置
-FLOW_PULL_DOUT = float(os.environ.get('PICK_FLOW_PULL_DOUT', '1.3'))  # 此距離外 ⇒ 不拉（中間 smoothstep）
+FLOW_PULL_DOUT = float(os.environ.get('PICK_FLOW_PULL_DOUT', '2.5'))  # 此距離外 ⇒ 不拉（中間 smoothstep）；第 128 趟 1.3 m 時 0.6 m 側移擠在約 1 m 內 ⇒ 側向 0.24 m/s 橫衝 ⇒ 2.5 m（偏轉約 15°）
 FLOW_PULL_MAX = float(os.environ.get('PICK_FLOW_PULL_MAX', '0.6'))    # 側向拉移上限（m）
 
 

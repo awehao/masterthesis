@@ -45,6 +45,7 @@ BIN = os.environ.get('D2_BIN', '0') == '1'                            # 車尾�
 PICK_APP_DYAW = float(os.environ['B_PICK_APP_DYAW']) if os.environ.get('B_PICK_APP_DYAW') else None   # 圓柱接近開始的偏航閘門（同抽屜 DR_APP_DYAW；s60：繞茶几角時距 0.6 m 即接近、車頭偏 1.36 rad ⇒ 收斂切桌角、底盤淨空 0.0993 被停）；未設＝原行為
 DR_MOTM_V = float(os.environ['DR_MOTM_V']) if os.environ.get('DR_MOTM_V') else None
 HEAD_OBJ = os.environ.get('HEAD_OBJ', '0') == '1'                   # Howard 11/21「太多原地旋轉了」：穿門後各段偏航不跟路徑前視（路徑一彎就擺），改由物件決定：未看到物件前朝物件（可見性），看到後依剩餘距離平滑轉到本段終點偏航（每段只轉一次）
+HEAD_HOLD = os.environ.get('HEAD_HOLD', '0') == '1'                 # Howard 11/25「關掉偏航即可」（第 124／127 趟導航 heading 跟路徑前視 1.2 m 弦方向，路徑一彎或重規劃就扭）：穿門後行駛中偏航參考＝目前車頭（不轉）；只在相機要看東西時朝物件（回程找門扇、抽屜把手視覺前），抓取／開關所需朝向由各控制器最後一段自己轉
 HEAD_DOOR_C = [float(x) for x in os.environ.get('HEAD_DOOR_C', '0.5,0.0').split(',')]   # 門口中心（map；回程看門扇）
 HEAD_NEAR = 1.0                                                       # 離終點 ≤ 此距離時已轉完
 HEAD_DOOR_R = float(os.environ.get('HEAD_DOOR_R', '0.0'))            # 回程關門前：門口中心這麼近就不給偏航（原導航行為）；s140d：撤了仍在門扇尖端停 6.5 s ⇒ 非偏航造成，預設關
@@ -1522,17 +1523,17 @@ def main():
             self._h_last, self._h_pub_t = float(h), t
 
         def _head_refresh(self, t):
-            if HEAD_OBJ and getattr(self, '_h_last', None) is not None and t - getattr(self, '_h_pub_t', -9.0) >= 0.25:
+            if (HEAD_OBJ or HEAD_HOLD) and getattr(self, '_h_last', None) is not None and t - getattr(self, '_h_pub_t', -9.0) >= 0.25:
                 self._head_pub(t, self._h_last)                          # 提前 return 的拍也續期（逾時 ⇒ 任務節點判 lost 停車）
 
         def _head_update(self, t):
             """偏航由物件決定（HEAD_OBJ）：未看到物件 ⇒ 朝物件；看到後 ⇒ 本段終點偏航（自段起點偏航依距離進度內插）。"""
-            if not HEAD_OBJ:
+            if not (HEAD_OBJ or HEAD_HOLD):
                 return
             Tc_ = _T3(self.T_mo_now) @ _T3(self.b_od_now[:3])                # 目前位姿（地圖）；cur_map 只在開門前段更新，穿門後是舊值（s137d：進度永遠 0、偏航不轉）
             cur = np.array([float(Tc_[0, 3]), float(Tc_[1, 3]), math.atan2(Tc_[1, 0], Tc_[0, 0])])
             O = None
-            if PICK and CHAIN and getattr(self, 'chain', 'cyl') == 'cyl' and self.pick_sel is None:
+            if PICK and CHAIN and getattr(self, 'chain', 'cyl') == 'cyl' and self.pick_sel is None and not HEAD_HOLD:   # HEAD_HOLD：穿門後茶几本來就在相機視野內（方位差約 30°），不為看桌面而轉
                 O = [float(self._CR.TX), float(self._CR.TY)]                 # 茶几（未估到圓柱前看桌面）
             elif DRAWER and not self.dr.get('carried') and getattr(self, 'chain', 'cyl') == 'drawer' and HANDLE_VISION and not self.dr.get('pose_vis'):
                 h_ = self._DRR.D.handle_T(0.0)[:3, 3]                       # 抽屜把手先驗（里程≈地圖）
@@ -1547,6 +1548,8 @@ def main():
                 return
             if O is not None:
                 h = math.atan2(O[1] - cur[1], O[0] - cur[0]); self._hleg = None; mode = 'obj'
+            elif HEAD_HOLD:
+                h = float(cur[2]); self._hleg = None; mode = 'hold'      # 不轉：偏航參考＝目前車頭（抓取等朝向由控制器最後一段處理）
             else:
                 g = self.pick_goal if self.pick_goal is not None else (PICK_PRIOR if getattr(self, 'chain', 'cyl') == 'cyl' else DR_PRIOR)
                 if g is None:
