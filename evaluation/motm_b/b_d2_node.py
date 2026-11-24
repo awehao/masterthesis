@@ -46,6 +46,8 @@ PICK_APP_DYAW = float(os.environ['B_PICK_APP_DYAW']) if os.environ.get('B_PICK_A
 DR_MOTM_V = float(os.environ['DR_MOTM_V']) if os.environ.get('DR_MOTM_V') else None
 HEAD_OBJ = os.environ.get('HEAD_OBJ', '0') == '1'                   # Howard 11/21「太多原地旋轉了」：穿門後各段偏航不跟路徑前視（路徑一彎就擺），改由物件決定：未看到物件前朝物件（可見性），看到後依剩餘距離平滑轉到本段終點偏航（每段只轉一次）
 HEAD_HOLD = os.environ.get('HEAD_HOLD', '0') == '1'                 # Howard 11/25「關掉偏航即可」（第 124／127 趟導航 heading 跟路徑前視 1.2 m 弦方向，路徑一彎或重規劃就扭）：穿門後行駛中偏航參考＝目前車頭（不轉）；只在相機要看東西時朝物件（回程找門扇、抽屜把手視覺前），抓取／開關所需朝向由各控制器最後一段自己轉
+HEAD_REV_DEG = float(os.environ.get('HEAD_REV_DEG', '100'))          # Howard 11/25「129 不錯，最後不要倒車就好」：維持車頭時，本段目標在車頭後方超過此角度且還遠（HEAD_REV_D）⇒ 改回導航 heading（朝行進方向），近目標再回維持
+HEAD_REV_D = float(os.environ.get('HEAD_REV_D', '1.5'))
 HEAD_DOOR_C = [float(x) for x in os.environ.get('HEAD_DOOR_C', '0.5,0.0').split(',')]   # 門口中心（map；回程看門扇）
 HEAD_NEAR = 1.0                                                       # 離終點 ≤ 此距離時已轉完
 HEAD_DOOR_R = float(os.environ.get('HEAD_DOOR_R', '0.0'))            # 回程關門前：門口中心這麼近就不給偏航（原導航行為）；s140d：撤了仍在門扇尖端停 6.5 s ⇒ 非偏航造成，預設關
@@ -80,6 +82,11 @@ DR_APP_DYAW = float(os.environ.get('B_DR_APP_DYAW', '0.30'))         # 抓把手
 DR_PRIOR = [float(x) for x in os.environ.get('B_DR_PRIOR', '-3.5,10.3,3.1416').split(',')]   # 選位完成前的粗目標（map；抽屜櫃前）
 PASS_CLEAR = os.environ.get('B_PASS_CLEAR', '1') == '1'           # Howard 11/18：不要中途點，讓全域規劃自己找出路
 PASS_CLEAR_WAIT_S = float(os.environ.get('B_PASS_CLEAR_WAIT_S', '1.2'))
+APP_SYNC = os.environ.get('B_APP_SYNC', '1') == '1'                  # Howard 11/25「開門還是有點停止操作，希望車到 TCP 到」：TCP 接近時間表對齊底盤實際到位時刻（原照 0.08 m/s 慢挪排 7.5 s，底盤 3 s 就到 ⇒ 停約 2.7 s 等手臂）
+APP_SYNC_TRIG = float(os.environ.get('B_APP_SYNC_TRIG', '1.0'))      # 對齊版接近開始距離（手臂展開需要時間）
+APP_SYNC_A = float(os.environ.get('B_APP_SYNC_A', '0.15'))            # 估到位時刻用的減速度（＝控制器 D2_BG_A）
+APP_SYNC_SETTLE = float(os.environ.get('B_APP_SYNC_SETTLE', '0.3'))   # TCP 到抓取線底後的保持（原 1.0）
+APP_SYNC_LINE = float(os.environ.get('B_APP_SYNC_LINE', '1.5'))       # 抓取線時長（原 T−2.5 到 T−1.0 ＝ 1.5 s）
 APP_TRIG = float(os.environ.get('B_APP_TRIG', '0.6'))          # 單一控制器：有效估計且離導航目標 ≤ 此距離 ⇒ 接近開始（加入 TCP 任務）
 FUSE_HO = os.environ.get('B_FUSE_HO', '1') == '1'            # 交權參考＝全部有效影格閘門內融合（c13／c22：最早 3 格估計沿接近軸誤差 2 mm 吃掉外殼—橫桿餘裕）
 CL_LINE = os.environ.get('B_CL_LINE', '1') == '1'             # 混接／直線段以實際底盤即時解 IK（c7 阻點修正）；0＝原開迴路關節參考
@@ -1526,6 +1533,26 @@ def main():
             if (HEAD_OBJ or HEAD_HOLD) and getattr(self, '_h_last', None) is not None and t - getattr(self, '_h_pub_t', -9.0) >= 0.25:
                 self._head_pub(t, self._h_last)                          # 提前 return 的拍也續期（逾時 ⇒ 任務節點判 lost 停車）
 
+        def _head_rev(self, t, cur):
+            """維持車頭會倒著開（第 129 趟關門後回起點倒退 15 s）⇒ 清偏航條件交回導航 heading；回 True 表示本拍在導航 heading 模式。"""
+            g = self.pick_goal if self.pick_goal is not None else (PICK_PRIOR if getattr(self, 'chain', 'cyl') == 'cyl' else DR_PRIOR)
+            if g is None:
+                return False
+            d_ = float(np.hypot(g[0] - cur[0], g[1] - cur[1]))
+            if getattr(self, '_h_mode', None) == 'nav':
+                if d_ > 1.0 and getattr(self, '_h_rev_g', None) is not None and float(np.hypot(g[0] - self._h_rev_g[0], g[1] - self._h_rev_g[1])) < 0.3:
+                    return True                                       # 同一目標、還沒到 ⇒ 繼續導航 heading
+                return False
+            ref_ = getattr(self, '_h_hold', None) if getattr(self, '_h_mode', None) == 'hold' else float(cur[2])
+            ref_ = float(cur[2]) if ref_ is None else ref_
+            brg_ = math.atan2(g[1] - cur[1], g[0] - cur[0])
+            if d_ > HEAD_REV_D and abs((brg_ - ref_ + math.pi) % (2 * math.pi) - math.pi) > math.radians(HEAD_REV_DEG):
+                self._h_mode, self._h_last, self._h_rev_g = 'nav', None, list(g[:2])
+                self.p_task.publish(String(data=json.dumps(dict(clear=True))))
+                self.event('head_mode', mode='nav', why='goal_behind', d=round(d_, 2), dyaw_deg=round(math.degrees(abs((brg_ - ref_ + math.pi) % (2 * math.pi) - math.pi)), 1))
+                return True
+            return False
+
         def _head_update(self, t):
             """偏航由物件決定（HEAD_OBJ）：未看到物件 ⇒ 朝物件；看到後 ⇒ 本段終點偏航（自段起點偏航依距離進度內插）。"""
             if not (HEAD_OBJ or HEAD_HOLD):
@@ -1548,6 +1575,8 @@ def main():
                 return
             if O is not None:
                 h = math.atan2(O[1] - cur[1], O[0] - cur[0]); self._hleg = None; mode = 'obj'
+            elif HEAD_HOLD and self._head_rev(t, cur):
+                return                                                # 目標在後方且還遠 ⇒ 導航 heading（已清偏航條件）
             elif HEAD_HOLD:                                           # 不轉：進入維持時記住當下車頭（第 129 趟每 0.15 s 送「目前車頭」＝延遲的彈簧 ⇒ 與抓取前轉向互拉、0.59 rad/s 左右甩）
                 hl_ = getattr(self, '_h_hold', None)
                 if hl_ is None or getattr(self, '_h_mode', None) != 'hold':
@@ -1872,7 +1901,8 @@ def main():
                             v0_ = float(np.clip(np.linalg.norm(mvd_) / dt_h_, 0.0, 0.2))
                             law_ = MM_.time_law(G_, v0_, DOOR_LINE_V, -0.3, v_hi_cap=0.15)
                             dl_ = dict(T=MM_.t_at_sig(law_, MM_.sig_of_s(G_, 0.0), DOOR_LINE_V), s_p=G_['s_p'], lat=G_['lat'])
-                    if (dist_ <= APP_TRIG and not DOOR_LINE) or dl_ is not None:
+                    hs_ = [h for h in getattr(self, '_xy_hist_s', []) if t - h[0] <= 0.6] + [(t, self.cur_map[:3].copy())]; self._xy_hist_s = hs_   # 接近對齊：近 0.6 s 底盤速率（地圖）
+                    if (dist_ <= (APP_SYNC_TRIG if APP_SYNC else APP_TRIG) and not DOOR_LINE) or dl_ is not None:
                         rf = self.ref
                         T_send, fz = np.asarray(rf['T_od'], float), None
                         keep = []
@@ -1888,6 +1918,15 @@ def main():
                             T_send = Tf
                         Tapp = max(APP_T_MIN, dist_ / 0.08) if dl_ is None else max(APP_T_MIN, float(dl_['T']))   # 走廊經過：TCP 抵把手時刻＝底盤經過抓取位時刻（同一弧長—時間表）
                         app = dict(T=Tapp, T_b=max(1.5, Tapp - 1.5), t_l0=max(0.5, Tapp - APP_T_LINE), d_line=APP_D_LINE, t_settle=1.0, s_final=float(os.environ.get('B_S_FINAL', '0.0015')))
+                        if APP_SYNC and dl_ is None:                   # 對齊：底盤延續當下速率、等減速到點的時刻 t_arr ＝ TCP 抓取線到底時刻
+                            dt_s_ = max(hs_[-1][0] - hs_[0][0], 1e-3)
+                            v0_s_ = float(np.clip(np.linalg.norm(hs_[-1][1][:2] - hs_[0][1][:2]) / dt_s_, 0.05, 0.26))
+                            sd_ = v0_s_ * v0_s_ / (2.0 * APP_SYNC_A)
+                            t_arr_ = ((dist_ - sd_) / v0_s_ + v0_s_ / APP_SYNC_A) if dist_ > sd_ else math.sqrt(2.0 * dist_ / APP_SYNC_A)
+                            Tapp = max(APP_T_MIN, t_arr_ + APP_SYNC_SETTLE)
+                            Te_ = Tapp - APP_SYNC_SETTLE
+                            app = dict(T=Tapp, T_b=max(1.5, Te_ - 0.5), t_l0=max(0.5, Te_ - APP_SYNC_LINE), d_line=APP_D_LINE, t_settle=APP_SYNC_SETTLE, s_final=float(os.environ.get('B_S_FINAL', '0.0015')))
+                            self.event('app_sync', v0=round(v0_s_, 3), t_arr=round(t_arr_, 2), T=round(Tapp, 2), dist=round(dist_, 3))
                         gb_ = self.grasp_xy if (DOOR_LINE and getattr(self, 'grasp_xy', None) is not None) else self.goal_xy
                         Tg_od = np.linalg.inv(_T3(T_mo)) @ _T3([gb_[0], gb_[1], self.prior['yaw']])
                         if dl_ is not None:
