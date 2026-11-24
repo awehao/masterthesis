@@ -717,6 +717,7 @@ def main():
     hist, frames, rows, events = {}, [], [], []
     cam_stat = dict(read=0, new=0, used=0, rejects={}, valid=0, fail={}, detect_ms=[])
     last_rf, t_next_cam, seq = [None], 0.0, 0
+    cyl_once = False
     last_rf_b, cam_turn = [None], 0                                  # 機身相機：上一個算圖幀、輪流（0＝手腕先）
     s = q_s[3:].copy()                                                # 手臂設定點
     pipe = [np.zeros(9) for _ in range(D_STEPS)]
@@ -979,6 +980,7 @@ def main():
                 jc_.CreateJointEnabledAttr().Set(True)
                 jc_.CreateBreakForceAttr().Set(float('inf')); jc_.CreateBreakTorqueAttr().Set(float('inf'))
                 cyl_attached = True
+                cyl_once = True                                       # 機身相機：圓柱夾過後不再做圓柱偵測（第 107 趟：取筆階段機身影格退回圓柱偵測、與筆共用觀測通道 ⇒ 筆一直累積不到）
                 node.d2_attach_cyl = False                              # 請求已執行（下一件需新請求）
                 ev('cyl_attach_fixed_joint', obj=OBJS[obj_i], rel_pos=[round(float(v), 5) for v in Rc0[:3, 3]], cyl_z=round(float(Tc_[2, 3]), 4), note='理想抓持假設（FixedJoint）：夾住證據成立後')
             if BIN and getattr(node, 'd2_detach_obj', False):         # 車尾收納盒：解除夾爪↔物體理想連接（物體靠物理落入盒內）
@@ -1130,13 +1132,17 @@ def main():
                 ev('drawer_pose_vision_applied', pose=[round(float(v), 4) for v in node.dr_pose_vis], pose_true=dr_pose_true)
             f = None
             if k % RENDER_EVERY == 0:                                     # 只在連續繪圖段的最後一步讀相機（D2_RENDER_EVERY／D2_RENDER_BURST；相機 5 Hz）
-                if cam_b is not None and released and cam_turn == 1 and not det_busy and t + 1e-9 >= t_next_cam:   # 開門放手前門把只用手腕相機（不分走 5 Hz）
+                b_use_ = cam_b is not None and released and (                 # 機身影格只在有事可做時輪到（第 107 趟：取筆時機身影格無任務卻分走一半手腕影格）
+                    (cyl_info is not None and not cyl_once)
+                    or (DRAWER and HANDLE_VISION and not dr_bound and not dr_released and float(np.hypot(q[0] - reg['drawer']['pose'][0], q[1] - reg['drawer']['pose'][1])) < 3.0)
+                    or (DOOR_CLOSE and released and not bound and float(np.hypot(q[0], q[1])) < 3.5))
+                if b_use_ and cam_turn == 1 and not det_busy and t + 1e-9 >= t_next_cam:   # 開門放手前門把只用手腕相機（不分走 5 Hz）
                     f = grab_b()
                     if f is None:
                         f = grab()
                 else:
                     f = grab()
-                    if f is None and cam_b is not None and released and not det_busy and t + 1e-9 >= t_next_cam:
+                    if f is None and b_use_ and not det_busy and t + 1e-9 >= t_next_cam:
                         f = grab_b()
             if f is not None and f['t_obs'] >= t_next_cam - 1e-9:
                 if det_busy:
@@ -1152,7 +1158,7 @@ def main():
                         stem = f'b{seq:04d}'
                         cam_stat['base_used'] = cam_stat.get('base_used', 0) + 1
                     det_pend[seq] = dict(f=dict((k_, v_) for k_, v_ in f.items() if k_ not in ('dep', 'rgb')), stem=stem, Th=truth_handle(), t_sent=t)
-                    _DET.send(dict(seq=seq, stem=stem, src=src_, dep=f['dep'], rgb=f['rgb'], K=Kr, T_cam=f['T_cam'], t_obs=f['t_obs'], q=f['q'], fk_vs_render_m=f['fk_vs_render_m'], table=None if cyl_info is None else cyl_info['table'],
+                    _DET.send(dict(seq=seq, stem=stem, src=src_, dep=f['dep'], rgb=f['rgb'], K=Kr, T_cam=f['T_cam'], t_obs=f['t_obs'], q=f['q'], fk_vs_render_m=f['fk_vs_render_m'], table=None if (cyl_info is None or (src_ == 'base' and cyl_once)) else cyl_info['table'],
                                    dbox=(DRS_.interior_box(float(node.dr_q_open)) if (src_ == 'wrist' and DRAWER and dr_released and getattr(node, 'dr_q_open', None) is not None and not cyl_attached) else None),
                                    hspec=os.path.join(WS, reg['drawer']['asset']) if DRAWER else None,
                                    leafdet=bool(DOOR_CLOSE and released and not bound and float(np.hypot(f['q'][0], f['q'][1])) < 3.5),
