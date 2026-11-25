@@ -74,7 +74,43 @@ def analyze(N):
         out['rot_rad'] = round(float(np.sum(np.abs(np.diff(np.unwrap(S[:, 3]))))), 1)
         out['acc_p95'] = round(float(np.percentile(a, 95)), 3); out['jerk_p95'] = round(float(np.percentile(j, 95)), 2)
         out['v_mean'] = round(float(np.mean(v)), 3)
+        vxb = np.cos(S[:, 3]) * np.gradient(xy[:, 0], tt) + np.sin(S[:, 3]) * np.gradient(xy[:, 1], tt)   # 車身座標速度
+        vyb = -np.sin(S[:, 3]) * np.gradient(xy[:, 0], tt) + np.cos(S[:, 3]) * np.gradient(xy[:, 1], tt)
+        mv_ = np.hypot(vxb, vyb) > 0.03
+        if np.any(mv_):                                              # 全程在動時車身側向速度佔比（有無行人都算，可對比）
+            out['all_lat_frac'] = round(float(np.sum(np.abs(vyb[mv_]) * dt[mv_]) / np.sum(np.hypot(vxb, vyb)[mv_] * dt[mv_])), 3)
+        out.update(walker_metrics(D, w, th, S))
     return out
+
+
+NEAR_D, CLOSE_D = 1.5, 0.8                                           # 中心距離（機器人底盤中心↔行人中心，m）
+
+
+def walker_metrics(D, wlog, th, S):
+    """有行人趟：與行人的中心距離、靠近時間、會車層動作次數、靠近時車身座標側向速度佔比。無行人趟回 {}。"""
+    try:
+        W = json.load(open(D + '/result.json')).get('walkers') or {}
+    except Exception:                                                # noqa: BLE001
+        return {}
+    lg = np.asarray(W.get('log') or [], float)
+    if lg.ndim != 2 or lg.shape[0] < 2 or lg.shape[1] < 3:
+        return {}
+    tt = S[:, 0]; xy = S[:, 1:3]; yaw = S[:, 3]
+    wx = np.stack([np.interp(tt, lg[:, 0], lg[:, 1 + 2 * k]) for k in range((lg.shape[1] - 1) // 2)], 1)
+    wy = np.stack([np.interp(tt, lg[:, 0], lg[:, 2 + 2 * k]) for k in range((lg.shape[1] - 1) // 2)], 1)
+    dmin = np.min(np.hypot(wx - xy[:, :1], wy - xy[:, 1:2]), axis=1)
+    dt = np.gradient(tt); vw = np.gradient(xy, tt, axis=0)
+    vxb = np.cos(yaw) * vw[:, 0] + np.sin(yaw) * vw[:, 1]; vyb = -np.sin(yaw) * vw[:, 0] + np.cos(yaw) * vw[:, 1]
+    sp = np.hypot(vxb, vyb); mv = sp > 0.03; near = dmin < NEAR_D
+    ev = [json.loads(m.group(0)) for m in re.finditer(r'\{"t": [0-9.]+[^{}]*"what": "yield_pred"[^{}]*\}', wlog)]
+    ev = [e for e in ev if e['t'] >= th]
+    o = dict(walk_dmin=round(float(dmin.min()), 3), walk_near_s=round(float(np.sum(dt[near])), 1), walk_close_s=round(float(np.sum(dt[dmin < CLOSE_D])), 1),
+             ys_n=len(ev), ys_lat=sum(1 for e in ev if abs(e.get('side', 0)) == 1.0), ys_behind=sum(1 for e in ev if e.get('side') == 2.0),
+             ys_slow=sum(1 for e in ev if e.get('side', 0) == 0.0 and e.get('rho', 1.0) < 0.999))
+    if np.any(near & mv):                                            # 靠近行人且在動時：車身側向速度佔比、側移 >0.05 m/s 的時間
+        o['near_lat_frac'] = round(float(np.sum(np.abs(vyb[near & mv]) * dt[near & mv]) / np.sum(sp[near & mv] * dt[near & mv])), 3)
+        o['near_side_s'] = round(float(np.sum(dt[near & (np.abs(vyb) > 0.05)])), 1)
+    return o
 
 
 def _main():

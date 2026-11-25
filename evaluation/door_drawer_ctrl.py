@@ -40,6 +40,8 @@ CLOSE_UNF_ANCHOR = os.environ.get('DR_CLOSE_UNF_ANCHOR', '1') == '1'
 REGRASP_HOLD = os.environ.get('DR_REGRASP_HOLD', '1') == '1'
 CLOSE_UNF_V = float(os.environ.get('DR_CLOSE_UNF_V', '0.15'))        # 關抽屜展開段退到關抽屜站位的參考速度（m/s）
 REGRASP_MAX = int(os.environ.get('DR_REGRASP_MAX', '2'))
+VIS_LATE = os.environ.get('DR_VIS_LATE', '1') == '1'                 # 11/25 第 171 趟：關抽屜視覺開度晚到（抓取線已開始、閉爪中 0.2 s）被略過 ⇒ 抽屜被推入 10 mm 夾空；重夾沿工具軸加深追不到 ⇒ 晚到也採用：沿拉出方向平移目標，閉爪／確認中則張開重夾（不另加深）
+VIS_REDO_MIN_S = float(os.environ.get('DR_VIS_REDO_MIN_S', '1.2'))   # 晚到視覺重夾：張開後至少等此秒數（手臂移到新目標）才閉爪
 REGRASP_DZ = float(os.environ.get('DR_REGRASP_DZ', '0.006'))           # 每次重夾沿工具軸再深（m）；第 110 趟：第一次夾空時手指把抽屜推進 12.6 mm，2 mm 步長兩次重試追不上 ⇒ 6 mm
 REGRASP_DZ_OPEN = float(os.environ.get('DR_REGRASP_DZ_OPEN', '0.002'))   # 開抽屜（第一次抓把手）重夾每次再深：11/25 第 146、148 趟開抽屜重夾用 6 mm ⇒ 橫桿卡進手指根部、放手後退不出來、抬升時下指頂橫桿 42–49 N 鎖存；6 mm 是為關抽屜（抽屜被推動）設的，開抽屜回到原 2 mm
 REGRASP_DEEP = float(os.environ.get('DR_REGRASP_DEEP', '0.004'))       # 關抽屜再夾：沿工具軸預先再深（m）。放手退開會使抽屜漂移（第 105 趟拖出 7.3 mm 仍夾到、第 110 趟推進 3.1 mm ⇒ 淺 3 mm 夾空）；
@@ -118,6 +120,18 @@ class DrawerCtrl(PK.TablePickCtrl):
                 self.open0 = float(app['q_vis']); self.open_m = max(0.0, self.open0 - CLOSE_LEAVE_M)
                 self._vis_applied = True
                 self._ev('pick_dr_regrasp_vis', dq_mm=round(dq_ * 1e3, 2), q_vis=round(float(app['q_vis']), 4), phase=self.phase)
+            elif VIS_LATE and getattr(self, 'close_mode', False) and self.task == 'handle' and self.phase in ('APPROACH', 'CLOSE', 'CONFIRM') and not getattr(self, '_vis_applied', False) and not self.dr_attach:
+                pv_ = np.r_[np.asarray(app['pull'], float)[:2], 0.0]; pv_ = pv_ / max(float(np.linalg.norm(pv_)), 1e-9)
+                dq_ = float(app['q_vis']) - float(app['q_open'])
+                self.T_grasp = self.T_grasp.copy(); self.T_grasp[:3, 3] = self.T_grasp[:3, 3] + dq_ * pv_
+                self.open0 = float(app['q_vis']); self.open_m = max(0.0, self.open0 - CLOSE_LEAVE_M)
+                self._vis_applied = True
+                redo_ = self.phase in ('CLOSE', 'CONFIRM')
+                self._ev('pick_dr_regrasp_vis_late', dq_mm=round(dq_ * 1e3, 2), q_vis=round(float(app['q_vis']), 4), phase=self.phase, redo=redo_)
+                if redo_:                                              # 閉爪／確認中：張開、手臂移到新目標後重閉（不計入重夾次數、不另加深）
+                    self.finger_cmd, self._reopen_t, self.n_ev, self._vis_redo = P.FINGER_OPEN, self.t, 0, True
+                    if self.phase == 'CLOSE':
+                        self._goto('CONFIRM', vis_redo=True)
             else:
                 self._ev('pick_dr_vis_ignored', phase=self.phase, task=self.task, line=getattr(self, '_t_line0', None) is not None)
             return
@@ -158,6 +172,7 @@ class DrawerCtrl(PK.TablePickCtrl):
             self.finger_cmd = P.FINGER_OPEN
             self.q_unf0, self.b_unf, self.regrasp_n, self._reopen_t = None, None, 0, None
             self._vis_applied = app.get('q_vis') is not None
+            self._vis_redo = False
             self.app_prof = dict(base_goal=list(app['base_goal']), door=None)
             self.T_app, self.T_b, self.t_l0 = float(app['T']), float(app['T_b']), float(app['t_l0'])
             self._bg, self._t_arr, self._t_line0, self._bp = np.asarray(app['base_goal'], float)[:2].copy(), None, None, 0.0   # 關抽屜把手也走狀態閘門
@@ -295,10 +310,12 @@ class DrawerCtrl(PK.TablePickCtrl):
             if self.phase == 'CONFIRM':
                 if getattr(self, '_reopen_t', None) is not None:          # 重夾：等手指張開（≥7.5 mm 或 0.8 s）⇒ 目標沿工具軸再深 REGRASP_DZ ⇒ 回閉爪
                     fm_ = self.finger_meas
-                    if (fm_ is not None and float(np.min(fm_)) >= 0.0075) or self.t - self._reopen_t > 0.8:
-                        self.T_grasp = self.T_grasp.copy(); self.T_grasp[:3, 3] = self.T_grasp[:3, 3] + self._regrasp_dz() * self.T_grasp[:3, 2]
-                        self._reopen_t, self.n_ev = None, 0
-                        self._goto('CLOSE', retry=int(self.regrasp_n), dz_mm=round(self._regrasp_dz() * 1e3, 1))
+                    vr_ = getattr(self, '_vis_redo', False)
+                    if ((fm_ is not None and float(np.min(fm_)) >= 0.0075) or self.t - self._reopen_t > 0.8) and (not vr_ or self.t - self._reopen_t >= VIS_REDO_MIN_S):
+                        dz_ = 0.0 if vr_ else self._regrasp_dz()       # 晚到視覺重夾：目標已沿拉出方向平移，不另加深
+                        self.T_grasp = self.T_grasp.copy(); self.T_grasp[:3, 3] = self.T_grasp[:3, 3] + dz_ * self.T_grasp[:3, 2]
+                        self._reopen_t, self.n_ev, self._vis_redo = None, 0, False
+                        self._goto('CLOSE', retry=int(self.regrasp_n), dz_mm=round(dz_ * 1e3, 1), vis_redo=vr_)
                     return
                 self.n_ev = self.n_ev + 1 if self._held_handle() else 0
                 if self.n_ev * DT >= PK.EVID_S - 1e-9:
