@@ -202,7 +202,7 @@ class DrawerCtrl(PK.TablePickCtrl):
         self._goto('APPROACH', task=self.task, base_goal=[round(float(x), 4) for x in app['base_goal']], T=round(self.T_app, 3))
 
     def _obs_q(self, t_abs):
-        u = XE.minjerk(min(max((t_abs - self.t_ph0) / max(self.T_app - PK.T_SETTLE, 1e-6), 0.0), 1.0))[0]
+        u = XE.minjerk(min(max((self._pt(t_abs) - self.t_ph0) / max(self.T_app - PK.T_SETTLE, 1e-6), 0.0), 1.0))[0]
         return (1.0 - u) * self.q_obs0 + u * self.q_obs
 
     def _obs_rel(self, t_abs):
@@ -213,7 +213,7 @@ class DrawerCtrl(PK.TablePickCtrl):
             return super()._app_target(t_abs, Xk)
         if self.T_obs0 is None:
             return self.T_grasp
-        u = XE.minjerk(min(max((t_abs - self.t_ph0) / max(self.T_app - PK.T_SETTLE, 1e-6), 0.0), 1.0))[0]   # 世界座標：退出終點 → 俯視位（不掛在移動底盤上；s40 掛底盤 ⇒ 底盤前進把夾爪帶向面板）
+        u = XE.minjerk(min(max((self._pt(t_abs) - self.t_ph0) / max(self.T_app - PK.T_SETTLE, 1e-6), 0.0), 1.0))[0]   # 世界座標：退出終點 → 俯視位（不掛在移動底盤上；s40 掛底盤 ⇒ 底盤前進把夾爪帶向面板）
         A, Bm = self.T_obs0, self.T_grasp
         T = np.eye(4)
         T[:3, 3] = (1 - u) * A[:3, 3] + u * Bm[:3, 3] + OBS_BUMP * math.sin(math.pi * u) * np.array([0.0, 0.0, 1.0])
@@ -239,13 +239,13 @@ class DrawerCtrl(PK.TablePickCtrl):
         return super()._T_line(s_)
 
     def _unf_q(self, t_abs):
-        u = XE.minjerk(min(max((t_abs - self.t_ph0) / max(self.T_unf, 1e-6), 0.0), 1.0))[0]
+        u = XE.minjerk(min(max((self._pt(t_abs) - self.t_ph0) / max(self.T_unf, 1e-6), 0.0), 1.0))[0]
         return (1.0 - u) * self.q_unf0 + u * Q_UNFOLD
 
     def _handle_qpost(self, t_abs):
         if self.q_h0 is None:
             self.q_h0 = self.q_arm_now.copy() if self.q_arm_now is not None else self.q_h.copy()
-        u = XE.minjerk(min(max((t_abs - self.t_ph0) / max(self.T_app - PK.T_SETTLE, 1e-6), 0.0), 1.0))[0]
+        u = XE.minjerk(min(max((self._pt(t_abs) - self.t_ph0) / max(self.T_app - PK.T_SETTLE, 1e-6), 0.0), 1.0))[0]
         return (1.0 - u) * self.q_h0 + u * self.q_h
 
     def _held_handle(self):
@@ -293,6 +293,13 @@ class DrawerCtrl(PK.TablePickCtrl):
     def _advance(self, q):
         el = self.t - self.t_ph0
         if self.task == 'handle':
+            if self.phase == 'UNFOLD' and PK.P.PARK_STRICT:            # 嚴格停車：底盤到站停穩前不展開（起點構型隨時重取、時程凍結）
+                self._park_hold_arm = self._park_wait_base(q, 'unfold')
+                if self._park_hold_arm:
+                    self.t_ph0 = self.t
+                    self.q_unf0 = np.asarray(q[3:], float).copy()
+                    self.T_unf = 1.875 * float(np.abs(Q_UNFOLD - self.q_unf0).max()) / UNF_QD + 0.5
+                    return
             if self.phase == 'UNFOLD':
                 if self.q_unf0 is None:
                     self.q_unf0 = np.asarray(q[3:], float).copy()
@@ -415,6 +422,24 @@ class DrawerCtrl(PK.TablePickCtrl):
                     self._stop('observe_app_timeout')
                 return
         if self.task == 'observe':
+            if self.phase == 'APPROACH' and PK.P.PARK_STRICT:          # 嚴格停車：底盤到站停穩前不轉俯視（起點構型隨時重取、時程凍結），停穩後重排時程（保留關節速率下限）
+                self._park_hold_arm = self._park_wait_base(q, 'observe')
+                if self._park_hold_arm:
+                    self.t_ph0 = self.t
+                    self.T_rel0 = np.linalg.inv(_T3(q[:3])) @ K.fk(q, 'link_tcp')
+                    if self.q_obs is not None:
+                        self.q_obs0 = np.asarray(q[3:], float).copy()
+                    return
+                if not getattr(self, '_park_retimed', False):
+                    self._park_retimed = True
+                    self.t_ph0 = self.t
+                    T_ = min(float(self.T_app), PK.P.PARK_T_MIN)
+                    if self.q_obs is not None:
+                        self.q_obs0 = np.asarray(q[3:], float).copy()
+                        T_ = max(T_, 1.875 * float(np.abs(self.q_obs - self.q_obs0).max()) / OBS_QD + PK.T_SETTLE)
+                    self.T_app, self.T_b, self.t_l0 = T_, max(1.5, T_ - 1.5), max(0.5, T_ - 2.5)
+                    self._ev('park_retime', T=round(self.T_app, 3), task='observe')
+                    return
             if self.phase == 'APPROACH':
                 if self.T_rel0 is None:
                     self.T_rel0 = np.linalg.inv(_T3(q[:3])) @ K.fk(q, 'link_tcp')
@@ -533,14 +558,16 @@ class DrawerCtrl(PK.TablePickCtrl):
             arm.update(q_post=q_post, w_q=W_Q_OBS)
         mpc = self.mpc
         u_min_saved = np.asarray(mpc.cfg.u_min, float).copy()
+        u_max_saved = np.asarray(mpc.cfg.u_max, float).copy()
         if math.isfinite(umin0):
             mpc.cfg.u_min = np.array([umin0, u_min_saved[1], u_min_saved[2]])
         import time
         w0 = time.perf_counter()
+        P.park_cap_apply(mpc, self._park_cap())
         try:
             r = mpc.solve(X_now=XO.from_xytheta(*qp[:3]), X_ref_win=np.array(X), xi_ref_win=np.array(xi), xi_prev=self.u_prev[:3], arm=arm, obstacles=obs)
         finally:
-            mpc.cfg.u_min = u_min_saved
+            mpc.cfg.u_min, mpc.cfg.u_max = u_min_saved, u_max_saved
         self.wg_log.append((round(self.t, 3), self.task + ':' + self.phase, round((time.perf_counter() - w0) * 1e3, 2), str(r.status), src, len(obs), int(r.cbf_active)))
         if not np.isfinite(np.asarray(r.u_opt, float)).all():
             return None, 'wgmpc_nonfinite'

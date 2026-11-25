@@ -264,8 +264,15 @@ class TablePickCtrl(P.DoorPassCtrl):
             self._ev('pick_stop', why=why, phase=self.phase, **kw)
 
     def _goto(self, ph, **kw):
+        self._park_reset(ph)
         self.phase, self.t_ph0 = ph, self.t
         self._ev('pick_phase', phase=ph, **kw)
+
+    def _park_retime(self, q):
+        """嚴格停車：底盤停穩後手臂時程改用監督封包公式在距離 0 的值（原時程含底盤行駛時間）；不延長。"""
+        T_ = min(float(self.T_app), P.PARK_T_MIN)
+        self.T_app, self.T_b, self.t_l0 = T_, max(1.5, T_ - 1.5), max(0.5, T_ - 2.5)
+        self._ev('park_retime', T=round(self.T_app, 3), T_b=round(self.T_b, 3), t_l0=round(self.t_l0, 3))
 
     def _T_line(self, s_):
         T = self.T_grasp.copy()
@@ -310,7 +317,7 @@ class TablePickCtrl(P.DoorPassCtrl):
 
     def _app_target(self, t_abs, Xk):
         """接近剖面：參考底盤上的起始相對位姿 → 抓取線（d_line→0，接近線提早 t_settle 到底）。"""
-        t = t_abs - self.t_ph0
+        t = self._pt(t_abs) - self.t_ph0
         Te = self.T_app - T_SETTLE
         u = min(max((t - self.t_l0) / max(Te - self.t_l0, 1e-6), 0.0), 1.0)
         s_ = self._dl() * (1.0 - XE.minjerk(u)[0]) if t < Te else 0.0
@@ -531,6 +538,17 @@ class TablePickCtrl(P.DoorPassCtrl):
                 self.q_m0, self.q_mg = np.asarray(q[3:], float).copy(), np.asarray(self.motm['q_grasp'], float)
                 self.app_qpost, self.app_w_q = self._motm_qpost, MOTM_W_Q
             self._ev('pick_motm_start', s0=round(self.m_s0, 4), T_app=round(self.T_app, 3), v_g=self.motm['v_g'])
+        if self.phase == 'APPROACH' and P.PARK_STRICT and self.motm is None and not self.flow:   # 嚴格停車：底盤到站停穩前手臂時程凍結（β＝0、手臂保持相對底盤），停穩後重排時程
+            self._park_hold_arm = self._park_wait_base(q, 'approach')
+            if self._park_hold_arm:
+                self.t_ph0 = self.t
+                return
+            if not getattr(self, '_park_retimed', False):
+                self._park_retimed = True
+                self.t_ph0 = self.t
+                self._reset_T_rel0 = True
+                self._park_retime(q)
+                return
         if self.phase == 'APPROACH':
             Tc = K.fk(q, 'link_tcp')
             qm_ = getattr(self, '_q_meas', None)
@@ -642,6 +660,7 @@ class TablePickCtrl(P.DoorPassCtrl):
         elif self.phase in ('BIN_MOVE', 'BIN_REL', 'BIN_OPEN', 'BIN_DROP', 'BIN_STOW'):
             self._advance_bin(q, el)
         elif self.phase == 'RETURN':
+            self._park_hold_base = self._park_wait_arm(q, 'return')   # 嚴格停車：收臂後手臂停穩才開車（預設關 ⇒ False）
             if not self.binned and not self._held():
                 self._stop('lost_during_return')
 
@@ -793,9 +812,13 @@ class TablePickCtrl(P.DoorPassCtrl):
                 self.app_prof = dict(base_goal=[float(qp[0]), float(qp[1]), math.atan2(h_[1] - float(qp[1]), h_[0] - float(qp[0]))] if h_ is not None else list(FACE_DR), door=None)   # s104d：導航到抽屜櫃前粗目標不看偏航（會車後偏 0.8 rad、相機看不到把手）⇒ 到點後同一控制器慢轉到粗目標朝向（只在前端停止更新後作用）
             if src == 'nav':                                          # 會車選邊（s92d：行人 walker_r1 正面迎來、牆側不夠 ⇒ 被推著倒退後接觸）
                 P.yield_apply(self, qp, X, obs, xi)
+            if getattr(self, '_park_hold_base', False) and getattr(self, '_park_b', None) is not None:   # 嚴格停車：手臂停穩前底盤錨定在返回段起點
+                X = [XO.from_xytheta(*self._park_b)] * (XO.N + 1)
+                xi = [np.zeros(3)] * (XO.N + 1)
+                umin0, src = float('nan'), 'anchor'
         arm = dict(mode='hold')
         Xp = [(float(Xk[0, 2]), float(Xk[1, 2]), math.atan2(float(Xk[1, 0]), float(Xk[0, 0]))) for Xk in X]
-        if self.phase in ('APPROACH', 'CLOSE', 'CONFIRM', 'LIFT', 'VERIFY'):
+        if self.phase in ('APPROACH', 'CLOSE', 'CONFIRM', 'LIFT', 'VERIFY') and not (self.phase == 'APPROACH' and getattr(self, '_park_hold_arm', False)):   # 嚴格停車等待中：手臂保持
             if self.phase == 'APPROACH':
                 self._jq_refs = []
                 Ts = [self._app_target(t_eff + k * DT, Xp[k]) for k in range(XO.N + 1)]
@@ -848,6 +871,7 @@ class TablePickCtrl(P.DoorPassCtrl):
             mpc.cfg.u_max = np.minimum(np.asarray(mpc.cfg.u_max, float), lim_)   # 不覆蓋前面的近家具減速
             mpc.cfg.u_min = np.maximum(np.asarray(mpc.cfg.u_min, float), -lim_)
         w0 = time.perf_counter()
+        P.park_cap_apply(mpc, self._park_cap())
         try:
             r = mpc.solve(X_now=XO.from_xytheta(*qp[:3]), X_ref_win=np.array(X), xi_ref_win=np.array(xi), xi_prev=self.u_prev[:3], arm=arm, obstacles=obs)
         finally:
@@ -926,6 +950,7 @@ class TablePickCtrl(P.DoorPassCtrl):
         mpc.cfg.u_max = np.minimum(u_max_saved, lim_)
         mpc.cfg.u_min = np.maximum(np.asarray(mpc.cfg.u_min, float), -lim_)
         w0 = time.perf_counter()
+        P.park_cap_apply(mpc, self._park_cap())
         try:
             r = mpc.solve(X_now=XO.from_xytheta(*qp[:3]), X_ref_win=np.array(X), xi_ref_win=np.array(xi), xi_prev=self.u_prev[:3], arm=arm, obstacles=obs)
         finally:

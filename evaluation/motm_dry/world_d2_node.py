@@ -33,6 +33,10 @@ import door_p2_planner_server as PS                                  # noqa: E40
 import wrist_v0_capture as W0                                        # noqa: E402
 FSP = PS.PlannerServer()                                             # D2 首段規劃程序（背景）
 FS_LEAD = float(os.environ.get('D2_FS_LEAD', '1.5'))
+PARK_STRICT_W = os.environ.get('PARK_STRICT', '0') == '1'          # 嚴格停車（Howard 11/25）：門把接近的手臂時程自底盤到站停穩才起算 ⇒ 首段規劃改在同一時刻重排（同 door_motm_grasp_ctrl._park_door 判準）
+PARK_DOOR_T = float(os.environ.get('PARK_DOOR_T', '5.0'))            # 停穩後門把接近時程（≈移動中組典型：T 5.0、T_b＝T−0.8、抓取線 1.5 s、保持 0.3 s）
+PARK_TOL_M_W, PARK_TOL_YAW_W = float(os.environ.get('PARK_TOL_M', '0.03')), float(os.environ.get('PARK_TOL_YAW', '0.05'))
+PARK_SETTLE_S_W, PARK_WAIT_MAX_S_W = float(os.environ.get('PARK_SETTLE_S', '0.3')), float(os.environ.get('PARK_WAIT_MAX_S', '12.0'))
 FS_PRED_GOAL = os.environ.get('D2_FS_PRED_GOAL', '1') == '1'         # 首段預測底盤＝接近封包的抓取底盤位（停止）
 FS_RETRY_LEAD = float(os.environ.get('D2_FS_RETRY_LEAD', '0.5'))
 FS_RETRY_MAX = int(os.environ.get('D2_FS_RETRY_MAX', '3'))   # 首段重送：預計結果可用所需模擬時間（RTF 0.2 下規劃約 1 s 牆鐘＝0.2 s 模擬，留餘量）
@@ -448,7 +452,23 @@ class WorldD2(Node):
             k = self.n - self.n0
             fp_ = getattr(self, 'fs_plan', None)
             t_app0_ = (getattr(self, 'app_t0', None) - self.t_h) if getattr(self, 'app_t0', None) is not None else 0.0
-            if fp_ is not None and fp_.get('pending_submit') and self.ho.get('app') is not None and self.t - self.t_h - t_app0_ >= float(self.ho['app']['T']) - FS_LEAD:
+            if PARK_STRICT_W and fp_ is not None and fp_.get('pending_submit') and self.ho.get('app') is not None and not fp_.get('park_rel') and self.ho['app'].get('base_goal') is not None:
+                g_ = np.asarray(self.ho['app']['base_goal'], float); qb_ = np.asarray(self.q[:3], float)
+                hq_ = [h_ for h_ in getattr(self, '_park_hq', []) if self.t - h_[0] <= 0.2] + [(self.t, qb_.copy())]; self._park_hq = hq_
+                dth_ = max(hq_[-1][0] - hq_[0][0], 1e-3)
+                v_ = float(np.hypot(*(hq_[-1][1][:2] - hq_[0][1][:2]))) / dth_ if len(hq_) > 1 else 9.0
+                w_ = abs((float(hq_[-1][1][2]) - float(hq_[0][1][2]) + math.pi) % (2 * math.pi) - math.pi) / dth_ if len(hq_) > 1 else 9.0
+                ok_ = float(np.hypot(qb_[0] - g_[0], qb_[1] - g_[1])) <= PARK_TOL_M_W and abs((float(qb_[2]) - float(g_[2]) + math.pi) % (2 * math.pi) - math.pi) <= PARK_TOL_YAW_W and v_ <= 0.02 and w_ <= 0.04
+                fp_['park_ts'] = (fp_.get('park_ts') or self.t) if ok_ else None
+                fp_.setdefault('park_w0', self.t)
+                if (fp_['park_ts'] is not None and self.t - fp_['park_ts'] >= PARK_SETTLE_S_W - 1e-9) or self.t - fp_['park_w0'] > PARK_WAIT_MAX_S_W:
+                    T_ = min(float(self.ho['app']['T']), PARK_DOOR_T)
+                    self.ho['app']['T'] = T_
+                    self.app_t0 = self.t; t_app0_ = self.t - self.t_h
+                    fp_['t_ready_rel'] = (self.t - self.t_h) + T_ + G.SCHED['close_s'] + G.SCHED['confirm_s'] - DT
+                    fp_['park_rel'] = True
+                    self.ev('park_fs_resched', T=round(T_, 3), t_ready_rel=round(fp_['t_ready_rel'], 3), waited_s=round(self.t - fp_['park_w0'], 2))
+            if fp_ is not None and fp_.get('pending_submit') and self.ho.get('app') is not None and (not PARK_STRICT_W or fp_.get('park_rel') or self.ho['app'].get('base_goal') is None) and self.t - self.t_h - t_app0_ >= float(self.ho['app']['T']) - FS_LEAD:
                 self.submit_first(self.q.copy(), self.t - self.t_h)
             if self.fs is not None and self.fs.get('pending'):
                 r = FSP.poll()

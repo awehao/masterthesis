@@ -278,6 +278,8 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                 tl = ctrl.tick_log[-1]
                 pm = ctrl.pool_ms[-1] if getattr(ctrl, 'pool_ms', None) else None
                 parts = dict(tick_ms=round(float(tl[1]), 2), phase=getattr(ctrl, 'phase', None), pool=pm if not isinstance(pm, dict) else {k_: round(float(v_), 2) for k_, v_ in pm.items() if isinstance(v_, (int, float))})
+                if getattr(ctrl, '_park_hold_arm', None) is not None or getattr(getattr(ctrl, 'app_prof', None), 'get', lambda k_: None)('park_ok') is not None:   # 嚴格停車診斷：本拍是否在等底盤停穩
+                    parts['park_hold'] = bool(getattr(ctrl, '_park_hold_arm', False))
                 if getattr(ctrl, '_prof', None) is not None:          # AHEAD_PROF：本段（5 步）各方法累計 ms
                     parts['prof'] = {k_: round(v_, 2) for k_, v_ in ctrl._prof.items()}
                     ctrl._prof = {}

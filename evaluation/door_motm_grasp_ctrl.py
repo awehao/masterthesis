@@ -96,6 +96,13 @@ BIAS_OBS_TAU = float(os.environ.get('GRASP_BIAS_OBS_TAU', '0.5'))
 BIAS_OBS_MAX = float(os.environ.get('GRASP_BIAS_OBS_MAX', '0.02'))      # 新增殘差補償限幅（rad／軸）
 CLOSE_WAIT_S = float(os.environ.get('GRASP_CLOSE_WAIT_S', '2.0'))   # 插入名目時間到後閉爪準備窗口上限（模擬秒；0＝原單拍判定）
 BG_V = 0.06                                                          # 導航到點後收斂到抓取底盤位姿的參考速度上限（m/s）
+PARK_STRICT = os.environ.get('PARK_STRICT', '0') == '1'           # Howard 11/25 嚴格停車操作基準（同 door_pass_ctrl）：門把接近時底盤到抓取底盤位停穩後才伸手
+PARK_TOL_M, PARK_TOL_YAW = float(os.environ.get('PARK_TOL_M', '0.03')), float(os.environ.get('PARK_TOL_YAW', '0.05'))
+PARK_V, PARK_W = float(os.environ.get('PARK_V', '0.01')), float(os.environ.get('PARK_W', '0.02'))
+PARK_SETTLE_S, PARK_WAIT_MAX_S = float(os.environ.get('PARK_SETTLE_S', '0.3')), float(os.environ.get('PARK_WAIT_MAX_S', '12.0'))
+PARK_T_MIN = float(os.environ.get('PARK_T_MIN', '4.0'))
+PARK_DOOR_T = float(os.environ.get('PARK_DOOR_T', '5.0'))           # 門把接近：停穩後時程≈移動中組典型（T 5.0、T_b＝T−0.8、抓取線 1.5 s、保持 0.3 s）；同 world_d2_node 首段重排              # 停穩後接近時程＝監督封包公式在距離 0 的值（T＝4.0、T_b＝T−1.5、t_l0＝T−2.5）
+PARK_CAP_V, PARK_CAP_W = float(os.environ.get('PARK_CAP_V', '0.02')), float(os.environ.get('PARK_CAP_W', '0.05'))
 BG_CONT = os.environ.get('D2_BG_CONT', '1') == '1'                  # Howard 11/25「開門前先衝過頭再倒車」：導航到點（容許 0.30 m）時底盤 0.24 m/s，參考一拍降到 BG_V 0.06 ⇒ 煞不住衝過 5.5 cm 再挪回（Isaac 124）⇒ 交接延續當下速率、等減速到點
 BG_A = float(os.environ.get('D2_BG_A', '0.15'))                      # 交接後等減速（m/s²）
 POST_INTERP = os.environ.get('D2_POST_INTERP', '1') == '1'          # 門把接近姿態引導逐步內插（見 _track_unified）
@@ -238,6 +245,8 @@ class MovingGraspCtrl:
         參考＝Tb→Tl 的混接（位置線性、姿態測地線；權重 β＝minjerk(t/T_b)）。"""
         t_abs = t
         t = t - float(ap.get('t0', 0.0))                               # 單一控制器：剖面時間自「接近開始」起算
+        if getattr(self, '_park_hold_arm', False):                     # 嚴格停車等待中：剖面停在起點（手臂保持相對底盤、不預伸）
+            t = 0.0
         T, tl0, Tb_ = float(ap['T']), float(ap['t_l0']), float(ap['T_b'])
         Te = T - float(ap.get('t_settle', 0.6))                      # 接近線提早 t_settle 到底、之後 s＝0 保持（c31：剛到底即閉爪時 TCP 落後 3.4 mm，鎖定預算 6.8 mm＞5 mm）
         u = min(max((t - tl0) / max(Te - tl0, 1e-6), 0.0), 1.0)
@@ -442,7 +451,8 @@ class MovingGraspCtrl:
             return np.zeros(3), None, 'nav_obstacles_stale', None             # 障礙物資料過期 ⇒ 停止（原停止處置；Codex 20261117_173459）
         self._xref_cache = (te0, [(float(Xk[0, 2]), float(Xk[1, 2]), math.atan2(float(Xk[1, 0]), float(Xk[0, 0]))) for Xk in X])
         ap_ = getattr(self, 'app_prof', None)
-        if ap_ is None:
+        hold_ = ap_ is None or getattr(self, '_park_hold_arm', False)   # 嚴格停車等待中：手臂保持（同導航期；s203d 等待中門旁姿態引導把手臂拉向門旁解）
+        if hold_:
             arm = dict(mode='hold')
             Ts = None
         else:
@@ -475,20 +485,25 @@ class MovingGraspCtrl:
                     else:
                         arm.update(q_post=np.tile(self.q_post, (XO.N, 1)), w_q=float(self.w_post))
         u_min_saved = np.asarray(mpc.cfg.u_min, float).copy()
+        u_max_saved = np.asarray(mpc.cfg.u_max, float).copy()
         if math.isfinite(umin0):
             mpc.cfg.u_min = np.array([umin0, u_min_saved[1], u_min_saved[2]])   # 導航繞行速度下限（同導航節點）
+        if PARK_STRICT and ap_ is not None and ap_.get('park_ok') and self.phase in ('INSERT', 'CLOSE', 'CONFIRM', 'READY'):   # 嚴格停車：停穩後伸手／閉爪中底盤速度框（同 door_pass_ctrl.PARK_CAP_*）
+            cap_ = np.array([PARK_CAP_V, PARK_CAP_V, PARK_CAP_W])
+            mpc.cfg.u_max = np.minimum(u_max_saved, cap_)
+            mpc.cfg.u_min = np.minimum(np.maximum(np.asarray(mpc.cfg.u_min, float), -cap_), mpc.cfg.u_max)
         try:
             r = mpc.solve(X_now=XO.from_xytheta(*qp[:3]), X_ref_win=np.array(X), xi_ref_win=np.array(xi), xi_prev=self.u_prev[:3], arm=arm, obstacles=obs)
         finally:
-            mpc.cfg.u_min = u_min_saved
+            mpc.cfg.u_min, mpc.cfg.u_max = u_min_saved, u_max_saved
         ck = dict(r.arm_check or {})
         ms = (time.perf_counter() - w0) * 1e3
         e_tcp = None if Ts is None else round(float(np.linalg.norm(K.fk(qp, 'link_tcp')[:3, 3] - Ts[0][:3, 3])) * 1e3, 3)
         self.wg_log.append((round(self.t, 3), round(ms, 2), e_tcp, str(r.status), src, 0 if obs is None else len(obs), int(r.cbf_active)))
         if not np.isfinite(np.asarray(r.u_opt, float)).all():
             return np.zeros(3), None, 'wgmpc_nonfinite', None
-        if ap_ is None:
-            return np.asarray(r.u_opt, float), np.zeros(6), 0.0, None   # 導航期：手臂保持（同一求解，arm hold）
+        if hold_:
+            return np.asarray(r.u_opt, float), np.zeros(6), 0.0, None   # 導航期（或嚴格停車等待）：手臂保持（同一求解，arm hold）
         if ck.get('fallback') or ck.get('failed') or not ck.get('seq_consistent', False) or r.u_arm_seq is None or r.status != 'solved':
             return np.asarray(r.u_opt, float), None, 'wgmpc:%s/%s/%s' % (r.status, ck.get('fallback'), ck.get('failed')), None
         return np.asarray(r.u_opt, float), np.asarray(r.u_arm_seq[0], float), 0.0, None
@@ -837,6 +852,7 @@ class MovingGraspCtrl:
             if self.t0 is None:
                 self.t0, self.b_origin, self.yaw_ref = self.t, q[:3].copy(), float(q[2])
                 self.G0 = self._gravity(q)
+            self._park_door(q)
             est = self.est_fn(self.t)
             self.phi_hist.append((self.t, float(phi_meas)))
             if est is not None and (not self.raw_frames or self.raw_frames[-1][0] != est[1]):
@@ -1107,6 +1123,42 @@ class MovingGraspCtrl:
         if ok:
             self.accepted, self.accept_t = True, self.t
         return ok
+
+    def _park_door(self, q):
+        """嚴格停車（PARK_STRICT）：接近開始後、底盤到抓取底盤位（base_goal）且停穩前，接近剖面起點與 HOLD 時刻每拍順延（手臂不伸）；
+        停穩 PARK_SETTLE_S 後以距離 0 的封包公式重排接近時程。預設關 ⇒ 不動。"""
+        ap_ = getattr(self, 'app_prof', None)
+        if not PARK_STRICT or ap_ is None or ap_.get('base_goal') is None or ap_.get('park_ok') or self.phase not in ('HOLD', 'INSERT'):
+            self._park_hold_arm = False
+            return
+        q = np.asarray(q, float)
+        if ap_.get('park_w0') is None:
+            ap_['park_w0'], ap_['park_ts'], self._park_tl = self.t, None, self.t
+            self._ev('park_wait_base', tag='door_handle')
+        d_ = self.t - getattr(self, '_park_tl', self.t); self._park_tl = self.t
+        ap_['t0'] = float(ap_.get('t0', 0.0)) + d_                     # 剖面起點與 HOLD→INSERT／閉爪時刻一起順延（同一時間基準的差量）
+        self.sched['hold_s'] = float(self.sched['hold_s']) + d_
+        g_ = np.asarray(ap_['base_goal'], float); up_ = np.asarray(self.u_prev, float)
+        pq_ = getattr(self, '_park_q', None); dt_ = None if pq_ is None else self.t - pq_[0]
+        vm_ = 0.0 if not dt_ or dt_ <= 1e-6 else float(np.hypot(q[0] - pq_[1][0], q[1] - pq_[1][1])) / dt_
+        wm_ = 0.0 if not dt_ or dt_ <= 1e-6 else abs((float(q[2]) - float(pq_[1][2]) + math.pi) % (2 * math.pi) - math.pi) / dt_
+        self._park_q = (self.t, q[:3].copy())
+        dd_ = float(np.hypot(q[0] - g_[0], q[1] - g_[1])); dy_ = abs((float(q[2]) - float(g_[2]) + math.pi) % (2 * math.pi) - math.pi)
+        still_ = float(np.hypot(up_[0], up_[1])) <= PARK_V and abs(float(up_[2])) <= PARK_W and vm_ <= 2.0 * PARK_V and wm_ <= 2.0 * PARK_W
+        if dd_ <= PARK_TOL_M and dy_ <= PARK_TOL_YAW and still_:
+            ap_['park_ts'] = self.t if ap_.get('park_ts') is None else ap_['park_ts']
+        else:
+            ap_['park_ts'] = None
+        ok_ = ap_.get('park_ts') is not None and self.t - ap_['park_ts'] >= PARK_SETTLE_S - 1e-9
+        to_ = self.t - ap_['park_w0'] > PARK_WAIT_MAX_S
+        if ok_ or to_:
+            T_ = min(float(ap_['T']), PARK_DOOR_T)
+            ap_.update(T=T_, T_b=max(1.5, T_ - 0.8), t_l0=max(0.5, T_ - 1.8), t_settle=0.3, park_ok=True)
+            self.sched['ins_s'] = T_
+            self._park_hold_arm = False
+            self._ev('park_go' if ok_ else 'park_go_timeout', tag='door_handle', waited_s=round(self.t - ap_['park_w0'], 2), d=round(dd_, 4), dyaw=round(dy_, 4), T=round(T_, 3))
+            return
+        self._park_hold_arm = True
 
     def _phase(self, ph):
         self.phase, self.t_phase = ph, self.t

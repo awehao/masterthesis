@@ -143,6 +143,31 @@ def near_v(b):
     return None
 
 
+PARK_STRICT = os.environ.get('PARK_STRICT', '0') == '1'           # Howard 11/25「停車操作比較像停車後再動手臂，現在有點移動中操作了」⇒ 嚴格停車操作基準：
+                                                                      #   手臂動作段（接近、展開、俯視）開始前等底盤到站且停穩；底盤起步（返回、穿門行駛）前等手臂停穩。開門、拉／推抽屜、回程推門等接觸段維持全身（同移動中組）
+PARK_TOL_M = float(os.environ.get('PARK_TOL_M', '0.03'))             # 到站：離本段底盤目標 ≤ 此距離（m）
+PARK_TOL_YAW = float(os.environ.get('PARK_TOL_YAW', '0.05'))         # 到站：偏航差 ≤ 此值（rad）
+PARK_V = float(os.environ.get('PARK_V', '0.01'))                     # 停穩：上一拍底盤指令與實測平移速率 ≤ 此值（m/s）
+PARK_W = float(os.environ.get('PARK_W', '0.02'))                     # 停穩：偏航速率 ≤ 此值（rad/s）
+PARK_QD = float(os.environ.get('PARK_QD', '0.03'))                   # 手臂停穩：各關節實測速率 ≤ 此值（rad/s）
+PARK_SETTLE_S = float(os.environ.get('PARK_SETTLE_S', '0.3'))        # 停穩須持續此秒數
+PARK_WAIT_MAX_S = float(os.environ.get('PARK_WAIT_MAX_S', '12.0'))   # 等底盤停穩上限（逾時放行並記事件，不中止）
+PARK_ARM_MAX_S = float(os.environ.get('PARK_ARM_MAX_S', '2.5'))      # 等手臂停穩上限
+PARK_T_MIN = float(os.environ.get('PARK_T_MIN', '4.0'))              # 停穩後手臂時程＝監督封包公式在距離 0 的值（T＝4.0、T_b＝T−1.5、t_l0＝T−2.5）
+PARK_CAP_V = float(os.environ.get('PARK_CAP_V', '0.02'))             # 停車後只動手臂的段：底盤速度框（m/s；s220d 手臂快伸時全身 QP 拉底盤 0.107 m/s 幫忙）
+PARK_CAP_W = float(os.environ.get('PARK_CAP_W', '0.05'))             # 同上，偏航速率（rad/s）
+PARK_FREE = ('PULL', 'BIND', 'SWING', 'ALIGN')                       # 接觸段（拉／推抽屜、回程關門綁定與共轉）：底盤照全身控制，不設框
+
+
+def park_cap_apply(mpc, cap):
+    """嚴格停車速度框套到 mpc.cfg（呼叫端負責求解後還原 u_min／u_max）；cap＝None 不動。"""
+    if cap is None:
+        return
+    umax_ = np.minimum(np.asarray(mpc.cfg.u_max, float), cap)
+    mpc.cfg.u_max = umax_
+    mpc.cfg.u_min = np.minimum(np.maximum(np.asarray(mpc.cfg.u_min, float), -cap), umax_)   # 導航速度下限（前進下限）不可超過框
+
+
 STOW_JOINT = os.environ.get('PASS_STOW_JOINT', '0') == '1'          # 收臂走關節空間直線（第二十五趟 TCP 混接 ⇒ j1 先甩到 −1.89 再回 0）
 STOW_QD = float(os.environ.get('PASS_STOW_QD', '0.6'))              # 關節空間收臂峰速上限（rad/s；最小急動峰速 1.875×）
 PICK_FOLLOW = os.environ.get('D2_PICK', '0') == '1'                 # 穿門後接取物：穿門段不自行判完成（由監督送取物封包換控制器）
@@ -287,8 +312,98 @@ class DoorPassCtrl:
             self._ev('pass_stop', why=why, **kw)
 
     def _goto(self, ph, **kw):
+        self._park_reset(ph)
         self.phase, self.t_ph0 = ph, self.t
         self._ev('pass_phase', phase=ph, **kw)
+
+    # ---- 嚴格停車操作（PARK_STRICT；預設關＝原行為）
+    def _park_reset(self, ph):
+        """換段：進入手臂動作段（展開／接近，非由展開接續）重設「等底盤停穩」；進入底盤起步段重設「等手臂停穩」。"""
+        if not PARK_STRICT:
+            return
+        self._park_hold_arm = False
+        if ph == 'UNFOLD' or (ph == 'APPROACH' and getattr(self, 'phase', None) != 'UNFOLD'):
+            self._park_ok, self._park_w0, self._park_ts = False, None, None
+        if ph in ('APPROACH', 'UNFOLD'):
+            self._park_retimed = False
+        if ph in ('RETURN', 'DRIVE'):
+            self._park_arm_ok, self._park_aw0, self._park_ats, self._park_b = False, None, None, None
+
+    def _park_cap(self):
+        """嚴格停車：底盤已停穩、只動手臂的段 ⇒ 底盤速度框 [vx, vy, wz]；等底盤中、接觸段、開車段 ⇒ None。"""
+        if not PARK_STRICT or getattr(self, '_park_hold_arm', False) or self.phase in PARK_FREE:
+            return None
+        if self.phase in ('APPROACH', 'UNFOLD') and not getattr(self, '_park_ok', False):
+            return None
+        if self.phase in ('RETURN', 'DRIVE') and not getattr(self, '_park_hold_base', False):
+            return None
+        return np.array([PARK_CAP_V, PARK_CAP_V, PARK_CAP_W])
+
+    def _pt(self, t_abs):
+        """時間型手臂參考的取樣時刻：嚴格停車等待中整個視窗停在段起點（手臂參考不前進、不預伸）。"""
+        return self.t_ph0 if getattr(self, '_park_hold_arm', False) else t_abs
+
+    def _park_goal(self):
+        ap_ = getattr(self, 'app_prof', None)
+        if ap_ is not None and ap_.get('base_goal') is not None:
+            return np.asarray(ap_['base_goal'], float)
+        bg_ = getattr(self, '_bg', None)
+        return None if bg_ is None else np.asarray(bg_, float)
+
+    def _park_wait_base(self, q, tag):
+        """手臂動作段開始前：底盤到本段目標且停穩（指令與實測皆近零、持續 PARK_SETTLE_S）。True＝仍在等（呼叫端凍結手臂時程）。"""
+        if not PARK_STRICT or getattr(self, '_park_ok', False):
+            return False
+        q = np.asarray(q, float)
+        if getattr(self, '_park_w0', None) is None:
+            self._park_w0, self._park_ts = self.t, None
+            self._ev('park_wait_base', tag=tag)
+        g_ = self._park_goal()
+        up_ = np.asarray(self.u_prev, float)
+        pq_ = getattr(self, '_park_q', None)
+        dt_ = None if pq_ is None else self.t - pq_[0]
+        vm_ = 0.0 if not dt_ or dt_ <= 1e-6 else float(np.hypot(q[0] - pq_[1][0], q[1] - pq_[1][1])) / dt_
+        wm_ = 0.0 if not dt_ or dt_ <= 1e-6 else abs((float(q[2]) - float(pq_[1][2]) + math.pi) % (2 * math.pi) - math.pi) / dt_
+        self._park_q = (self.t, q[:3].copy())
+        d_ = None if g_ is None else float(np.hypot(q[0] - g_[0], q[1] - g_[1]))
+        dy_ = None if (g_ is None or len(g_) < 3) else abs((float(q[2]) - float(g_[2]) + math.pi) % (2 * math.pi) - math.pi)
+        near_ = (d_ is None or d_ <= PARK_TOL_M) and (dy_ is None or dy_ <= PARK_TOL_YAW)
+        still_ = float(np.hypot(up_[0], up_[1])) <= PARK_V and abs(float(up_[2])) <= PARK_W and vm_ <= 2.0 * PARK_V and wm_ <= 2.0 * PARK_W
+        if near_ and still_:
+            self._park_ts = self.t if self._park_ts is None else self._park_ts
+        else:
+            self._park_ts = None
+        ok_ = self._park_ts is not None and self.t - self._park_ts >= PARK_SETTLE_S - 1e-9
+        to_ = self.t - self._park_w0 > PARK_WAIT_MAX_S
+        if ok_ or to_:
+            self._park_ok = True
+            self._ev('park_go' if ok_ else 'park_go_timeout', tag=tag, waited_s=round(self.t - self._park_w0, 2), d=None if d_ is None else round(d_, 4), dyaw=None if dy_ is None else round(dy_, 4))
+            return False
+        return True
+
+    def _park_wait_arm(self, q, tag):
+        """底盤起步前：手臂各關節實測速率 ≤ PARK_QD 持續 PARK_SETTLE_S。True＝仍在等（呼叫端錨定底盤於 _park_b）。"""
+        if not PARK_STRICT or getattr(self, '_park_arm_ok', False):
+            return False
+        q = np.asarray(q, float)
+        if getattr(self, '_park_aw0', None) is None:
+            self._park_aw0, self._park_ats, self._park_aq = self.t, None, None
+            self._park_b = np.asarray(q[:3], float).copy()
+        pa_ = getattr(self, '_park_aq', None)
+        dt_ = None if pa_ is None else self.t - pa_[0]
+        qd_ = 9.0 if not dt_ or dt_ <= 1e-6 else float(np.abs(q[3:9] - pa_[1]).max()) / dt_
+        self._park_aq = (self.t, q[3:9].copy())
+        if qd_ <= PARK_QD:
+            self._park_ats = self.t if self._park_ats is None else self._park_ats
+        else:
+            self._park_ats = None
+        ok_ = self._park_ats is not None and self.t - self._park_ats >= PARK_SETTLE_S - 1e-9
+        to_ = self.t - self._park_aw0 > PARK_ARM_MAX_S
+        if ok_ or to_:
+            self._park_arm_ok = True
+            self._ev('park_arm_settled' if ok_ else 'park_arm_timeout', tag=tag, waited_s=round(self.t - self._park_aw0, 2))
+            return False
+        return True
 
     def _pred(self, q):
         qp, sp = np.asarray(q, float).copy(), self.s.copy()
@@ -386,7 +501,7 @@ class DoorPassCtrl:
         X, xi, obs, umin0, src = G.MovingGraspCtrl.nav_window(self, q, qp)
         if obs is None:
             return None, 'nav_obstacles_stale'
-        if self.phase != 'DRIVE' and not (STOW_MOVE and self.phase == 'STOW'):                                      # 操作段：底盤參考＝錨定位姿，障礙物照導航前端
+        if (self.phase != 'DRIVE' and not (STOW_MOVE and self.phase == 'STOW')) or (self.phase == 'DRIVE' and getattr(self, '_park_hold_base', False)):   # 操作段（嚴格停車：開車前等手臂停穩）：底盤參考＝錨定位姿，障礙物照導航前端
             X = [XO.from_xytheta(*self.b_anchor)] * (XO.N + 1)
             xi = [np.zeros(3)] * (XO.N + 1)
             umin0, src = float('nan'), 'anchor'
@@ -424,6 +539,7 @@ class DoorPassCtrl:
             mpc.cfg.u_min = np.maximum(np.asarray(mpc.cfg.u_min, float), -lim_)
         w0 = time.perf_counter()
         try:
+            park_cap_apply(mpc, self._park_cap())
             r = mpc.solve(X_now=XO.from_xytheta(*qp[:3]), X_ref_win=np.array(X), xi_ref_win=np.array(xi), xi_prev=self.u_prev[:3], arm=arm, obstacles=obs)
         finally:
             mpc.cfg.u_min, mpc.cfg.u_max = u_min_saved, u_max_saved
@@ -437,6 +553,8 @@ class DoorPassCtrl:
     def _advance(self, q):
         """實測完成條件推進階段（q＝本拍預測構型；門角、手指＝實測）。"""
         el = self.t - self.t_ph0
+        if self.phase == 'DRIVE':
+            self._park_hold_base = self._park_wait_arm(q, 'pass_drive')   # 嚴格停車：收臂後手臂停穩才開車（預設關 ⇒ False）
         if self.phase == 'UNBIND':
             if self.unbound:
                 self.finger_cmd = FINGER_OPEN

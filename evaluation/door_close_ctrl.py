@@ -70,7 +70,7 @@ class DoorCloseCtrl(PK.TablePickCtrl):
         return f is not None and fm is not None and all(abs(float(x) - H_FQ) <= H_FQ_TOL for x in fm) and float(sum(f)) >= H_FSUM
 
     def _unf_q(self, t_abs):
-        u = XE.minjerk(min(max((t_abs - self.t_ph0) / max(self.T_u, 1e-6), 0.0), 1.0))[0]
+        u = XE.minjerk(min(max((self._pt(t_abs) - self.t_ph0) / max(self.T_u, 1e-6), 0.0), 1.0))[0]
         return (1.0 - u) * self.q_u0 + u * self.q_c
 
     def _swing_T(self, q, dphi):
@@ -92,6 +92,13 @@ class DoorCloseCtrl(PK.TablePickCtrl):
 
     def _advance(self, q):
         el = self.t - self.t_ph0
+        if self.phase == 'UNFOLD' and P.PARK_STRICT:                    # 嚴格停車：底盤到關門站位停穩前不展開
+            self._park_hold_arm = self._park_wait_base(q, 'door_close_unfold')
+            if self._park_hold_arm:
+                self.t_ph0 = self.t
+                self.q_u0 = np.asarray(q[3:], float).copy()
+                self.T_u = 1.875 * float(np.abs(self.q_c - self.q_u0).max()) / UNF_QD + 0.5
+                return
         if self.phase == 'UNFOLD':
             if self.q_u0 is None:
                 self.q_u0 = np.asarray(q[3:], float).copy()
@@ -260,14 +267,16 @@ class DoorCloseCtrl(PK.TablePickCtrl):
             arm.update(q_post=q_post, w_q=5.0)
         mpc = self.mpc
         u_min_saved = np.asarray(mpc.cfg.u_min, float).copy()
+        u_max_saved = np.asarray(mpc.cfg.u_max, float).copy()
         if math.isfinite(umin0):
             mpc.cfg.u_min = np.array([umin0, u_min_saved[1], u_min_saved[2]])
         import time
         w0 = time.perf_counter()
+        P.park_cap_apply(mpc, self._park_cap())
         try:
             r = mpc.solve(X_now=XO.from_xytheta(*qp[:3]), X_ref_win=np.array(X), xi_ref_win=np.array(xi), xi_prev=self.u_prev[:3], arm=arm, obstacles=obs)
         finally:
-            mpc.cfg.u_min = u_min_saved
+            mpc.cfg.u_min, mpc.cfg.u_max = u_min_saved, u_max_saved
         self.wg_log.append((round(self.t, 3), 'door_close:' + self.phase, round((time.perf_counter() - w0) * 1e3, 2), str(r.status), src, len(obs), int(r.cbf_active), PK._obs_near(obs, qp), [round(float(X[0][0, 2] - qp[0]), 4), round(float(X[0][1, 2] - qp[1]), 4), round(float(math.atan2(X[0][1, 0], X[0][0, 0]) - qp[2] + math.pi) % (2 * math.pi) - math.pi, 4)]))   # 底盤參考誤差（x, y, 偏航）
         if not np.isfinite(np.asarray(r.u_opt, float)).all():
             return None, 'wgmpc_nonfinite'
