@@ -1,0 +1,1078 @@
+{
+  "timing": {
+    "representative_run": "m8house_d2_unified_173",
+    "response_count": 6688,
+    "stages": {
+      "grasp": {
+        "label": "初段導航與抓持",
+        "roundtrip_ms": {
+          "n": 360,
+          "p50": 13.23,
+          "p95": 29.2055,
+          "max": 38.16
+        },
+        "compute_ms": {
+          "n": 360,
+          "p50": 12.75,
+          "p95": 28.7915,
+          "max": 37.44
+        },
+        "n_above_50ms": 0,
+        "n_above_120ms": 0,
+        "n_committed": 360
+      },
+      "open": {
+        "label": "開門",
+        "roundtrip_ms": {
+          "n": 189,
+          "p50": 40.47,
+          "p95": 57.848,
+          "max": 60.15
+        },
+        "compute_ms": {
+          "n": 189,
+          "p50": 39.99,
+          "p95": 57.187999999999995,
+          "max": 59.38
+        },
+        "n_above_50ms": 28,
+        "n_above_120ms": 0,
+        "n_committed": 189
+      },
+      "pass": {
+        "label": "穿門及導航",
+        "roundtrip_ms": {
+          "n": 1010,
+          "p50": 16.814999999999998,
+          "p95": 31.0175,
+          "max": 33.55
+        },
+        "compute_ms": {
+          "n": 1010,
+          "p50": 16.375,
+          "p95": 30.611,
+          "max": 33.07
+        },
+        "n_above_50ms": 0,
+        "n_above_120ms": 0,
+        "n_committed": 1010
+      },
+      "pick": {
+        "label": "取放與回程",
+        "roundtrip_ms": {
+          "n": 5129,
+          "p50": 24.02,
+          "p95": 37.965999999999994,
+          "max": 60.22
+        },
+        "compute_ms": {
+          "n": 5129,
+          "p50": 23.57,
+          "p95": 37.54599999999999,
+          "max": 59.68
+        },
+        "n_above_50ms": 30,
+        "n_above_120ms": 0,
+        "n_committed": 5128
+      }
+    },
+    "opening_breakdown_ms": {
+      "solve_ms": {
+        "n": 189,
+        "p50": 14.8,
+        "p95": 26.483999999999998,
+        "max": 28.65
+      },
+      "cand_ms": {
+        "n": 189,
+        "p50": 18.95,
+        "p95": 23.276,
+        "max": 25.53
+      },
+      "mon_ms": {
+        "n": 189,
+        "p50": 2.66,
+        "p95": 3.646,
+        "max": 4.65
+      },
+      "tick_ms": {
+        "n": 189,
+        "p50": 36.93,
+        "p95": 52.864,
+        "max": 54.47
+      },
+      "assembly_ms": {
+        "n": 189,
+        "p50": 8.39,
+        "p95": 14.462,
+        "max": 15.14
+      },
+      "gi_ms": {
+        "n": 189,
+        "p50": 0.61,
+        "p95": 4.134,
+        "max": 11.72
+      }
+    },
+    "wall_deadline_ms": 120,
+    "normal_terminal_reply_count": 1,
+    "simulation_clock_s": 371.56,
+    "host_wall_s": 606.0,
+    "real_time_factor": 0.613,
+    "pacing_changes": [
+      [
+        52.51,
+        0.35
+      ],
+      [
+        64.76,
+        0.7
+      ],
+      [
+        113.26,
+        0.6
+      ],
+      [
+        124.96,
+        0.7
+      ],
+      [
+        170.01,
+        0.6
+      ],
+      [
+        176.41,
+        0.7
+      ],
+      [
+        183.11,
+        0.6
+      ],
+      [
+        188.86,
+        0.7
+      ],
+      [
+        190.81,
+        0.6
+      ],
+      [
+        194.86,
+        0.7
+      ],
+      [
+        220.36,
+        0.6
+      ],
+      [
+        224.26,
+        0.7
+      ],
+      [
+        320.76,
+        0.6
+      ],
+      [
+        324.91,
+        0.7
+      ]
+    ],
+    "nominal_pacing_by_phase": {
+      "0.7": 323.37,
+      "0.35": 12.25,
+      "0.6": 35.95
+    },
+    "segmentation_ms": {
+      "n": 1853,
+      "p50": 18.81206512451172,
+      "p95": 24.658510208129883,
+      "max": 368.23809814453125
+    },
+    "segmentation_max_is_first_sample": true,
+    "proposal_release_audit": {
+      "n_proposed": 6698,
+      "n_effect_checked_ok": 6479,
+      "n_missing": 219,
+      "n_differs": 41,
+      "delta_abs_max": 8.577978479013667e-07
+    },
+    "data_scope": "all finite roundtrip replies from saved NPZ; startup without roundtrip excluded; one normal terminal reply included; QP breakdown only 189 opening cycles"
+  },
+  "failures": {
+    "cohort_size": 43,
+    "unsuccessful": 14,
+    "classes": {
+      "開門求解或內部預算中止": 4,
+      "接觸力保護中止": 2,
+      "抽屜抓持與退出條件未達成": 3,
+      "回覆未就緒或外層逾時": 5
+    },
+    "engineering_abort_without_post_abort_physics": 2,
+    "tail_cases": 12,
+    "stop_window_found_within_four_seconds": 10,
+    "stop_window_not_found": 2,
+    "details": [
+      {
+        "run": 143,
+        "category": "開門求解或內部預算中止",
+        "verdict": "FAIL open_solver_fail",
+        "latch": null,
+        "stop_validation": {
+          "rule": "STOP_STILL：arm <0.002 rad/s、base 平移 <0.003 m/s、偏航 <0.003 rad/s；命令歸零＋管線排清後連續 0.3 s；期限 4 s",
+          "valid": true,
+          "t_last_nonzero_input": 60.41,
+          "settle_window_start_s": 0.36,
+          "settle_time_s": 0.66,
+          "record_after_s": 1.96,
+          "deadline_s": 4.0,
+          "base_speed_at_last_input": 0.0356,
+          "arm_rate_at_last_input": 0.0305,
+          "residual_after_settle": {
+            "base_mm_s": 0.5044,
+            "yaw_mrad_s": 2.9278,
+            "arm_mrad_s": 1.8477
+          }
+        },
+        "tail_settled": true,
+        "controller_stop": {
+          "t": 24.5,
+          "why": "solver_fail",
+          "sigma": 2.47,
+          "mode": "abort"
+        },
+        "rejected_replies": [
+          {
+            "n": 2450,
+            "ver": 491,
+            "mode": "open",
+            "phase": null,
+            "compute_ms": 73.53,
+            "roundtrip_ms": 73.75,
+            "why": "abort",
+            "commit": false,
+            "stop": {
+              "t": 24.5,
+              "why": "solver_fail",
+              "sigma": 2.47,
+              "mode": "abort"
+            }
+          }
+        ]
+      },
+      {
+        "run": 144,
+        "category": "開門求解或內部預算中止",
+        "verdict": "FAIL open_solver_fail",
+        "latch": null,
+        "stop_validation": {
+          "rule": "STOP_STILL：arm <0.002 rad/s、base 平移 <0.003 m/s、偏航 <0.003 rad/s；命令歸零＋管線排清後連續 0.3 s；期限 4 s",
+          "valid": true,
+          "t_last_nonzero_input": 56.36,
+          "settle_window_start_s": 1.48,
+          "settle_time_s": 1.78,
+          "record_after_s": 2.79,
+          "deadline_s": 4.0,
+          "base_speed_at_last_input": 0.0754,
+          "arm_rate_at_last_input": 0.0479,
+          "residual_after_settle": {
+            "base_mm_s": 0.2256,
+            "yaw_mrad_s": 1.415,
+            "arm_mrad_s": 12.3851
+          }
+        },
+        "tail_settled": true,
+        "controller_stop": {
+          "t": 19.9,
+          "why": "solver_fail",
+          "sigma": 1.77,
+          "mode": "abort"
+        },
+        "rejected_replies": [
+          {
+            "n": 1990,
+            "ver": 399,
+            "mode": "open",
+            "phase": null,
+            "compute_ms": 36.82,
+            "roundtrip_ms": 37.07,
+            "why": "abort",
+            "commit": false,
+            "stop": {
+              "t": 19.9,
+              "why": "solver_fail",
+              "sigma": 1.77,
+              "mode": "abort"
+            }
+          }
+        ]
+      },
+      {
+        "run": 146,
+        "category": "接觸力保護中止",
+        "verdict": "FAIL gripper_force_over",
+        "latch": {
+          "t": 172.88,
+          "why": "gripper_force_over",
+          "kind": "模擬工程中止（保留現場資料、不再步進物理；不是受控停止）",
+          "force_n": 41.992,
+          "who": "uflite_finger2",
+          "limit_n": 40.0
+        },
+        "stop_validation": {
+          "rule": "STOP_STILL：arm <0.002 rad/s、base 平移 <0.003 m/s、偏航 <0.003 rad/s；命令歸零＋管線排清後連續 0.3 s；期限 4 s",
+          "valid": false,
+          "why": "工程中止或例外：物理未繼續步進，沒有停穩可驗"
+        },
+        "tail_settled": null,
+        "controller_stop": null,
+        "rejected_replies": []
+      },
+      {
+        "run": 148,
+        "category": "接觸力保護中止",
+        "verdict": "FAIL gripper_force_over",
+        "latch": {
+          "t": 175.25,
+          "why": "gripper_force_over",
+          "kind": "模擬工程中止（保留現場資料、不再步進物理；不是受控停止）",
+          "force_n": 49.176,
+          "who": "uflite_finger2",
+          "limit_n": 40.0
+        },
+        "stop_validation": {
+          "rule": "STOP_STILL：arm <0.002 rad/s、base 平移 <0.003 m/s、偏航 <0.003 rad/s；命令歸零＋管線排清後連續 0.3 s；期限 4 s",
+          "valid": false,
+          "why": "工程中止或例外：物理未繼續步進，沒有停穩可驗"
+        },
+        "tail_settled": null,
+        "controller_stop": null,
+        "rejected_replies": []
+      },
+      {
+        "run": 150,
+        "category": "抽屜抓持與退出條件未達成",
+        "verdict": "FAIL lost_handle_during_pull",
+        "latch": null,
+        "stop_validation": {
+          "rule": "STOP_STILL：arm <0.002 rad/s、base 平移 <0.003 m/s、偏航 <0.003 rad/s；命令歸零＋管線排清後連續 0.3 s；期限 4 s",
+          "valid": false,
+          "t_last_nonzero_input": 164.11,
+          "settle_window_start_s": null,
+          "settle_time_s": null,
+          "record_after_s": 6.07,
+          "deadline_s": 4.0,
+          "base_speed_at_last_input": 0.0097,
+          "arm_rate_at_last_input": 0.0107,
+          "residual_after_settle": null,
+          "why": "not_settled_within_record"
+        },
+        "tail_settled": false,
+        "controller_stop": {
+          "why": "lost_handle_during_pull",
+          "t": 130.05
+        },
+        "rejected_replies": [
+          {
+            "n": 13055,
+            "ver": 2612,
+            "mode": "pick",
+            "phase": "PULL",
+            "compute_ms": 0.67,
+            "roundtrip_ms": 0.99,
+            "why": "no_tail:pass_finished",
+            "commit": false,
+            "stop": {
+              "why": "lost_handle_during_pull",
+              "t": 130.05
+            }
+          }
+        ]
+      },
+      {
+        "run": 154,
+        "category": "抽屜抓持與退出條件未達成",
+        "verdict": "FAIL retreat_not_reached",
+        "latch": null,
+        "stop_validation": {
+          "rule": "STOP_STILL：arm <0.002 rad/s、base 平移 <0.003 m/s、偏航 <0.003 rad/s；命令歸零＋管線排清後連續 0.3 s；期限 4 s",
+          "valid": true,
+          "t_last_nonzero_input": 170.66,
+          "settle_window_start_s": 0.62,
+          "settle_time_s": 0.92,
+          "record_after_s": 2.34,
+          "deadline_s": 4.0,
+          "base_speed_at_last_input": 0.0003,
+          "arm_rate_at_last_input": 0.8491,
+          "residual_after_settle": {
+            "base_mm_s": 0.3199,
+            "yaw_mrad_s": 0.2118,
+            "arm_mrad_s": 1.9968
+          }
+        },
+        "tail_settled": true,
+        "controller_stop": {
+          "why": "retreat_not_reached",
+          "t": 137.8,
+          "retreat_m": 0.0315,
+          "lift_m": 0.1944
+        },
+        "rejected_replies": [
+          {
+            "n": 13830,
+            "ver": 2767,
+            "mode": "pick",
+            "phase": "RETREAT",
+            "compute_ms": 0.27,
+            "roundtrip_ms": 0.58,
+            "why": "no_tail:pass_finished",
+            "commit": false,
+            "stop": {
+              "why": "retreat_not_reached",
+              "t": 137.8,
+              "retreat_m": 0.0315,
+              "lift_m": 0.1944
+            }
+          }
+        ]
+      },
+      {
+        "run": 155,
+        "category": "回覆未就緒或外層逾時",
+        "verdict": "FAIL deadline",
+        "latch": null,
+        "stop_validation": {
+          "rule": "STOP_STILL：arm <0.002 rad/s、base 平移 <0.003 m/s、偏航 <0.003 rad/s；命令歸零＋管線排清後連續 0.3 s；期限 4 s",
+          "valid": true,
+          "t_last_nonzero_input": 292.91,
+          "settle_window_start_s": 0.08,
+          "settle_time_s": 0.38,
+          "record_after_s": 1.96,
+          "deadline_s": 4.0,
+          "base_speed_at_last_input": 0.0883,
+          "arm_rate_at_last_input": 0.0,
+          "residual_after_settle": {
+            "base_mm_s": 0.0267,
+            "yaw_mrad_s": 0.0,
+            "arm_mrad_s": 0.0238
+          }
+        },
+        "tail_settled": true,
+        "controller_stop": null,
+        "rejected_replies": [
+          {
+            "n": 26265,
+            "ver": 5254,
+            "mode": "pick",
+            "phase": "RETURN",
+            "compute_ms": 120.92,
+            "roundtrip_ms": 121.65,
+            "why": "deadline",
+            "commit": false,
+            "stop": null
+          }
+        ]
+      },
+      {
+        "run": 159,
+        "category": "回覆未就緒或外層逾時",
+        "verdict": "FAIL not_ready",
+        "latch": null,
+        "stop_validation": {
+          "rule": "STOP_STILL：arm <0.002 rad/s、base 平移 <0.003 m/s、偏航 <0.003 rad/s；命令歸零＋管線排清後連續 0.3 s；期限 4 s",
+          "valid": true,
+          "t_last_nonzero_input": 80.76,
+          "settle_window_start_s": 0.08,
+          "settle_time_s": 0.38,
+          "record_after_s": 2.01,
+          "deadline_s": 4.0,
+          "base_speed_at_last_input": 0.1412,
+          "arm_rate_at_last_input": 0.0,
+          "residual_after_settle": {
+            "base_mm_s": 0.0149,
+            "yaw_mrad_s": 0.021,
+            "arm_mrad_s": 0.0715
+          }
+        },
+        "tail_settled": true,
+        "controller_stop": null,
+        "rejected_replies": [
+          {
+            "n": 4050,
+            "ver": null,
+            "mode": null,
+            "phase": null,
+            "compute_ms": null,
+            "roundtrip_ms": null,
+            "why": "not_ready",
+            "commit": false,
+            "stop": null
+          }
+        ]
+      },
+      {
+        "run": 162,
+        "category": "回覆未就緒或外層逾時",
+        "verdict": "FAIL not_ready",
+        "latch": null,
+        "stop_validation": {
+          "rule": "STOP_STILL：arm <0.002 rad/s、base 平移 <0.003 m/s、偏航 <0.003 rad/s；命令歸零＋管線排清後連續 0.3 s；期限 4 s",
+          "valid": true,
+          "t_last_nonzero_input": 0.0,
+          "settle_window_start_s": 0.36,
+          "settle_time_s": 0.66,
+          "record_after_s": 39.77,
+          "deadline_s": 4.0,
+          "base_speed_at_last_input": 0.0001,
+          "arm_rate_at_last_input": 0.0488,
+          "residual_after_settle": {
+            "base_mm_s": 0.2387,
+            "yaw_mrad_s": 0.0,
+            "arm_mrad_s": 1.7677
+          }
+        },
+        "tail_settled": true,
+        "controller_stop": null,
+        "rejected_replies": [
+          {
+            "n": 5,
+            "ver": null,
+            "mode": null,
+            "phase": null,
+            "compute_ms": null,
+            "roundtrip_ms": null,
+            "why": "not_ready",
+            "commit": false,
+            "stop": null
+          }
+        ]
+      },
+      {
+        "run": 169,
+        "category": "開門求解或內部預算中止",
+        "verdict": "FAIL abort",
+        "latch": null,
+        "stop_validation": {
+          "rule": "STOP_STILL：arm <0.002 rad/s、base 平移 <0.003 m/s、偏航 <0.003 rad/s；命令歸零＋管線排清後連續 0.3 s；期限 4 s",
+          "valid": true,
+          "t_last_nonzero_input": 57.36,
+          "settle_window_start_s": 1.17,
+          "settle_time_s": 1.47,
+          "record_after_s": 2.48,
+          "deadline_s": 4.0,
+          "base_speed_at_last_input": 0.0373,
+          "arm_rate_at_last_input": 0.0271,
+          "residual_after_settle": {
+            "base_mm_s": 0.5422,
+            "yaw_mrad_s": 2.943,
+            "arm_mrad_s": 1.7524
+          }
+        },
+        "tail_settled": true,
+        "controller_stop": {
+          "t": 22.5,
+          "why": "tick_deadline_miss_unverified",
+          "sigma": 3.07,
+          "mode": "abort",
+          "elapsed_ms": 95.1,
+          "tag": "qp_time_budget"
+        },
+        "rejected_replies": [
+          {
+            "n": 2250,
+            "ver": 451,
+            "mode": "open",
+            "phase": null,
+            "compute_ms": 96.77,
+            "roundtrip_ms": 97.05,
+            "why": "abort",
+            "commit": false,
+            "stop": {
+              "t": 22.5,
+              "why": "tick_deadline_miss_unverified",
+              "sigma": 3.07,
+              "mode": "abort",
+              "elapsed_ms": 95.1,
+              "tag": "qp_time_budget"
+            }
+          }
+        ]
+      },
+      {
+        "run": 171,
+        "category": "抽屜抓持與退出條件未達成",
+        "verdict": "FAIL handle_grasp_evidence_timeout",
+        "latch": null,
+        "stop_validation": {
+          "rule": "STOP_STILL：arm <0.002 rad/s、base 平移 <0.003 m/s、偏航 <0.003 rad/s；命令歸零＋管線排清後連續 0.3 s；期限 4 s",
+          "valid": true,
+          "t_last_nonzero_input": 256.56,
+          "settle_window_start_s": 0.07,
+          "settle_time_s": 0.37,
+          "record_after_s": 2.34,
+          "deadline_s": 4.0,
+          "base_speed_at_last_input": 0.0001,
+          "arm_rate_at_last_input": 0.0014,
+          "residual_after_settle": {
+            "base_mm_s": 0.1907,
+            "yaw_mrad_s": 0.1768,
+            "arm_mrad_s": 1.0133
+          }
+        },
+        "tail_settled": true,
+        "controller_stop": {
+          "why": "handle_grasp_evidence_timeout",
+          "t": 220.3,
+          "finger": [
+            0.0,
+            1e-05
+          ],
+          "force": [
+            0.0,
+            0.0
+          ]
+        },
+        "rejected_replies": [
+          {
+            "n": 22080,
+            "ver": 4417,
+            "mode": "pick",
+            "phase": "CONFIRM",
+            "compute_ms": 0.41,
+            "roundtrip_ms": 0.77,
+            "why": "no_tail:pass_finished",
+            "commit": false,
+            "stop": {
+              "why": "handle_grasp_evidence_timeout",
+              "t": 220.3,
+              "finger": [
+                0.0,
+                1e-05
+              ],
+              "force": [
+                0.0,
+                0.0
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "run": 175,
+        "category": "開門求解或內部預算中止",
+        "verdict": "FAIL abort",
+        "latch": null,
+        "stop_validation": {
+          "rule": "STOP_STILL：arm <0.002 rad/s、base 平移 <0.003 m/s、偏航 <0.003 rad/s；命令歸零＋管線排清後連續 0.3 s；期限 4 s",
+          "valid": true,
+          "t_last_nonzero_input": 63.01,
+          "settle_window_start_s": 0.3,
+          "settle_time_s": 0.6,
+          "record_after_s": 1.9,
+          "deadline_s": 4.0,
+          "base_speed_at_last_input": 0.0567,
+          "arm_rate_at_last_input": 0.0422,
+          "residual_after_settle": {
+            "base_mm_s": 0.0935,
+            "yaw_mrad_s": 0.5199,
+            "arm_mrad_s": 1.8343
+          }
+        },
+        "tail_settled": true,
+        "controller_stop": {
+          "t": 22.0,
+          "why": "tick_deadline_miss_unverified",
+          "sigma": 2.62,
+          "mode": "abort",
+          "elapsed_ms": 95.1,
+          "tag": "qp_time_budget"
+        },
+        "rejected_replies": [
+          {
+            "n": 2200,
+            "ver": 441,
+            "mode": "open",
+            "phase": null,
+            "compute_ms": 96.75,
+            "roundtrip_ms": 97.0,
+            "why": "abort",
+            "commit": false,
+            "stop": {
+              "t": 22.0,
+              "why": "tick_deadline_miss_unverified",
+              "sigma": 2.62,
+              "mode": "abort",
+              "elapsed_ms": 95.1,
+              "tag": "qp_time_budget"
+            }
+          }
+        ]
+      },
+      {
+        "run": 176,
+        "category": "回覆未就緒或外層逾時",
+        "verdict": "FAIL not_ready",
+        "latch": null,
+        "stop_validation": {
+          "rule": "STOP_STILL：arm <0.002 rad/s、base 平移 <0.003 m/s、偏航 <0.003 rad/s；命令歸零＋管線排清後連續 0.3 s；期限 4 s",
+          "valid": true,
+          "t_last_nonzero_input": 187.71,
+          "settle_window_start_s": 0.08,
+          "settle_time_s": 0.38,
+          "record_after_s": 1.95,
+          "deadline_s": 4.0,
+          "base_speed_at_last_input": 0.0307,
+          "arm_rate_at_last_input": 0.0,
+          "residual_after_settle": {
+            "base_mm_s": 0.1431,
+            "yaw_mrad_s": 0.3035,
+            "arm_mrad_s": 0.4172
+          }
+        },
+        "tail_settled": true,
+        "controller_stop": null,
+        "rejected_replies": [
+          {
+            "n": 14945,
+            "ver": null,
+            "mode": null,
+            "phase": null,
+            "compute_ms": null,
+            "roundtrip_ms": null,
+            "why": "not_ready",
+            "commit": false,
+            "stop": null
+          }
+        ]
+      },
+      {
+        "run": 179,
+        "category": "回覆未就緒或外層逾時",
+        "verdict": "FAIL deadline",
+        "latch": null,
+        "stop_validation": {
+          "rule": "STOP_STILL：arm <0.002 rad/s、base 平移 <0.003 m/s、偏航 <0.003 rad/s；命令歸零＋管線排清後連續 0.3 s；期限 4 s",
+          "valid": false,
+          "t_last_nonzero_input": 58.76,
+          "settle_window_start_s": null,
+          "settle_time_s": null,
+          "record_after_s": 5.72,
+          "deadline_s": 4.0,
+          "base_speed_at_last_input": 0.0001,
+          "arm_rate_at_last_input": 0.0031,
+          "residual_after_settle": null,
+          "why": "not_settled_within_record"
+        },
+        "tail_settled": false,
+        "controller_stop": null,
+        "rejected_replies": [
+          {
+            "n": 1850,
+            "ver": 371,
+            "mode": "open",
+            "phase": null,
+            "compute_ms": 140.04,
+            "roundtrip_ms": 140.6,
+            "why": "deadline",
+            "commit": false,
+            "stop": null
+          }
+        ]
+      }
+    ],
+    "note": "classify each unsuccessful run once by stored terminal reason; not counts of all internal error events"
+  },
+  "stopping_counterexamples": [
+    {
+      "run": 150,
+      "last_nonzero_input_sim_s": 164.11,
+      "record_after_s": 6.069996196180568,
+      "final_joint_rate_mrad_s": 5.102157706815549,
+      "arm_only_window_found": false,
+      "saved_full_stop_valid": false
+    },
+    {
+      "run": 179,
+      "last_nonzero_input_sim_s": 58.76,
+      "record_after_s": 5.719998558759691,
+      "final_joint_rate_mrad_s": 2.2768974813125467,
+      "arm_only_window_found": false,
+      "saved_full_stop_valid": false
+    }
+  ],
+  "new_simulator_runs": 0,
+  "new_controller_runs": 0,
+  "sources": [
+    {
+      "path": "evaluation/door_ahead_exec.py",
+      "sha256": "3d765e5305b203a223405993c08aebfe4b2bb0b398dfd38bb60f552e8a353a8e"
+    },
+    {
+      "path": "evaluation/door_open_exec_ctrl.py",
+      "sha256": "cd6a946ff49783136ad685c2d1668bd84c7432a3e25509a52abb03d8d8714e18"
+    },
+    {
+      "path": "evaluation/far_chain_align.py",
+      "sha256": "502af4edcdd160c5d5d6a2d2fb12f803518af1896372a348935d731edc40fd63"
+    },
+    {
+      "path": "evaluation/isaac_m8_house_d2.py",
+      "sha256": "24c12a8f0da6c8085792b74a663dcecce499d63411431cf1592c90e591cf3810"
+    },
+    {
+      "path": "evaluation/motm_dry/world_d2_node.py",
+      "sha256": "ead970fbc5c61d71fdf485f25759cccdafe14415b83bee6a05e9ae9f6576c084"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_143/d2_d2w.json",
+      "sha256": "ba2e39d3217b4c6a26e324497b1d0d83951d1a7473198a8f55cb19469db9009f"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_143/d2_d2w.npz",
+      "sha256": "ebd91fc7253ac46fbc510559479c90d2a1a5d0b520b17c486aa3bbd3d29e57e4"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_143/result.json",
+      "sha256": "ec78f164d01acb5428bc5ec39b5c87d432a9f9b50c993da7b0a630d0847442b0"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_143/run.log",
+      "sha256": "1edf6316acc998ccbb14997ae3e6b9b5b59bbc59316bec598d17c912627a1f2a"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_144/d2_d2w.json",
+      "sha256": "7906e8749a2802cfc65b6707b1b20134585ed625e9b6bd25143595620c32f61d"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_144/d2_d2w.npz",
+      "sha256": "9ce23989c859b39a93bb7e12bb4310af0debed9fae24534d9fff7d0fd8aed247"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_144/result.json",
+      "sha256": "fddcfb243a559150aacae6fff40aabfaf06d20b62c6568d87ad77a03bf46753d"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_144/run.log",
+      "sha256": "03bb4b841aa1f2be6ed9c16835be7678b731a52091a3a1d0f3b0751f6c9d9997"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_146/d2_d2w.json",
+      "sha256": "52d51ae0e662f2306ef45cc9e14f34a360adc8c2ed6cbe04ea24120789270077"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_146/d2_d2w.npz",
+      "sha256": "31df394115574d7b432f1651eb14452d89ad8e85b7232cf0549ea25f733c4112"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_146/result.json",
+      "sha256": "3f58b8c6b9c5a55b27d003a7efbe68345513bbf9a142066b89c3ab5c360069eb"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_146/run.log",
+      "sha256": "2031bbf92951310bdca214a1da8f8e606c11ad819142c3eb9daa1f93d0bae27d"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_148/d2_d2w.json",
+      "sha256": "066abd2f4ca2ae12b9f09819e8f23df1d4bb8fc73ee1c19d8fda3d153624241e"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_148/d2_d2w.npz",
+      "sha256": "cc46b6442461dbcece55efbb106b778042faddcf61440d6c1741f81680350c5a"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_148/result.json",
+      "sha256": "46602658946e77336d2259f961d692bf68c96d4d03f0f38f38c5dc434463dd81"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_148/run.log",
+      "sha256": "22b03893c177fbc149577a1d3818dec9b48fd6d5f4e869929a997de4b9d356a8"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_150/d2_d2w.json",
+      "sha256": "7e6b54f0b9e8cec8714c4946f747f7170760f30a3e729b35e0f490e887f3a5eb"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_150/d2_d2w.npz",
+      "sha256": "33d2bf5c54f2ab1f839969abeca5a2b0f9bf7fa9554ddab2e012fd4d10c19424"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_150/log.npz",
+      "sha256": "6c2b51ab7f3b40e57bba0381d702aad58d39538b32f44d5ff027de8a3373ee6e"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_150/result.json",
+      "sha256": "c648308c28a823fca269eedcac7a4c660254d9fcd090563205d90ffeec2797d6"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_150/run.log",
+      "sha256": "685d7de609cd0b89c694d0a5b4350be87e63b6ae268f87c0b55491cc373e32df"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_154/d2_d2w.json",
+      "sha256": "229d5ee45a1335d36f0082db11e04c1c6eb00f3eb030262f4b70863a81323391"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_154/d2_d2w.npz",
+      "sha256": "fb94d15d81c26620511ab1423f7d1f86ab5a65a66a6fe6714d0f209193ebc2bf"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_154/result.json",
+      "sha256": "f0cfd721dbac53299ad13f3fe49724ecc6eada991af7a98ca9df8a3060150270"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_154/run.log",
+      "sha256": "5184a8dfca1dc5bfa9b5baca508366d29a2fd1e4c6baa44cb091f1c36eb8ea02"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_155/d2_d2w.json",
+      "sha256": "6780379a6daf85b8f6b07eadf2d5050c956d534ca178ed7f607b0de53330372a"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_155/d2_d2w.npz",
+      "sha256": "3d8192a4af331ecff57408b2e3c8c41f8fb514f52e1e08ff7cc7fab6d72a8016"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_155/result.json",
+      "sha256": "8f32b04bd7605657154734b04576192c390852bb4cf6be57bf6c620790f6c85d"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_155/run.log",
+      "sha256": "f5493bcc364a03ed9b4ae389e6d57ea6ae1aa69507c48308c7f43dc44c902074"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_159/d2_d2w.json",
+      "sha256": "6eaafa98b04f5898dc31d57f8a3b8d2f504b5ea42ccbef97e58258b01ef46685"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_159/d2_d2w.npz",
+      "sha256": "185fbcb76dedf78a294d38b999d7ee8f32523dbba6369cf3cb4974c6d05555f2"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_159/result.json",
+      "sha256": "0601074d10bf2cff8fe847f3cdcfb718d8642d33fb902ed20ab02271996e3943"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_159/run.log",
+      "sha256": "986bf36bc4c6cab8a0d2c2d6d18e7f235121f03b079807858c67e8824ae89606"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_162/d2_d2w.json",
+      "sha256": "17d1626a64ee099202a0e807b954a8a5bb0f7f96e4fc61a0b7cdd91a3b152610"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_162/d2_d2w.npz",
+      "sha256": "723b5fde0a0809fb7a7aa20e766fdff3b2a53e71fe9ab03251be32937f455640"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_162/result.json",
+      "sha256": "770f1bf0b5d16a04e113f160c8dc51957fe90e2f67ee2cc91f213c7976809a57"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_162/run.log",
+      "sha256": "59c1d92d89f4d0057ced796c72e19e95a2fddc2cf98c691915d69268a9fd185d"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_169/d2_d2w.json",
+      "sha256": "8e6c8a15d355f37086fa0846670ee0e3788d69076e34d5347445190ab0afe9f2"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_169/d2_d2w.npz",
+      "sha256": "8d30917ef84c75af588aa0dcb4ef08532af2beb952eb3bf41d071ad08f53cac7"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_169/result.json",
+      "sha256": "30e946d4548331bae9b0488ea8e22bd77db4b930689e4ecd02ded3582d9ffc30"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_169/run.log",
+      "sha256": "aea767be7176979267ff782122161669a9c4e9bab7db88f1b0c2849a41d61f80"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_171/d2_d2w.json",
+      "sha256": "a7b717059781619d89feed20b5de7e7ae42b1c45e638204234e634ff7f2deabf"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_171/d2_d2w.npz",
+      "sha256": "c8e8e10eb996292e7d112b27e180e4988cb31737b373c6f2336277ed6f87e1d0"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_171/result.json",
+      "sha256": "487b4e3c3a71174978f3ac6e3eca6bd01cd9eb9fd6da10f7426855fa10324938"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_171/run.log",
+      "sha256": "dbc0515d23e5a1475f1288cc050fd5e1d42ff265cb1daabb74906b420a842e03"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_173/d2_d2w.json",
+      "sha256": "327e31b965b3d0cb642122d6046debe0e2536e6ff4b19d411ccee5dd58a6ddbf"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_173/d2_d2w.npz",
+      "sha256": "abfc0afb065ee190580ae2efc3bfabed3a354b5263fb4a55a4b4d988a7343a6b"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_173/result.json",
+      "sha256": "13967bdc69ca84eec6436da4613dcad962434298003e9a179c87bae0a694ab4d"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_173/run.log",
+      "sha256": "a3487e585ecaf4658868644ed6e6e29ee509d961b6887024a8dc4816a9f50aa2"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_175/d2_d2w.json",
+      "sha256": "7e62a8f3e5c6ddf5de7a45d39e2c9f065c5b7304bb3b1fc3acfc443ab1c051a2"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_175/d2_d2w.npz",
+      "sha256": "ff409db1cd60528dd648340e43dbaf8c103bbd03681a6af5bbf4a44d655a74ba"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_175/result.json",
+      "sha256": "53f6bd2c77102d9b4ed7bb1f4c4fa538ee966a20c8d5c21cf63a933705949904"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_175/run.log",
+      "sha256": "edba27e58e60a0877fca9401cc92f97d460c63ca20db4336d3db24b5fb1f98d4"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_176/d2_d2w.json",
+      "sha256": "a237989d00eb913696e87222a3cd378bd6ce6d9e7ef15fe0f51314337ada8fa2"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_176/d2_d2w.npz",
+      "sha256": "9ecb3137e44d26f6df52bdc95b2da5fbbe6aef39cde809e7cdd9d475b545857b"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_176/result.json",
+      "sha256": "e9ae905a42a758446d32e408bbab6d6680f3a8b84b5e163212a4c263aaf0ee8c"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_176/run.log",
+      "sha256": "e3e4ad87135cae7235dabf8e0bb09280ba799adbba240dd073e39c88dc7f7e7b"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_179/d2_d2w.json",
+      "sha256": "43c34c578ad132c0ffa9836704a2665566fb94596ddc82d6341a47d323fab9ca"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_179/d2_d2w.npz",
+      "sha256": "ad274d4607b99387e676ff54e5d4a6330f83a3fdb0043ff75a4f839bc3eb5313"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_179/log.npz",
+      "sha256": "b00f0df9b212308032b1c46b3779865bca984868b407e8960d23fe2708fe3f98"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_179/result.json",
+      "sha256": "962075f874cb7cd5d214869a6a50c7f53b373cbce28e9dec3ada3193dbf06e45"
+    },
+    {
+      "path": "evaluation/runs/m8house_d2_unified_179/run.log",
+      "sha256": "ae4d72a04ac7ef21be333f14e559859b335ec6cb18343c40251a228a15fdcebd"
+    },
+    {
+      "path": "預口試論文/overleaf/figsrc/ch04/residential_task_validation_data.json",
+      "sha256": "d6097c1e3e45e4f0fa134e2c95977240f237709a3ef2d240133def18c74e713b"
+    }
+  ]
+}

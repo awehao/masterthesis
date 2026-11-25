@@ -21,6 +21,7 @@ def clean(s):
 
 def stats(s):
     return {
+        "source_lines": len(s.splitlines()),
         "source_characters": len(s),
         "han_characters": len(re.findall(r"[\u4e00-\u9fff]", s)),
         "numbered_equation_groups": s.count(r"\begin{equation}"),
@@ -72,12 +73,21 @@ def audit():
     refs = [x.strip() for m in re.finditer(r"\\(?:ref|eqref|cref|Cref|pageref)\{([^}]+)\}", s)
             for x in m.group(1).split(",")]
     issues.extend("Undefined reference: "+k for k in sorted(set(refs)-set(labels)))
-    biblio = (BASE / "overleaf/thesis_references.bib").read_text()
-    biblio += "\n" + (BUNDLE / "第三章_新增參考文獻.bib").read_text()
-    keys = set(re.findall(r"@\w+\s*\{\s*([^,\s]+)", biblio))
+    biblio = (BUNDLE / "第三章_參考文獻_完整.bib").read_text()
+    bibkeys = re.findall(r"@\w+\s*\{\s*([^,\s]+)", biblio)
+    keys = set(bibkeys)
+    issues.extend("Duplicate bibliography key: "+k
+                  for k, n in collections.Counter(bibkeys).items() if n > 1)
     cites = [x.strip() for m in re.finditer(r"\\cite\{([^}]+)\}", s)
              for x in m.group(1).split(",")]
     issues.extend("Undefined citation: "+k for k in sorted(set(cites)-keys))
+    issues.extend("Uncited chapter bibliography entry: "+k for k in sorted(keys-set(cites)))
+    masterkeys = re.findall(r"@\w+\s*\{\s*([^,\s]+)",
+                           (BASE / "overleaf/thesis_references.bib").read_text())
+    issues.extend("Duplicate master bibliography key: "+k
+                  for k, n in collections.Counter(masterkeys).items() if n > 1)
+    issues.extend("Chapter citation missing in master: "+k
+                  for k in sorted(set(cites)-set(masterkeys)))
     graphics = re.findall(r"\\includegraphics(?:\[[^\]]*\])?\s*\{([^}]+)\}", s)
     for x in graphics:
         if not x.endswith(".png"):
@@ -99,6 +109,8 @@ def audit():
         b = m.group(1)
         if b.find(r"\label") < b.find(r"\caption"):
             issues.append("Figure label precedes caption")
+        if re.search(r"依文獻|自行繪製|重繪|改繪", b):
+            issues.append("Drawing attribution wording remains in figure")
     alg = []
     for m in re.finditer(r"\\(If|EndIf|While|EndWhile|ElsIf)\b", s):
         c = m.group(1)
@@ -123,6 +135,7 @@ def audit():
         "label_count": len(labels),
         "reference_count": len(refs),
         "citation_keys": sorted(set(cites)),
+        "chapter_bibliography_entries": len(bibkeys),
         "png_files": graphics,
         "checks": "passed" if not issues else "failed",
         "issues": issues,
@@ -147,6 +160,7 @@ def package(graphics):
     zip_path = BASE / "第三章_精簡重整版_Overleaf.zip"
     names = [
         "03_ResearchMethodology.tex", "第三章_新增參考文獻.bib",
+        "第三章_參考文獻_完整.bib",
         "README_替換方式.md", "核對結果.json", "刪除標籤清單.csv",
         "新繪圖片核對.json", "圖片空白裁切紀錄.json", "SOURCES.md",
     ]
