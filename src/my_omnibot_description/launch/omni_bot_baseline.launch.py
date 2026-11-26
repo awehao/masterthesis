@@ -36,6 +36,42 @@ def _dyn_names(traj_file):
     return [d['name'] for d in (cfg.get('dynamic_obstacles') or [])]
 
 
+def _nav_vmax_yaml(src):
+    """11/27 Howard「四個導航方法速度上限統一 0.26」：NAV_VMAX 設定時，複製參數檔並把平移速度上限壓到該值
+    （MPPI vx/vy_max、vx/vy_min，DWB max/min_vel_x/y、max_speed_xy，RPP desired_linear_vel，平滑器 max/min_velocity 的 x、y）；
+    角速度與加速度不動，防護層與輪級限制仍用硬體值 0.2775。未設 NAV_VMAX 時回傳原檔（行為不變）。"""
+    import tempfile
+    import yaml as _y
+    v = os.environ.get('NAV_VMAX', '')
+    if not v:
+        return src
+    v = float(v)
+    d = _y.safe_load(open(src))
+
+    def walk(o):
+        if isinstance(o, dict):
+            for k, val in list(o.items()):
+                num = isinstance(val, (int, float)) and not isinstance(val, bool)
+                if k in ('vx_max', 'vy_max', 'max_vel_x', 'max_vel_y', 'max_speed_xy', 'desired_linear_vel') and num and val > 0:
+                    o[k] = min(float(val), v)
+                elif k in ('vx_min', 'vy_min', 'min_vel_x', 'min_vel_y') and num and val < 0:
+                    o[k] = max(float(val), -v)
+                elif k == 'max_velocity' and isinstance(val, list) and len(val) == 3:
+                    o[k] = [min(float(val[0]), v), min(float(val[1]), v), val[2]]
+                elif k == 'min_velocity' and isinstance(val, list) and len(val) == 3:
+                    o[k] = [max(float(val[0]), -v), max(float(val[1]), -v), val[2]]
+                else:
+                    walk(val)
+        elif isinstance(o, list):
+            for x in o:
+                walk(x)
+    walk(d)
+    fd, path = tempfile.mkstemp(prefix='navvmax_' + os.path.basename(src)[:-5] + '_', suffix='.yaml')
+    with os.fdopen(fd, 'w') as f:
+        _y.safe_dump(d, f)
+    return path
+
+
 def generate_launch_description():
     desc_pkg = get_package_share_directory('my_omnibot_description')
     bringup  = get_package_share_directory('ammr_bringup')
@@ -83,6 +119,7 @@ def generate_launch_description():
         Command(['xacro ', urdf_file, ' use_camera:=false']), value_type=str)
 
     def params(cfg):
+        cfg = _nav_vmax_yaml(cfg)                       # NAV_VMAX（未設＝原檔）
         rw = {'yaml_filename': map_file,
               'tf_broadcast': 'false'}          # EKF owns map->odom
         # BASE_ACCEL=1 clamps the baseline's acceleration to the same box the
