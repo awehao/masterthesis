@@ -12,7 +12,8 @@
 未知障礙：中心離已知障礙 ≥ 包覆半徑＋0.75 m（至少一側過得去）、離起終點 ≥1.5 m＋半徑、彼此 ≥1.0 m；
           8 種形狀（細桿、垃圾桶、小箱、推車、長凳、棧板、長條、中箱），箱子角度隨機；
           11/27 Howard「路徑上要有各種未知障礙物、要有鑑別度」⇒ 預設 2 個壓在名目路線中段上（離中心 0–0.6 m）、2 個在旁邊（0.6–2.0 m），其餘隨機；
-          放完後在真實佔據（已知＋未知）上仍須連通，且繞行後路長 ≤ 1.3 倍（不整個堵死門口）。
+          放完後在真實佔據（已知＋未知）上仍須連通，且繞行後路長 ≤ 1.3 倍（不整個堵死門口）；
+          只走 ≥1.1 m 寬通道的最短路，不可比可擠 0.66 m 縫的最短路長超過 1 m（規劃器不會為了省路去擠窄縫；不製造擠得過去的假象）。
 輸出：<out>/n1_<layout>_<cond>_k<seed>.yaml＋_meta.json；並更新 evaluation/results/n1_poses_<layout>.csv（seed 列）。
 用法：make_n1_scenario.py --layout n1_office --seed 3 --out-dir DIR"""
 import argparse
@@ -190,9 +191,10 @@ for attempt in range(200):
             if any(math.hypot(x - u, y - v) < rad + rr + 1.0 for u, v, rr in [(p['x'], p['y'], p['rad']) for p in placed]):
                 continue
             yaw = rng.uniform(0.0, math.pi) if kind == 'box' else 0.0
+            m_u = box_mask(x, y, sx, sy, yaw, kind)
             placed.append(dict(name=nm, kind=kind, x=round(float(x), 3), y=round(float(y), 3), yaw=round(float(yaw), 4), sx=sx, sy=sy,
                                rad=round(float(rad), 3), mode=mode))
-            occ_t |= box_mask(x, y, sx, sy, yaw, kind)
+            occ_t |= m_u
             got = True
             break
         if not got:
@@ -201,8 +203,15 @@ for attempt in range(200):
         continue
     D_T = dist_of(occ_t)
     P2 = astar(D_T, s, g, a.infl)
-    if P2 is not None and plen(P2) <= 1.3 * SLEN:
-        break
+    if P2 is None or plen(P2) > 1.3 * SLEN:
+        continue
+    # 不製造「看起來過得去、其實過不去」的縫（11/27 先導 n1_office k101：未知箱與門框留 0.7–0.9 m，規劃器以車半徑 0.33 m 判斷擠得過、
+    # 控制器與防護層不讓，三個方法都卡到逾時）。
+    P3 = astar(D_T, s, g, 0.33)                                       # 規劃器可能走的最短路（可擠 >0.66 m 的縫）
+    P4 = astar(D_T, s, g, 0.55)                                       # 只走 ≥1.1 m 寬的路
+    if P3 is None or P4 is None or plen(P4) > plen(P3) + 1.0 or plen(P4) > 1.3 * SLEN:
+        continue                                                      # 擠窄縫能省 >1 m ⇒ 規劃器會去擠 ⇒ 重抽
+    break
 else:
     raise SystemExit('!! 未知障礙放不下')
 

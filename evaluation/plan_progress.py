@@ -132,8 +132,8 @@ def dyn_rows(stats_path):
 
 def n1pilot_row():
     """N1 先導（三布局 × 靜態／交會 × 種子 101 × 4 方法 = 24 趟）。"""
-    R = os.path.join(HERE, 'results', 'n1pilot')
-    lp = os.path.join(R, 'n1pilot.log')
+    R = os.path.join(HERE, 'results', os.environ.get('PILOT_BATCH', 'n1pilot3'))
+    lp = os.path.join(R, os.path.basename(R) + '.log')
     log = open(lp).read().splitlines() if os.path.exists(lp) else []
     n = sum(1 for f in glob.glob(os.path.join(R, 'n1_*_k*_*.csv')) if sum(1 for _ in open(f)) > 1)
     run = bool(log) and not any('BATCH DONE' in s for s in log)
