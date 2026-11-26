@@ -1,0 +1,16 @@
+diff --git a/evaluation/dyn_encounter.py b/evaluation/dyn_encounter.py
+index eb78e08fa..190c335c8 100644
+--- a/evaluation/dyn_encounter.py
++++ b/evaluation/dyn_encounter.py
+@@ -102,7 +102,11 @@ def one(bag, radii, goal):
+             if rw < 0:
+                 closing = -rw / max(np.linalg.norm(r), 1e-9)
+                 ttc = min(ttc, max(dmin[i], 0.0) / max(closing, 1e-6))
++    i_m = int(np.argmin(dmin))
++    d_goal = np.hypot(P[:, 0] - goal[0], P[:, 1] - goal[1])
+     return dict(bag=os.path.basename(bag.rstrip('/')), dmin_dyn_m=round(float(dmin.min()), 3),
++                goal_dist_at_dmin_m=round(float(d_goal[i_m]), 2),
++                t_d10_near_goal_s=round(float(dt[enc & (d_goal < 2.5)].sum()), 2),
+                 n_contact_dyn=episodes(dmin < 0.0, t, 1.0), n_contact_active=n_act, n_contact_passive=n_pas,
+                 arrived=bool(len(near)),
+                 t_d05_s=round(float(dt[dmin < 0.5].sum()), 2), t_d10_s=round(float(dt[enc].sum()), 2), n_enc10=n_enc,
