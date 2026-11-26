@@ -159,14 +159,14 @@ def main():
     exps, cells = plan_rows()
     batch, conds, methods, recent = dyn_rows(a.stats)
     pilot, precent = n1pilot_row()
-    recent = (precent + recent)[:10]
+    recent = precent[:10]
     now = dt.datetime.now()
     snap = dict(at=now.isoformat(timespec='seconds'), at_label=now.strftime('%m/%d %H:%M'),
-                experiments=exps, cells=cells, batch=[pilot, dict(id=DYN, name='dyn1126（11/26，已停）', design='行人太快、GMPC 設定不對，只當有瑕疵的先導', **batch)],
-                conditions=conds, methods=methods, recent=recent)
+                experiments=exps, cells=cells, batch=[pilot],                    # 11/27 Howard：面板刪除 dyn1126
+                conditions=[], methods=[], recent=recent)
     json.dump(snap, open(a.out, 'w'), ensure_ascii=False, indent=1)
     core = [e for e in exps if e['tier'] == '核心']
-    print(f"核心 {sum(e['done'] for e in core)}/{sum(e['total'] for e in core)}；含選配 {sum(e['done'] for e in exps)}/{sum(e['total'] for e in exps)}；N1 先導 {pilot['done']}/24；dyn1126 {batch['done']}/160（{batch['status']}）")
+    print(f"核心 {sum(e['done'] for e in core)}/{sum(e['total'] for e in core)}；含選配 {sum(e['done'] for e in exps)}/{sum(e['total'] for e in exps)}；N1 先導 {pilot['done']}/24")
 
 
 if __name__ == '__main__':

@@ -1,0 +1,92 @@
+diff --git a/evaluation/run_n1_batch.sh b/evaluation/run_n1_batch.sh
+index 6cd623063..acd8221aa 100755
+--- a/evaluation/run_n1_batch.sh
++++ b/evaluation/run_n1_batch.sh
+@@ -4,8 +4,9 @@
+ #   例：run_n1_batch.sh n1pilot n1_bigarena,n1_office,n1_warehouse static,crossing 101 101
+ # 種子 1–10＝正式測試（登記 status=done）；101 以後＝先導／開發（登記 status=pilot，不計入 N1 完成數）。
+ # 共同條件：SCENE=<布局>（世界＋地圖）、scheduled 時序、SHIELD=1 GUARD=1、NAV_VMAX=0.26（四方法平移上限一致，Howard 11/27 選「全部 0.26」）、時限 200 s。
+-# GMPC（gmpc_scan）一律帶論文鎖定設定（chain_final120.sh）：PLANNER_SCAN=/scan_filtered PLAN_BLEND=0.0 CBF_ALPHA=0.5
+-#   CBF_SAFE_MARGIN=0.60 CBF_PRUNE_RANGE=1.2 CBF_FAR_STRIDE=2（11/26 dyn1126 漏帶 ⇒ 規劃翻邊，見 memory feedback_gmpc_locked_config）。
++# GMPC（gmpc_scan）＝住宅任務版（Howard 11/27 選）：與 run_d2_isaac.sh 相同的導航開關 HEADING=1 GMPC_TASK=1（6 個 CBF／規劃參數用程式預設，同住宅任務），
++#   加會車層 NAV_YIELD=1 D2_YIELD_SIDE=1 YS_PRED=1（住宅任務 task.env 同值；地圖淨空 M8_MAP=<布局>），接在任務擴充節點的參考視窗（gmpc_task_node）。
++#   9 月鎖定版（chain_final120.sh）不用；dyn1126 兩者都沒帶（memory feedback_gmpc_locked_config）。
+ # 每個案例（布局×條件×種子）四方法連跑、順序依案例雜湊打亂；任何「skipping」＝系統失敗，同趟重來至多 3 次。
+ # 情境檔：experiments/n1_scenarios/<布局>_<條件>_k<種子>.yaml（同一布局＋種子永遠同一份；已存在就不重產）。
+ # 結果：results/<批次名>/<布局>_<條件>_k<種子>_<方法>.csv；紀錄 results/<批次名>/<批次名>.log；停止檔 results/<批次名>/stop。
+@@ -19,7 +20,7 @@ mkdir -p "$D" "$R" "$L" "$(dirname "$REG")"
+ LOG=$R/$B.log
+ source /opt/ros/jazzy/setup.bash; source install/setup.bash
+ set -u
+-GMPC_LOCKED="PLANNER_SCAN=/scan_filtered PLAN_BLEND=0.0 CBF_ALPHA=0.5 CBF_SAFE_MARGIN=0.60 CBF_PRUNE_RANGE=1.2 CBF_FAR_STRIDE=2"
++GMPC_HOUSE="HEADING=1 GMPC_TASK=1 NAV_YIELD=1 D2_YIELD_SIDE=1 YS_PRED=1"
+ echo "$(date +%F_%T) batch $B layouts=${LAYS[*]} conds=${CONDS[*]} seeds=$K0-$K1 NAV_VMAX=0.26 git=$(git rev-parse --short HEAD)" >> "$LOG"
+ for K in $(seq "$K0" "$K1"); do
+   for LY in "${LAYS[@]}"; do
+@@ -32,7 +33,7 @@ for K in $(seq "$K0" "$K1"); do
+       ORDER=$(python3 -c "import random,zlib;m=['gmpc_scan','mppi','dwb','rpp'];random.Random(zlib.crc32(b'$LY|$CD|$K')).shuffle(m);print(' '.join(m))")
+       for M in $ORDER; do
+         [ -f "$R/stop" ] && { echo "$(date +%T) stop file" >> "$LOG"; exit 0; }
+-        EXTRA=""; [ "$M" = "gmpc_scan" ] && EXTRA=$GMPC_LOCKED
++        EXTRA=""; [ "$M" = "gmpc_scan" ] && EXTRA="$GMPC_HOUSE M8_MAP=$LY"
+         ST=infra_fail
+         for TRY in 1 2 3; do
+           TAG=_${B}_${LY}_${CD}_k${K}_t${TRY}
+diff --git a/src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_task_node.py b/src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_task_node.py
+index 641979ef1..1bd384dd5 100644
+--- a/src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_task_node.py
++++ b/src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_task_node.py
+@@ -78,7 +78,53 @@ class GMPCTaskNode(GMPCNode):
+             self.cmd_pub = _NoPub()                                   # 名目底盤命令不發布（命令只由單一控制器出）
+             self.get_logger().info('gmpc_task_node: FRONTEND mode (reference + obstacles only; no solve, no cmd)')
+ 
++        # 11/27 N1（Howard 選「住宅任務版」）：純導航比較時把住宅任務的會車層（evaluation/yield_side.py，D2_YIELD_SIDE＋YS_PRED）
++        #   接在這裡——每拍求解前只平移參考視窗（同 door_pass_ctrl.yield_apply 的做法：體速度依改後參考重算），CBF、Shield、求解器不變。
++        #   開關 NAV_YIELD=1（另需 D2_YIELD_SIDE=1；地圖淨空用 M8_MAP）。住宅任務不設 NAV_YIELD ⇒ 導航節點行為不變（避免與 W-GMPC 的會車層重複套用）。
++        self._t_ys = None
++        if os.environ.get('NAV_YIELD', '0') == '1':
++            import sys as _sys
++            from pathlib import Path as _P
++            _ev = os.environ.get('YS_EVAL_DIR') or str(_P(__file__).resolve().parents[6] / 'evaluation')
++            if _ev not in _sys.path:
++                _sys.path.insert(0, _ev)
++            import yield_side as _YS
++            self._t_YS = _YS
++            self._t_ys = _YS.YieldSide() if _YS.ENABLE else None
++            self._t_ys_n = 0
++            self.get_logger().info(f'gmpc_task_node: NAV_YIELD 會車層 {"啟用" if self._t_ys else "未啟用（D2_YIELD_SIDE≠1）"}，eval={_ev}，M8_MAP={os.environ.get("M8_MAP")}')
++
++        def _yield(X_now, X_ref_win, xi_ref_win, obstacles):
++            ys = self._t_ys
++            if ys is None or obstacles is None:
++                return X_ref_win, xi_ref_win
++            X_now = np.asarray(X_now, float)
++            yaw = math.atan2(X_now[1, 0], X_now[0, 0]); c_, s_ = math.cos(yaw), math.sin(yaw)
++            u_ = np.asarray(self.xi_prev[:2], float)
++            ys.ref_dt = float(self._cfg.dt)
++            X_ = [np.asarray(x, float).copy() for x in X_ref_win]
++            n0 = len(ys.log)
++            info = ys.apply(self.get_clock().now().nanoseconds * 1e-9, np.array([X_now[0, 2], X_now[1, 2], yaw]),
++                            np.array([c_ * u_[0] - s_ * u_[1], s_ * u_[0] + c_ * u_[1]]), X_, obstacles, float(self.dt))
++            for e_ in ys.log[n0:]:
++                self._t_ys_n += 1
++                if self._t_ys_n <= 400:
++                    self.get_logger().info('YS ' + json.dumps({k: (v if isinstance(v, (int, float, str, bool, type(None))) else str(v)) for k, v in e_.items()}, ensure_ascii=False))
++            if info is None:
++                return X_ref_win, xi_ref_win
++            xi_ = np.asarray(xi_ref_win, float).copy()
++            for k in range(min(len(X_) - 1, len(xi_))):
++                T1 = np.linalg.inv(X_[k]) @ X_[k + 1]
++                xi_[k] = np.array([T1[0, 2] / self._cfg.dt, T1[1, 2] / self._cfg.dt, math.atan2(T1[1, 0], T1[0, 0]) / self._cfg.dt])
++            if len(xi_) >= len(X_) and len(X_) > 1:
++                xi_[len(X_) - 1] = xi_[len(X_) - 2].copy()
++            return np.asarray(X_), xi_
++
+         def _solve_pub(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles=None, _o=_orig_solve):
++            try:
++                X_ref_win, xi_ref_win = _yield(X_now, X_ref_win, xi_ref_win, obstacles)
++            except Exception as e_:                                   # noqa: BLE001
++                self.get_logger().warn(f'NAV_YIELD 例外（本拍略過）：{e_!r}')
+             if self._t_frontend:
+                 try:
+                     self._t_pub_solve_in(np.asarray(X_now, float), np.asarray(X_ref_win, float), np.asarray(xi_ref_win, float), obstacles)
