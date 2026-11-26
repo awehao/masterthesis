@@ -146,10 +146,14 @@ def n1pilot_row():
             lay = dict(n1_bigarena='多房間', n1_office='辦公室', n1_warehouse='倉儲').get(m.group(2), m.group(2))
             recent.append(dict(id=f'p{m.group(1)}-{m.group(5)}-{m.group(6)}', time=m.group(1), case=f"N1 先導・{lay}・{'交會' if m.group(3) == 'crossing' else '靜態'}",
                                method=dict(DYN_METH).get(m.group(5), m.group(5)), attempt=int(m.group(6)), result=short))
-    nc = next((int(x.split('cases=')[1]) for x in log if 'cases=' in x), 6)
+    nc = next((int(x.split('cases=')[1]) for x in log if 'cases=' in x), None)
+    if nc is None:                                                     # run_n1_batch.sh 沒有 cases= 行：由開頭的 layouts／conds／seeds 算
+        hd = next((x for x in log if ' batch ' in x and 'layouts=' in x), '')
+        mm = re.search(r'layouts=(.*?) conds=(.*?) seeds=(\d+)-(\d+)', hd)
+        nc = len(mm.group(1).split()) * len(mm.group(2).split()) * (int(mm.group(4)) - int(mm.group(3)) + 1) if mm else 6
     bname = os.path.basename(R)
-    nm_ = {'n1hardpilot': 'N1 加難先導（種子 101–102）'}.get(bname, f'N1 批次 {bname}')
-    return dict(id='n1pilot', name=nm_, design='三種複雜布局 × 交會 × 4 方法（穿越、對向會車、轉角未知障礙）；GMPC 住宅任務版、四方法 0.26 m/s；3 條車道並行',
+    nm_ = {'n1hardpilot': 'N1 加難先導（平行，已停）', 'n1hard12': 'N1 加難先導（種子 101，12 趟）', 'n1main': 'N1 正式（種子 1–20，240 趟）'}.get(bname, f'N1 批次 {bname}')
+    return dict(id='n1pilot', name=nm_, design='三種複雜布局 × 交會 × 4 方法（穿越、對向會車、轉角未知障礙）；GMPC 住宅任務版、四方法 0.26 m/s',
                 done=n, total=nc * 4, skips=sum(1 for s in log if 'skipping' in s), caps=sum(1 for s in log if 'cap hit' in s),
                 running=run, status=status(n, nc * 4, run), last=(log[-1] if log else ''), stats_note=''), recent
 
