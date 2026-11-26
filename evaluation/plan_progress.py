@@ -166,11 +166,27 @@ def main():
     exps, cells = plan_rows()
     batch, conds, methods, recent = dyn_rows(a.stats)
     pilot, precent = n1pilot_row()
+    n1m = []                                                          # 目前 N1 批次的中間結果（只讀 CSV，快）
+    try:
+        import n1_summary as NS
+        cb = open(os.path.join(HERE, 'results', 'plan1127', 'current_batch.txt')).read().strip()
+        rr = NS.collect(cb, csv_only=True)
+        SS = NS.summarize(rr) if rr else {}
+        for mth in NS.METHODS:
+            v = SS.get(f'all|{mth}')
+            if v:
+                pv = SS.get(f'paired|{mth}_vs_gmpc', {})
+                n1m.append(dict(id=mth, name=NS.NAME[mth], n=v['n'], success=v['success'], clean=v['clean'],
+                                success_pct=round(100.0 * v['success'] / v['n'], 1), clean_pct=round(100.0 * v['clean'] / v['n'], 1),
+                                min_clr=v['min_clr_mean'], time_mean=v['time_mean'], path_ratio=v['path_ratio_median'],
+                                dt_vs_gmpc=pv.get('time_median')))
+    except Exception as e_:                                            # noqa: BLE001
+        print('n1 summary skipped:', repr(e_)[:80])
     recent = precent[:10]
     now = dt.datetime.now()
     snap = dict(at=now.isoformat(timespec='seconds'), at_label=now.strftime('%m/%d %H:%M'),
                 experiments=exps, cells=cells, batch=[pilot],                    # 11/27 Howard：面板刪除 dyn1126
-                conditions=[], methods=[], recent=recent)
+                conditions=[], methods=n1m, recent=recent)
     json.dump(snap, open(a.out, 'w'), ensure_ascii=False, indent=1)
     core = [e for e in exps if e['tier'] == '核心']
     print(f"核心 {sum(e['done'] for e in core)}/{sum(e['total'] for e in core)}；含選配 {sum(e['done'] for e in exps)}/{sum(e['total'] for e in exps)}；{pilot['name']} {pilot['done']}/{pilot['total']}")
