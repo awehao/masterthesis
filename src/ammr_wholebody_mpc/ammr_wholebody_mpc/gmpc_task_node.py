@@ -78,7 +78,53 @@ class GMPCTaskNode(GMPCNode):
             self.cmd_pub = _NoPub()                                   # 名目底盤命令不發布（命令只由單一控制器出）
             self.get_logger().info('gmpc_task_node: FRONTEND mode (reference + obstacles only; no solve, no cmd)')
 
+        # 11/27 N1（Howard 選「住宅任務版」）：純導航比較時把住宅任務的會車層（evaluation/yield_side.py，D2_YIELD_SIDE＋YS_PRED）
+        #   接在這裡——每拍求解前只平移參考視窗（同 door_pass_ctrl.yield_apply 的做法：體速度依改後參考重算），CBF、Shield、求解器不變。
+        #   開關 NAV_YIELD=1（另需 D2_YIELD_SIDE=1；地圖淨空用 M8_MAP）。住宅任務不設 NAV_YIELD ⇒ 導航節點行為不變（避免與 W-GMPC 的會車層重複套用）。
+        self._t_ys = None
+        if os.environ.get('NAV_YIELD', '0') == '1':
+            import sys as _sys
+            from pathlib import Path as _P
+            _ev = os.environ.get('YS_EVAL_DIR') or str(_P(__file__).resolve().parents[6] / 'evaluation')
+            if _ev not in _sys.path:
+                _sys.path.insert(0, _ev)
+            import yield_side as _YS
+            self._t_YS = _YS
+            self._t_ys = _YS.YieldSide() if _YS.ENABLE else None
+            self._t_ys_n = 0
+            self.get_logger().info(f'gmpc_task_node: NAV_YIELD 會車層 {"啟用" if self._t_ys else "未啟用（D2_YIELD_SIDE≠1）"}，eval={_ev}，M8_MAP={os.environ.get("M8_MAP")}')
+
+        def _yield(X_now, X_ref_win, xi_ref_win, obstacles):
+            ys = self._t_ys
+            if ys is None or obstacles is None:
+                return X_ref_win, xi_ref_win
+            X_now = np.asarray(X_now, float)
+            yaw = math.atan2(X_now[1, 0], X_now[0, 0]); c_, s_ = math.cos(yaw), math.sin(yaw)
+            u_ = np.asarray(self.xi_prev[:2], float)
+            ys.ref_dt = float(self._cfg.dt)
+            X_ = [np.asarray(x, float).copy() for x in X_ref_win]
+            n0 = len(ys.log)
+            info = ys.apply(self.get_clock().now().nanoseconds * 1e-9, np.array([X_now[0, 2], X_now[1, 2], yaw]),
+                            np.array([c_ * u_[0] - s_ * u_[1], s_ * u_[0] + c_ * u_[1]]), X_, obstacles, float(self.dt))
+            for e_ in ys.log[n0:]:
+                self._t_ys_n += 1
+                if self._t_ys_n <= 400:
+                    self.get_logger().info('YS ' + json.dumps({k: (v if isinstance(v, (int, float, str, bool, type(None))) else str(v)) for k, v in e_.items()}, ensure_ascii=False))
+            if info is None:
+                return X_ref_win, xi_ref_win
+            xi_ = np.asarray(xi_ref_win, float).copy()
+            for k in range(min(len(X_) - 1, len(xi_))):
+                T1 = np.linalg.inv(X_[k]) @ X_[k + 1]
+                xi_[k] = np.array([T1[0, 2] / self._cfg.dt, T1[1, 2] / self._cfg.dt, math.atan2(T1[1, 0], T1[0, 0]) / self._cfg.dt])
+            if len(xi_) >= len(X_) and len(X_) > 1:
+                xi_[len(X_) - 1] = xi_[len(X_) - 2].copy()
+            return np.asarray(X_), xi_
+
         def _solve_pub(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles=None, _o=_orig_solve):
+            try:
+                X_ref_win, xi_ref_win = _yield(X_now, X_ref_win, xi_ref_win, obstacles)
+            except Exception as e_:                                   # noqa: BLE001
+                self.get_logger().warn(f'NAV_YIELD 例外（本拍略過）：{e_!r}')
             if self._t_frontend:
                 try:
                     self._t_pub_solve_in(np.asarray(X_now, float), np.asarray(X_ref_win, float), np.asarray(xi_ref_win, float), obstacles)

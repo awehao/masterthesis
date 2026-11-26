@@ -4,8 +4,9 @@
 #   例：run_n1_batch.sh n1pilot n1_bigarena,n1_office,n1_warehouse static,crossing 101 101
 # 種子 1–10＝正式測試（登記 status=done）；101 以後＝先導／開發（登記 status=pilot，不計入 N1 完成數）。
 # 共同條件：SCENE=<布局>（世界＋地圖）、scheduled 時序、SHIELD=1 GUARD=1、NAV_VMAX=0.26（四方法平移上限一致，Howard 11/27 選「全部 0.26」）、時限 200 s。
-# GMPC（gmpc_scan）一律帶論文鎖定設定（chain_final120.sh）：PLANNER_SCAN=/scan_filtered PLAN_BLEND=0.0 CBF_ALPHA=0.5
-#   CBF_SAFE_MARGIN=0.60 CBF_PRUNE_RANGE=1.2 CBF_FAR_STRIDE=2（11/26 dyn1126 漏帶 ⇒ 規劃翻邊，見 memory feedback_gmpc_locked_config）。
+# GMPC（gmpc_scan）＝住宅任務版（Howard 11/27 選）：與 run_d2_isaac.sh 相同的導航開關 HEADING=1 GMPC_TASK=1（6 個 CBF／規劃參數用程式預設，同住宅任務），
+#   加會車層 NAV_YIELD=1 D2_YIELD_SIDE=1 YS_PRED=1（住宅任務 task.env 同值；地圖淨空 M8_MAP=<布局>），接在任務擴充節點的參考視窗（gmpc_task_node）。
+#   9 月鎖定版（chain_final120.sh）不用；dyn1126 兩者都沒帶（memory feedback_gmpc_locked_config）。
 # 每個案例（布局×條件×種子）四方法連跑、順序依案例雜湊打亂；任何「skipping」＝系統失敗，同趟重來至多 3 次。
 # 情境檔：experiments/n1_scenarios/<布局>_<條件>_k<種子>.yaml（同一布局＋種子永遠同一份；已存在就不重產）。
 # 結果：results/<批次名>/<布局>_<條件>_k<種子>_<方法>.csv；紀錄 results/<批次名>/<批次名>.log；停止檔 results/<批次名>/stop。
@@ -19,7 +20,7 @@ mkdir -p "$D" "$R" "$L" "$(dirname "$REG")"
 LOG=$R/$B.log
 source /opt/ros/jazzy/setup.bash; source install/setup.bash
 set -u
-GMPC_LOCKED="PLANNER_SCAN=/scan_filtered PLAN_BLEND=0.0 CBF_ALPHA=0.5 CBF_SAFE_MARGIN=0.60 CBF_PRUNE_RANGE=1.2 CBF_FAR_STRIDE=2"
+GMPC_HOUSE="HEADING=1 GMPC_TASK=1 NAV_YIELD=1 D2_YIELD_SIDE=1 YS_PRED=1"
 echo "$(date +%F_%T) batch $B layouts=${LAYS[*]} conds=${CONDS[*]} seeds=$K0-$K1 NAV_VMAX=0.26 git=$(git rev-parse --short HEAD)" >> "$LOG"
 for K in $(seq "$K0" "$K1"); do
   for LY in "${LAYS[@]}"; do
@@ -32,7 +33,7 @@ for K in $(seq "$K0" "$K1"); do
       ORDER=$(python3 -c "import random,zlib;m=['gmpc_scan','mppi','dwb','rpp'];random.Random(zlib.crc32(b'$LY|$CD|$K')).shuffle(m);print(' '.join(m))")
       for M in $ORDER; do
         [ -f "$R/stop" ] && { echo "$(date +%T) stop file" >> "$LOG"; exit 0; }
-        EXTRA=""; [ "$M" = "gmpc_scan" ] && EXTRA=$GMPC_LOCKED
+        EXTRA=""; [ "$M" = "gmpc_scan" ] && EXTRA="$GMPC_HOUSE M8_MAP=$LY"
         ST=infra_fail
         for TRY in 1 2 3; do
           TAG=_${B}_${LY}_${CD}_k${K}_t${TRY}
