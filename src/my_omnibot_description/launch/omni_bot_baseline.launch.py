@@ -46,8 +46,9 @@ def generate_launch_description():
     # bigarena had nothing to be compared against -- the comparison table would
     # have mixed two different scenarios.
     if os.environ.get('BIGARENA', '0') == '1':
-        world_file = os.path.join(bringup, 'worlds', 'bigarena.sdf')
-        map_file   = os.path.join(bringup, 'maps',   'bigarena.yaml')
+        _scene = os.environ.get('SCENE', 'bigarena')                   # 11/26：同 omni_bot_dynamic.launch.py 的 SCENE（如 bigarena_ghost）
+        world_file = os.path.join(bringup, 'worlds', f'{_scene}.sdf')
+        map_file   = os.path.join(bringup, 'maps',   f'{_scene}.yaml')
     elif os.environ.get('ARENA', '0') == '1':
         world_file = os.path.join(bringup, 'worlds', 'arena.sdf')
         map_file   = os.path.join(bringup, 'maps',   'arena.yaml')
