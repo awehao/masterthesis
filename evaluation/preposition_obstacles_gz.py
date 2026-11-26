@@ -55,10 +55,14 @@ def main():
     ap.add_argument('--world', required=True)
     ap.add_argument('--out', default='')
     a = ap.parse_args()
-    pos = phase0_positions(a.traj)
+    pos = {k: (x, y, z, 0.0) for k, (x, y, z) in phase0_positions(a.traj).items()}
+    # 11/27 N1：情境檔的 unknown_static（未知靜態障礙，每個種子位置不同）也在這裡放到位；沒有這欄時行為不變。
+    for d in (yaml.safe_load(open(a.traj)).get('unknown_static') or []):
+        pos[d['name']] = (float(d['x']), float(d['y']), 0.5, float(d.get('yaw', 0.0)))
     res, ok = {}, True
-    for name, (x, y, z) in pos.items():
-        req = 'name: "%s" position { x: %.4f y: %.4f z: %.4f } orientation { w: 1 }' % (name, x, y, z)
+    for name, (x, y, z, yaw) in pos.items():
+        req = 'name: "%s" position { x: %.4f y: %.4f z: %.4f } orientation { z: %.6f w: %.6f }' % (
+            name, x, y, z, math.sin(yaw / 2.0), math.cos(yaw / 2.0))
         r = subprocess.run(['gz', 'service', '-s', '/world/%s/set_pose' % a.world, '--reqtype', 'gz.msgs.Pose',
                             '--reptype', 'gz.msgs.Boolean', '--timeout', '3000', '--req', req],
                            capture_output=True, text=True, timeout=10)

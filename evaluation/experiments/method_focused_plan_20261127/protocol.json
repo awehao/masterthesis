@@ -1,0 +1,132 @@
+{
+  "date": "2026-11-27",
+  "status": "proposed_not_executed",
+  "scope": "simulation_only_method_focused",
+  "supersedes_for_current_recommendation": "simulation_plan_20261126; retained as historical proposal, not deleted",
+  "primary_questions": [
+    "Obstacle-motion prediction versus zero obstacle velocity under otherwise identical navigation layers",
+    "Incremental CBF, speed-reference and lateral-reference effects with a common scan guard",
+    "Frozen identified setpoint-tracking model versus direct rate integration with online compensation disabled in both",
+    "Multistep versus N=1 using the same augmented model, limits, reference generator and cost convention",
+    "Bias estimation by TCP integral 2x2 design, with activation exposure reported",
+    "Moving versus stop-before-approach using the same WB-MPC",
+    "Whole-body predictive configuration versus adapted external reactive whole-body QP",
+    "Held-out-layout end-to-end task completion and efficiency"
+  ],
+  "excluded_from_main_comparisons": [
+    "physics-engine comparison",
+    "physics timestep or RTF sweep",
+    "personal CPU/GPU specifications",
+    "worker/packet/deadline fault-injection campaigns",
+    "fixed-attachment versus friction-contact comparison",
+    "material/friction/mass/drive-gain parameter sweep",
+    "network architecture ablation for the pretrained Mask R-CNN",
+    "queued-command prediction as an independently claimed ablation"
+  ],
+  "engineering_prerequisites": "Check time alignment, state/setpoint reporting, interfaces and guards before test; no dedicated formal fault-injection group is required.",
+  "nav_shared_conditions": {
+    "guard": "identical raw scan guard ON in all core navigation methods and ablations",
+    "limits": "same norm translation cap, yaw cap, wheel limits and command change limits",
+    "inputs": "same sensor availability and case geometry, route and external obstacle motion",
+    "metrics": [
+      "task_completion",
+      "unintended_contact",
+      "minimum_clearance",
+      "paired_both_success_time",
+      "waiting_time",
+      "guard_intervention_time",
+      "guard_command_change"
+    ],
+    "no_prediction_variant": "Retain tracker associations and current geometry; set obstacle velocity to zero in BOTH reference candidates and CBF.",
+    "caveat": "Ablation effects are conditional on the common guard. Report intervention exposure if collisions are masked by that guard.",
+    "rpp": "Retained as a common reference with forward/yaw commands; acknowledge lateral capability difference."
+  },
+  "local_shared_conditions": {
+    "target_source": "Each case uses one shared initial RGB-D target/geometry packet; mechanism references subsequently use the same geometry model. Save the packet with its timestamp and frame transforms.",
+    "methods": [
+      "wb_mpc_full",
+      "holistic_qp_adapted",
+      "stop_before_approach_wb_mpc"
+    ],
+    "stop_before_approach": "Reach base operation pose and settle before arm unfold, approach and grasp. Base may coordinate during door/drawer mechanism motion.",
+    "strict_fixed_base_throughout_mechanism": "not required in this revision",
+    "external_baseline": "Adapt published Holistic reactive QP, document position-interface adapter and shared limits; do not label it an exact reproduction or a deployed controller before implementation.",
+    "contact": "Keep existing frozen contact/attachment configuration identical across methods. No new contact-model development is required by this plan. Limit claims to capabilities actually simulated.",
+    "model_contrast": "Augmented model with frozen identified bias and no TCP integral versus direct integration with no online model adaptation or TCP integral. This contrasts model assumptions, not one scalar coefficient.",
+    "compensation_factorial": "Full, fixed bias, no integral, fixed bias plus no integral. Fixed bias retains the common identified initial value; report each gate activation duration.",
+    "unmodified_geometry_metric": "Use uncompensated task targets for primary TCP and task success evaluation."
+  },
+  "nominal_multistep_horizon_candidates": [
+    5,
+    10,
+    20
+  ],
+  "horizon_selection": "Choose N_star on separate validation cases before test; fix weights, dt, terminal matrix and tuning convention. Compare with N=1 in W2; optional H1 supplies the other two multistep choices. Stage cost extent and terminal time still differ.",
+  "model_collection": {
+    "nominal_configuration_only": true,
+    "regions": [
+      "folded",
+      "middle",
+      "extended"
+    ],
+    "recordings_per_region": 4,
+    "recording_splits": [
+      "train",
+      "validation",
+      "test",
+      "test"
+    ],
+    "window_leakage": "Do not mix windows of the same recording into train and test."
+  },
+  "house_test": {
+    "layouts": 2,
+    "traffic_conditions": 2,
+    "seeds_per_condition": 10,
+    "strategies": 3,
+    "runs": 120,
+    "heldout_layout": "house_B; never tune on it",
+    "walkers": "pre-saved external trajectories and fixed interaction rules",
+    "perception": "online RGB-D, including re-observation",
+    "task": "open door, traverse, cylinder and marker storage, close drawer, return traverse and close door, return to start"
+  },
+  "optional_claim_linked_experiments": {
+    "S1": {
+      "new_runs": 40,
+      "condition": "Make base-selection cost an independent contribution",
+      "change": "Only rank among the same feasible candidates; nearest feasible base comparator"
+    },
+    "K1": {
+      "new_runs": 10,
+      "condition": "Claim an independent benefit of the door hard pose tube",
+      "change": "Remove only pose-tube constraint rows"
+    },
+    "H1": {
+      "new_runs": 40,
+      "condition": "Need the full N in {1,5,10,20} sensitivity curve",
+      "change": "Other two multistep horizons; reuse N_star and N=1"
+    }
+  },
+  "statistics": {
+    "unit": "paired saved scenario seed, never control ticks or overlapping windows",
+    "counts": "Initial workload budget; use development variability to freeze counts before test. No success-conditional supplementation.",
+    "outcomes": "All attempts retain success/failure; time comparisons report paired-both-success n and conditional selection.",
+    "intervals": "Paired/cluster intervals at case level and success intervals, with layout/task stratification.",
+    "contrasts": "Prespecify primary endpoints and comparisons; handle multiple comparisons.",
+    "null_results": "Report inactive or ineffective modules without selecting different test cases after seeing results."
+  },
+  "reuse_requirements": [
+    "same frozen code",
+    "same assets",
+    "same initial state and motion profile",
+    "same target packet and geometry model",
+    "same limits and thresholds",
+    "same recording and evaluation interval"
+  ],
+  "ordering": "Randomize within shared case blocks including reused full-method trials; rank is precomputed in CSV. Execute optional trials in the same frozen cohort or rerun their references if conditions change.",
+  "runtime": "Use one common fixed pacing condition within a comparison; measure simulation task time and host computation time separately without a pacing sweep.",
+  "primary_sources": [
+    "https://api.nav2.org/nav2-jazzy/html/md_nav2_dwb_controller_README.html",
+    "https://jhavl.github.io/holistic/"
+  ],
+  "execution": "Planning artifacts only. No simulator, controller, ROS launch or training is executed."
+}

@@ -355,10 +355,14 @@ def extract_gt_obstacles(messages):
 # (yellow, "unknown" -> NOT in the map). Lets the collision metric cover EVERY
 # obstacle, not just the bridged dynamic ones.
 # ---------------------------------------------------------------------------
-def load_static_clearance():
+def load_static_clearance(traj_file=None):
     """Return clr(x, y) = robot-CENTRE distance [m] to the nearest static
     surface (map occupied cell OR an unknown_obs cylinder), or None if the
-    map/world can't be read."""
+    map/world can't be read.
+
+    11/27 N1：未知靜態障礙的位置可隨種子改變（世界檔裡停在場外，起跑前由 set_pose 放到位）。
+    情境檔（traj_file，預設取環境變數 AMMR_TRAJ_FILE）若有 unknown_static: [{name,x,y,yaw}]，
+    就以它覆寫世界檔的位置與方向（尺寸仍取世界檔）；沒有這個欄位時行為與以前完全相同。"""
     import re
     try:
         from scipy import ndimage
@@ -425,6 +429,15 @@ def load_static_clearance():
                 unk.append(('box', pz[0], pz[1], float(bx.group(1)) / 2.0, float(bx.group(2)) / 2.0, yaw))
             elif cy:
                 unk.append(('cyl', pz[0], pz[1], float(cy.group(1)), 0.0, 0.0))
+        _tf = traj_file if traj_file is not None else os.environ.get('AMMR_TRAJ_FILE', '')
+        if _tf and os.path.exists(_tf):
+            _us = (yaml.safe_load(open(_tf)) or {}).get('unknown_static') or []
+            if _us:
+                names = [m.group(1) for m in re.finditer(r'<model name="(unknown_obs_\d+)">', sdf)]
+                pos = {d['name']: d for d in _us}
+                unk = [(k, float(pos[nm]['x']), float(pos[nm]['y']), a1, a2, float(pos[nm].get('yaw', 0.0)))
+                       if nm in pos else (k, ux, uy, a1, a2, th)
+                       for nm, (k, ux, uy, a1, a2, th) in zip(names, unk)]
         globals()['UNK_GEOM'] = unk
 
         def clr(x, y):
