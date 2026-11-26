@@ -407,16 +407,38 @@ def load_static_clearance():
                 DYN_GEOM[m.group(1)] = ('box', float(bx.group(1)), float(bx.group(2)))
             elif cy:
                 DYN_GEOM[m.group(1)] = ('cyl', float(cy.group(1)), float(cy.group(1)))
-        unk = [(float(p.split()[0]), float(p.split()[1]), float(r))
-               for p, r in re.findall(
-                   r'<model name="unknown_obs_\d+">.*?<pose>([-\d. ]+)</pose>'
-                   r'.*?<radius>([\d.]+)</radius>', sdf, re.DOTALL)]
+        # Unknown static obstacles, parsed PER MODEL. The old single regex
+        # (pose ... radius across the whole file) only understood cylinders: in
+        # bigarena all seven unknown_obs are boxes, so it matched one model's
+        # pose with a LATER model's radius (unknown_obs_0 scored as a 0.25 m
+        # cylinder) and silently dropped the other six -- collisions with them
+        # were never counted (found 2026-11-26). Cylinders give the same
+        # distance as before; boxes use their real size and pose yaw.
+        unk = []
+        for m in re.finditer(r'<model name="(unknown_obs_\d+)">(.*?)</model>', sdf, re.DOTALL):
+            body = m.group(2)
+            pz = [float(v) for v in re.search(r'<pose>([-\d. e]+)</pose>', body).group(1).split()]
+            bx = re.search(r'<box><size>([\d.]+) ([\d.]+)', body)
+            cy = re.search(r'<cylinder><radius>([\d.]+)', body)
+            yaw = pz[5] if len(pz) > 5 else 0.0
+            if bx:
+                unk.append(('box', pz[0], pz[1], float(bx.group(1)) / 2.0, float(bx.group(2)) / 2.0, yaw))
+            elif cy:
+                unk.append(('cyl', pz[0], pz[1], float(cy.group(1)), 0.0, 0.0))
+        globals()['UNK_GEOM'] = unk
 
         def clr(x, y):
             c = int((x - ox) / res); r = int(h - 1 - (y - oy) / res)
             d = float(dist[r, c]) if (0 <= r < h and 0 <= c < w) else 9.9
-            for ux, uy, ur in unk:
-                d = min(d, math.hypot(x - ux, y - uy) - ur)
+            for k, ux, uy, a1, a2, th in unk:
+                if k == 'box':
+                    cs, sn = math.cos(-th), math.sin(-th)
+                    lx, ly = cs * (x - ux) - sn * (y - uy), sn * (x - ux) + cs * (y - uy)
+                    ex, ey = abs(lx) - a1, abs(ly) - a2
+                    db = math.hypot(max(ex, 0.0), max(ey, 0.0)) if (ex > 0.0 or ey > 0.0) else max(ex, ey)
+                    d = min(d, db)
+                else:
+                    d = min(d, math.hypot(x - ux, y - uy) - a1)
             return d
         return clr
     except Exception:

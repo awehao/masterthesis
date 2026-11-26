@@ -82,10 +82,17 @@ with open(a.map + '.pgm', 'rb') as f:
     img = np.frombuffer(f.read(), np.uint8).reshape(h, w)
 occ = ((255 - img.astype(float)) / 255.0) > my['occupied_thresh']
 sdf = re.sub(r'<!--.*?-->', '', open(a.world).read(), flags=re.S)
-for p_, r_ in re.findall(r'<model name="unknown_obs_\d+">.*?<pose>([-\d. ]+)</pose>.*?<radius>([\d.]+)</radius>', sdf, re.S):
-    ux, uy = float(p_.split()[0]), float(p_.split()[1])
-    yy, xx = np.mgrid[0:h, 0:w]
-    occ |= np.hypot(ox + (xx + 0.5) * res - ux, oy + (h - 1 - yy + 0.5) * res - uy) <= float(r_)
+yy, xx = np.mgrid[0:h, 0:w]
+XC, YC = ox + (xx + 0.5) * res, oy + (h - 1 - yy + 0.5) * res
+for m_ in re.finditer(r'<model name="(unknown_obs_\d+)">(.*?)</model>', sdf, re.S):   # 逐模型解析：bigarena 的未知障礙全是方盒（舊的單一 regex 只認圓柱 ⇒ 漏掉，行人被卡在方盒旁）
+    b_ = m_.group(2); pz = [float(v) for v in re.search(r'<pose>([-\d. e]+)</pose>', b_).group(1).split()]
+    bx = re.search(r'<box><size>([\d.]+) ([\d.]+)', b_); cy = re.search(r'<cylinder><radius>([\d.]+)', b_)
+    if bx:
+        th = pz[5] if len(pz) > 5 else 0.0; cs, sn = math.cos(-th), math.sin(-th)
+        lx, ly = cs * (XC - pz[0]) - sn * (YC - pz[1]), sn * (XC - pz[0]) + cs * (YC - pz[1])
+        occ |= (np.abs(lx) <= float(bx.group(1)) / 2) & (np.abs(ly) <= float(bx.group(2)) / 2)
+    elif cy:
+        occ |= np.hypot(XC - pz[0], YC - pz[1]) <= float(cy.group(1))
 DIST = ndimage.distance_transform_edt(~occ) * res                   # 到最近靜態表面（m）
 
 
