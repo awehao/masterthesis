@@ -62,6 +62,11 @@ def generate_launch_description():
     # 用可重現相位（/case_start 對齊），基線與 GMPC 才會遇到同一個動態情境。未設時行為不變（legacy）。
     traj_file = os.environ.get('AMMR_TRAJ_FILE') or traj_file
     _obstacle_mode = os.environ.get('AMMR_OBSTACLE_MODE', 'legacy')
+    # 11/26 共用執行端（純模擬規劃：所有導航方法同一套防護與輪級限制）：SHIELD=1 原始掃描防護、GUARD=1 輪級限制，
+    # 節點與參數與 omni_bot_dynamic.launch.py 相同（改那邊要同步改這裡）。鏈：控制器 -> cmd_vel_nav -> 平滑器
+    # -> [cmd_vel_pre_shield -> shield] -> [cmd_vel_smoothed -> guard] -> /cmd_vel。未設時與原本相同（平滑器直出 /cmd_vel）。
+    _shield = os.environ.get('SHIELD', '0') == '1'
+    _guard = os.environ.get('GUARD', '0') == '1'
     ekf_config = os.path.join(desc_pkg, 'config', 'ekf_fusion.yaml')
     mppi_cfg   = os.path.join(desc_pkg, 'config', 'nav2_baseline_mppi.yaml')
     rpp_cfg    = os.path.join(desc_pkg, 'config', 'nav2_baseline_rpp.yaml')
@@ -121,6 +126,9 @@ def generate_launch_description():
     def nav2_stack(cfg_params, cond):
         """Full Nav2 controller stack for one baseline (MPPI or RPP)."""
         common = dict(output='screen', parameters=[cfg_params], condition=cond)
+        return [n for n in _nav2_nodes(cfg_params, cond, common) if n is not None]
+
+    def _nav2_nodes(cfg_params, cond, common):
         return [
             Node(package='nav2_controller', executable='controller_server',
                  name='controller_server', remappings=[('cmd_vel', 'cmd_vel_nav')], **common),
@@ -136,8 +144,29 @@ def generate_launch_description():
                  name='waypoint_follower', **common),
             Node(package='nav2_velocity_smoother', executable='velocity_smoother',
                  name='velocity_smoother',
-                 remappings=[('cmd_vel', 'cmd_vel_nav'), ('cmd_vel_smoothed', 'cmd_vel')],
+                 remappings=[('cmd_vel', 'cmd_vel_nav'),
+                             ('cmd_vel_smoothed', 'cmd_vel_pre_shield' if _shield
+                              else ('cmd_vel_smoothed' if _guard else 'cmd_vel'))],
                  **common),
+            Node(package='ammr_wholebody_mpc', executable='wheel_limit_guard',
+                 name='wheel_limit_guard', output='screen', condition=cond,
+                 parameters=[{'use_sim_time': True, 'cmd_in_topic': '/cmd_vel_smoothed', 'cmd_out_topic': '/cmd_vel',
+                              'odom_topic': '/odom', 'wheel_radius': 0.05, 'wheel_base_L': 0.245,
+                              'wheel_w_max': 5.55, 'wheel_a_max': 125.0, 'publish_rate': 20.0,
+                              'input_timeout': float(os.environ.get('GUARD_IN_TO', '0.25')), 'dt_max': 0.50,
+                              'assume_stopped_at_start': True}]) if _guard else None,
+            Node(package='ammr_wholebody_mpc', executable='scan_safety_shield',
+                 name='scan_safety_shield', output='screen', condition=cond,
+                 parameters=[{'use_sim_time': True, 'enable': True,
+                              'scan_topic': os.environ.get('SHIELD_SCAN_TOPIC', '/scan'),
+                              'cmd_in_topic': '/cmd_vel_pre_shield',
+                              'cmd_out_topic': ('/cmd_vel_smoothed' if (_guard and _shield) else '/cmd_vel'),
+                              'wheel_rows': bool(_guard and _shield), 'wheel_dt': 0.045,
+                              'final_cmd_topic': ('/cmd_vel' if (_guard and _shield) else ''),
+                              'robot_radius': float(os.environ.get('SHIELD_RADIUS', '0.30')),
+                              'alpha': float(os.environ.get('SHIELD_ALPHA', '2.0')), 'a_brake': 6.25,
+                              'tau': float(os.environ.get('SHIELD_TAU', '0.15')),
+                              'vx_max': 0.2775, 'vy_max': 0.2775, 'wz_max': 1.1327}]) if _shield else None,
         ]
 
     # localization + map (method-specific config so amcl/costmap params match)
