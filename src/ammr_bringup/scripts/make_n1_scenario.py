@@ -40,8 +40,11 @@ ap.add_argument('--seed', type=int, required=True)
 ap.add_argument('--out-dir', required=True)
 ap.add_argument('--v-lo', type=float, default=0.10)
 ap.add_argument('--v-hi', type=float, default=0.25)
-ap.add_argument('--n-cross', type=int, default=0)   # 11/27 Howard「障礙物設計可以不用那麼刻意」：預設全部隨機，不安排穿越
-ap.add_argument('--n-on-path', type=int, default=2, help='壓在名目路線上（離路線中心 0–0.6 m）的未知障礙數')     # 11/27 Howard「路徑上要有各種未知障礙物、要有鑑別度」
+ap.add_argument('--n-cross', type=int, default=4, help='在機器人預計到達時刻穿越路線中段的行人數')   # 11/27 04:45 Howard 選加難：行人穿越路線
+ap.add_argument('--n-counter', type=int, default=2, help='在走廊／走道／門口附近沿路線迎面而來的行人數')   # 同上：走廊對向會車
+ap.add_argument('--v-cross-lo', type=float, default=0.15, help='穿越者與對向者的速度下限')
+ap.add_argument('--n-on-path', type=int, default=4, help='壓在名目路線上（離路線中心 0–0.6 m）的未知障礙數（含 --n-corner 個藏在轉角／門後）')   # 11/27 Howard 選加難：未知障礙藏轉角
+ap.add_argument('--n-corner', type=int, default=2, help='路線上的未知障礙中，放在轉角或門口之後 1.0–2.5 m（看到時已近）的個數')
 ap.add_argument('--n-near-path', type=int, default=2, help='在名目路線旁（0.6–2.0 m）的未知障礙數；其餘全隨機')
 ap.add_argument('--v-nom', type=float, default=0.22, help='估機器人到穿越點時刻的名目速度')
 ap.add_argument('--jitter', type=float, default=6.0)
@@ -159,6 +162,25 @@ else:
     raise SystemExit('!! 找不到起終點')
 cum = np.r_[0.0, np.cumsum(np.hypot(*np.diff(P, axis=0).T))]; SLEN = float(cum[-1])
 mid = P[(cum >= 0.2 * SLEN) & (cum <= 0.8 * SLEN)]
+PCLR = np.array([at(D_K, p_) for p_ in P])                           # 名目路線上各點的已知淨空
+
+
+def at_s(sv):
+    i = int(np.clip(np.searchsorted(cum, sv) - 1, 0, len(P) - 2))
+    f = (sv - cum[i]) / max(cum[i + 1] - cum[i], 1e-9)
+    p_ = P[i] + f * (P[i + 1] - P[i]); t_ = (P[i + 1] - P[i]) / max(np.linalg.norm(P[i + 1] - P[i]), 1e-9)
+    return p_, t_
+
+
+HEAD = np.unwrap(np.arctan2(np.gradient(P[:, 1]), np.gradient(P[:, 0])))
+CORNER_S = []                                                         # 轉角（1.5 m 內轉 >35°）或窄處（門口、走道口，淨空 <1.0 m）的弧長
+for i in range(len(P)):
+    if not (0.15 * SLEN <= cum[i] <= 0.75 * SLEN):
+        continue
+    j = int(np.searchsorted(cum, cum[i] + 1.5))
+    if j < len(P) and abs(HEAD[j] - HEAD[i]) > math.radians(35) or PCLR[i] < 1.0:
+        if not CORNER_S or cum[i] - CORNER_S[-1] > 1.0:
+            CORNER_S.append(float(cum[i]))
 
 # ---- 未知靜態障礙 ----
 for attempt in range(200):
@@ -170,21 +192,27 @@ for attempt in range(200):
     for j, k in enumerate(order):
         nm, kind, sx, sy = UNK[k]
         rad = 0.5 * math.hypot(sx, sy) if kind == 'box' else sx / 2
-        mode = 'on_path' if j < a.n_on_path else ('near_path' if j < a.n_on_path + a.n_near_path else 'random')
+        mode = ('corner' if j < min(a.n_corner, a.n_on_path) and CORNER_S else
+                'on_path' if j < a.n_on_path else ('near_path' if j < a.n_on_path + a.n_near_path else 'random'))
         allow_fb = attempt >= 150                                      # 前 150 輪：路線上／旁放不下就整組重抽；最後 50 輪才允許改隨機（meta 記實際值）
         got = False
         for _t in range(6000):
+            if mode == 'corner' and _t >= 1500:
+                mode = 'on_path'                                       # 轉角放不下就退為一般路線上
             if mode != 'random' and _t >= 3000:
                 if not allow_fb:
                     break                                              # 不放、整組重抽（下面 got=False ⇒ ok=False）
                 mode = 'random'
             if mode == 'random':
                 x, y = rng.uniform(ox + 1, ox + w * res - 1), rng.uniform(oy + 1, oy + h * res - 1)
+            elif mode == 'corner':                                     # 轉角／門口之後 1.0–2.5 m、離路線中心 0–0.5 m：轉過去才看得到
+                pc_, tc_ = at_s(min(rng.choice(CORNER_S) + rng.uniform(1.0, 2.5), 0.85 * SLEN))
+                x, y = pc_ + rng.choice([-1, 1]) * rng.uniform(0.0, 0.5) * np.array([-tc_[1], tc_[0]])
             else:
                 i_ = rng.randrange(len(mid) - 1); q = mid[i_]; tq = mid[i_ + 1] - q; tq = tq / max(np.linalg.norm(tq), 1e-9)
                 lat = rng.uniform(0.0, 0.6) if mode == 'on_path' else rng.uniform(0.6, 2.0)
                 x, y = q + rng.choice([-1, 1]) * lat * np.array([-tq[1], tq[0]])
-            if at(D_K, (x, y)) < rad + (0.70 if mode == 'on_path' else 0.75):   # 路線上的：至少一側留 0.70 m（車寬 0.6＋0.1）
+            if at(D_K, (x, y)) < rad + (0.70 if mode in ('on_path', 'corner') else 0.75):   # 路線上的：至少一側留 0.70 m（車寬 0.6＋0.1）
                 continue
             if min(math.hypot(x - s[0], y - s[1]), math.hypot(x - g[0], y - g[1])) < rad + 1.5:
                 continue
@@ -286,13 +314,57 @@ def sample(nm, want_cross, min_len, tries):
     return None
 
 
+n_counter = 0
+
+
+def sample_counter(nm, tries):
+    """走廊對向會車：沿名目路線一小段（偏好窄處：走廊、走道、門口附近，已知淨空 <1.6 m）放一條與路線平行的路段，
+    行人由前方（機器人要去的方向）朝機器人走來，在機器人以 V_NOM 到達該處時刻 ±4 s 通過。"""
+    R = SHAPE[nm]
+    cand = list(np.linspace(0.3 * SLEN, 0.75 * SLEN, 60))
+    narrow = [sv for sv in cand if at(D_K, at_s(sv)[0]) < 1.6]
+    pool = narrow if narrow else cand
+    for _t in range(tries):
+        sm = float(rng.choice(pool))
+        if any(abs(sm - u) < 2.0 for u in USED_S):
+            continue
+        hl = rng.uniform(1.8, 3.0)
+        pa, _ = at_s(min(sm + hl, 0.92 * SLEN)); pb, _ = at_s(max(sm - hl, 0.08 * SLEN)); pm, tm = at_s(sm)
+        off = rng.uniform(-0.3, 0.3) * np.array([-tm[1], tm[0]])
+        p, q = pa + off, pb + off
+        L_ = float(np.hypot(*(q - p)))
+        if L_ < 3.0 or not seg_ok(p, q, R):
+            continue
+        pts = p + np.outer(np.linspace(0, 1, 12), q - p)               # 直線段要貼著路線（離路線點 <0.7 m）
+        if max(float(np.min(np.hypot(P[:, 0] - x_, P[:, 1] - y_))) for x_, y_ in pts) > 0.7:
+            continue
+        d_c = float(np.dot(pm + off - p, (q - p) / L_))
+        return p, q, sm, d_c
+    return None
+
+
 for nm in names:
     R = SHAPE[nm]
     v = rng.uniform(a.v_lo, a.v_hi)
-    best, role = None, 'background'
+    best, role, info = None, 'background', {}
+    if n_counter < a.n_counter and R <= 0.3:
+        bc = sample_counter(nm, 3000)
+        if bc is not None:
+            v = rng.uniform(a.v_cross_lo, a.v_hi)
+            p, q, sm, d_c = bc
+            L = float(np.hypot(*(q - p)))
+            T = sm / a.v_nom + rng.uniform(-4.0, 4.0)
+            s0 = (d_c - v * T) % (2 * L)                                # 前半程 p→q（迎面）時通過 sm
+            n_counter += 1; USED_S.append(sm); role = 'counter'
+            info = dict(s_meet_m=round(sm, 2), frac=round(sm / SLEN, 3), t_meet_s=round(float(T), 1))
+            movers.append(dict(name=nm, start=[round(float(p[0]), 3), round(float(p[1]), 3)], end=[round(float(q[0]), 3), round(float(q[1]), 3)],
+                               speed=round(v, 4), radius=round(R, 3), height=1.0, phase0_m=round(float(s0), 4), direction=1.0))
+            mmeta.append(dict(name=nm, role=role, v=round(v, 4), len_m=round(L, 2), **info))
+            continue
     if n_cross < a.n_cross:
         best = sample(nm, True, 4.0, 4000)
-        role = 'cross' if best else 'background'
+        if best:
+            role = 'cross'; v = rng.uniform(a.v_cross_lo, a.v_hi)
     if best is None:
         for ml in (5.0, 4.0, 3.0):
             best = sample(nm, False, ml, 3000)
@@ -321,7 +393,7 @@ for nm in names:
         info = dict(s_cross_m=round(float(s_c), 2), frac=round(float(s_c / SLEN), 3), cross_xy=[round(float(xy_c[0]), 3), round(float(xy_c[1]), 3)],
                     t_pass_s=round(float(T), 1))
     else:
-        s0 = rng.uniform(0, 2 * L); info = {}
+        s0 = rng.uniform(0, 2 * L)
     movers.append(dict(name=nm, start=[round(float(p[0]), 3), round(float(p[1]), 3)], end=[round(float(q[0]), 3), round(float(q[1]), 3)],
                        speed=round(v, 4), radius=round(R, 3), height=1.0, phase0_m=round(float(s0), 4), direction=1.0))
     mmeta.append(dict(name=nm, role=role, v=round(v, 4), len_m=round(L, 2), **info))
@@ -350,7 +422,7 @@ for cond, dyn, meta_m in (('static', static_movers, []), ('crossing', movers, mm
         f.write(f'# N1 {a.layout} 條件 {cond} 種子 {a.seed}；make_n1_scenario.py 產生；必須搭配 AMMR_OBSTACLE_MODE=scheduled＋SCENE={a.layout}\n')
         yaml.safe_dump(dict(dynamic_obstacles=dyn, unknown_static=unk_out), f, allow_unicode=True, sort_keys=False)
     json.dump(dict(common, cond=cond, movers=meta_m,
-                   params=dict(v=[a.v_lo, a.v_hi], n_cross=a.n_cross, n_on_path=a.n_on_path, n_near_path=a.n_near_path, v_nom=a.v_nom, jitter=a.jitter, zone=a.zone)),
+                   params=dict(v=[a.v_lo, a.v_hi], v_cross_lo=a.v_cross_lo, n_cross=a.n_cross, n_counter=a.n_counter, n_on_path=a.n_on_path, n_corner=a.n_corner, n_near_path=a.n_near_path, v_nom=a.v_nom, jitter=a.jitter, zone=a.zone)),
               open(os.path.join(a.out_dir, base + '_meta.json'), 'w'), ensure_ascii=False, indent=1)
 pc_path = a.poses_csv or os.path.join(WS, 'evaluation', 'results', f'n1_poses_{a.layout}.csv')
 rows = {}
@@ -363,4 +435,4 @@ with open(pc_path, 'w', newline='') as f:
     wr.writeheader()
     for k in sorted(rows):
         wr.writerow(rows[k])
-print(f'{a.layout} k{a.seed}: 路長 {SLEN:.1f} m（含未知 {plen(P2):.1f}）、未知 {len(placed)}（路線上 {sum(p["mode"] == "on_path" for p in placed)}、旁 {sum(p["mode"] == "near_path" for p in placed)}）、行人 {sum(1 for o in movers if o["speed"] > 0)}（停場外 {sum(1 for o in movers if o["speed"] <= 0)}）')
+print(f'{a.layout} k{a.seed}: 路長 {SLEN:.1f} m（含未知 {plen(P2):.1f}）、未知 {len(placed)}（轉角 {sum(p["mode"] == "corner" for p in placed)}、路線上 {sum(p["mode"] == "on_path" for p in placed)}、旁 {sum(p["mode"] == "near_path" for p in placed)}）、行人 {sum(1 for o in movers if o["speed"] > 0)}（穿越 {n_cross}、對向 {n_counter}、停場外 {sum(1 for o in movers if o["speed"] <= 0)}）')
