@@ -6,14 +6,14 @@
 # 共同條件：SCENE=bigarena_ghost（行人無碰撞體）、AMMR_OBSTACLE_MODE=scheduled、SHIELD=1 GUARD=1（共用防護＋輪級限制）、時限 200 s。
 # 3b 步驟（相位 0 定位／移動確認）未過＝基礎設施失敗：同案例同方法自動重來至多 2 次，全部記在 <批次名>.log（不刪紀錄）。
 # 情境檔產生在 experiments/dyn_scenarios_<批次名>/（新檔名，跑批次中不改名）。結果 CSV：results/<批次名>/<速度>_<型態>_r<路線>_<方法>.csv
-set -u
 cd "$(dirname "$0")/.."
 WS=$PWD
 B=$1; IFS=, read -ra SPEEDS <<< "$2"; IFS=, read -ra PATS <<< "$3"; R0=$4; R1=$5; K=${6:-1}
 D=$WS/evaluation/experiments/dyn_scenarios_$B; R=$WS/evaluation/results/$B; L=$WS/evaluation/logs/$B
 mkdir -p "$D" "$R" "$L"
 LOG=$R/$B.log
-source /opt/ros/jazzy/setup.bash; source install/setup.bash
+source /opt/ros/jazzy/setup.bash; source install/setup.bash   # 必須在 set -u 之前（ROS setup 引用未設變數）
+set -u
 echo "$(date +%F_%T) batch $B speeds=${SPEEDS[*]} patterns=${PATS[*]} routes=$R0-$R1 seed=$K git=$(git rev-parse --short HEAD)" >> "$LOG"
 for RT in $(seq "$R0" "$R1"); do
   for SP in "${SPEEDS[@]}"; do
