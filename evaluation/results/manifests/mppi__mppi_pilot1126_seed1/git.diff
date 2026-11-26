@@ -1,0 +1,14 @@
+diff --git a/evaluation/run_omnibot_dynamic.sh b/evaluation/run_omnibot_dynamic.sh
+index f04a3590c..2e8147a5e 100755
+--- a/evaluation/run_omnibot_dynamic.sh
++++ b/evaluation/run_omnibot_dynamic.sh
+@@ -77,7 +77,8 @@ case "$METHOD" in
+   *) echo "ERROR: METHOD (arg 5) = gmpc_scan | gmpc_scan_nosm | gmpc_nocbf | gmpc_truth | mppi | rpp | dwb"; exit 1 ;;
+ esac
+ 
+-OUT_CSV="${HERE}/results/omnibot_dynamic_${METHOD}.csv"
++TAG="${TAG}${TAG_SUFFIX:-}"            # 11/26：先導／新批次加後綴，避免覆蓋同名 log 與 bag
++OUT_CSV="${OUT_CSV:-${HERE}/results/omnibot_dynamic_${METHOD}.csv}"   # 11/26：可改輸出（下一行會 rm 舊檔，既有結果不能被先導覆蓋）
+ mkdir -p "${HERE}/bags" "${HERE}/logs" "${HERE}/results"
+ rm -f "$OUT_CSV"
+ 
