@@ -251,19 +251,24 @@ for k, nm in enumerate(names):
                                     eta_nom_s=round(s_c / a.v_nom, 1), t_pass_s=round(T, 1), len_m=round(L, 2)))
             break
     if placed is None:                                                # 背景交通（或穿越點找不到）
-        for _ in range(2000):
+        # 前 2000 次最短 5 m（原規則；亂數序列不變 ⇒ 原本放得下的案例產生結果完全相同），
+        # 放不下才放寬到 4 m、3 m 再各試 2000 次（11/26 dyn1126 fast const r2 的 dyn_obs_5 大推車放不下 ⇒ 整案例被跳過）
+        for it in range(6000):
+            len_min = 5.0 if it < 2000 else (4.0 if it < 4000 else 3.0)
             c = np.array([rng.uniform(ox, ox + w * res), rng.uniform(oy, oy + h * res)])
             if clr(c) < R + 0.3:
                 continue
             th = rng.uniform(0, 2 * math.pi); u = np.array([math.cos(th), math.sin(th)])
             e_neg, e_pos = extent(c, -u, R, rng.uniform(3, 5)), extent(c, u, R, rng.uniform(3, 5))
-            if e_neg + e_pos < 5.0:
+            if e_neg + e_pos < len_min:
                 continue
             p, q = c - u * e_neg, c + u * e_pos
             if not seg_ok(p, q, R):
                 continue
             L = float(np.hypot(*(q - p)))
             placed = dict(p=p, q=q, L=L, s0=rng.uniform(0, 2 * L), info=dict(role='background', len_m=round(L, 2)))
+            if len_min < 5.0:
+                placed['info']['len_min_relaxed'] = len_min
             break
     if placed is None:
         raise SystemExit(f'!! {nm} 放不下')
