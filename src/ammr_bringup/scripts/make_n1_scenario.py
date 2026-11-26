@@ -51,6 +51,7 @@ ap.add_argument('--jitter', type=float, default=6.0)
 ap.add_argument('--zone', type=float, default=2.5)
 ap.add_argument('--infl', type=float, default=0.45)
 ap.add_argument('--poses-csv', default='')
+ap.add_argument('--route-try', type=int, default=0, help='內部用：情境放不下時換一組起終點重來（0＝原種子序列，結果與舊版相同）')
 a = ap.parse_args()
 
 drv = open(os.path.join(PKG, 'ammr_bringup', 'dynamic_obstacle_driver.py')).read()
@@ -87,7 +88,16 @@ for m in re.finditer(r'<model name="(dyn_obs_\d+)">(.*?)</model>', sdf, re.S):
         SHAPE[m.group(1)] = 0.5 * math.hypot(max(xs + ys), max(xs + ys)) if len(b) > 1 else 0.5 * math.hypot(xs[0], ys[0])
 YY, XX = np.mgrid[0:h, 0:w]
 XC, YC = ox + (XX + 0.5) * res, oy + (h - 1 - YY + 0.5) * res
-rng = random.Random(zlib.crc32(f'n1|{a.layout}|{a.seed}'.encode()))
+rng = random.Random(zlib.crc32((f'n1|{a.layout}|{a.seed}' + (f'|rt{a.route_try}' if a.route_try else '')).encode()))
+
+
+def fail(msg):
+    """放不下：換一組起終點（--route-try +1，至多 5 次）重跑自己；仍不行才真的失敗。結果仍由（布局, 種子）唯一決定。"""
+    if a.route_try < 5:
+        import sys as _s
+        argv = [x for i, x in enumerate(_s.argv) if not (x == '--route-try' or (i > 0 and _s.argv[i - 1] == '--route-try'))]
+        os.execv(_s.executable, [_s.executable] + argv + ['--route-try', str(a.route_try + 1)])
+    raise SystemExit(msg)
 
 
 def cell(p):
@@ -242,7 +252,7 @@ for attempt in range(300):
         continue                                                      # 擠窄縫能省 >1 m ⇒ 規劃器會去擠 ⇒ 重抽
     break
 else:
-    raise SystemExit('!! 未知障礙放不下')
+    fail('!! 未知障礙放不下')
 
 
 # ---- 行人（crossing）----
@@ -407,14 +417,14 @@ for o in movers:
               phase0_m=o['phase0_m'], direction=1.0, profile=None)
     dmin = min(math.hypot(schedule_state(ob, t * 0.25)[0][0] - s[0], schedule_state(ob, t * 0.25)[0][1] - s[1]) for t in range(17)) - o['radius'] - 0.30
     if dmin < 0.5:
-        raise SystemExit(f'!! {o["name"]} 開場太近起點（{dmin:.2f} m）')
+        fail(f'!! {o["name"]} 開場太近起點（{dmin:.2f} m）')
 
 # ---- 輸出 ----
 os.makedirs(a.out_dir, exist_ok=True)
 unk_out = [dict(name=p['name'], x=p['x'], y=p['y'], yaw=p['yaw']) for p in placed]
 static_movers = [dict(name=nm, start=[30.0 + 2.0 * j, 30.0], end=[30.0 + 2.0 * j, 31.0], speed=0.0, radius=round(SHAPE[nm], 3), height=1.0,
                       phase0_m=0.0, direction=1.0) for j, nm in enumerate(sorted(SHAPE))]
-common = dict(layout=a.layout, seed=a.seed, start=[round(float(s[0]), 3), round(float(s[1]), 3)], goal=[round(float(g[0]), 3), round(float(g[1]), 3)],
+common = dict(layout=a.layout, seed=a.seed, route_try=a.route_try, start=[round(float(s[0]), 3), round(float(s[1]), 3)], goal=[round(float(g[0]), 3), round(float(g[1]), 3)],
               path_len_m=round(SLEN, 2), path_len_with_unknown_m=round(plen(P2), 2),
               path=[[round(float(x), 3), round(float(y), 3)] for x, y in P[::4]], unknown=placed)
 for cond, dyn, meta_m in (('static', static_movers, []), ('crossing', movers, mmeta)):

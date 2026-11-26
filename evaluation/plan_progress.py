@@ -132,23 +132,26 @@ def dyn_rows(stats_path):
 
 def n1pilot_row():
     """N1 先導（三布局 × 靜態／交會 × 種子 101 × 4 方法 = 24 趟）。"""
-    R = os.path.join(HERE, 'results', os.environ.get('PILOT_BATCH', 'n1pilot3'))
+    R = os.path.join(HERE, 'results', os.environ.get('PILOT_BATCH', open(os.path.join(HERE, 'results', 'plan1127', 'current_batch.txt')).read().strip() if os.path.exists(os.path.join(HERE, 'results', 'plan1127', 'current_batch.txt')) else 'n1pilot3'))
     lp = os.path.join(R, os.path.basename(R) + '.log')
     log = open(lp).read().splitlines() if os.path.exists(lp) else []
     n = sum(1 for f in glob.glob(os.path.join(R, 'n1_*_k*_*.csv')) if sum(1 for _ in open(f)) > 1)
     run = bool(log) and not any('BATCH DONE' in s for s in log)
     recent = []
     for s in [s for s in log if ' try' in s][-8:][::-1]:
-        m = re.match(r'(\d\d:\d\d:\d\d) (n1_\w+?) (static|crossing) k(\d+) (\w+) try(\d+) : (.*)$', s)
+        m = re.match(r'(\d\d:\d\d:\d\d) (?:L\d )?(n1_\w+?) (static|crossing) k(\d+) (\w+) try(\d+) : (.*)$', s)
         if m:
             res = m.group(7)
             short = '到達' if 'goal reached' in res else ('逾時（200 s）' if 'cap hit' in res else ('系統失敗、重來' if 'skipping' in res else res[:20]))
             lay = dict(n1_bigarena='多房間', n1_office='辦公室', n1_warehouse='倉儲').get(m.group(2), m.group(2))
             recent.append(dict(id=f'p{m.group(1)}-{m.group(5)}-{m.group(6)}', time=m.group(1), case=f"N1 先導・{lay}・{'交會' if m.group(3) == 'crossing' else '靜態'}",
                                method=dict(DYN_METH).get(m.group(5), m.group(5)), attempt=int(m.group(6)), result=short))
-    return dict(id='n1pilot', name='N1 先導（種子 101）', design='三種複雜布局 × 靜態／交會 × 4 方法；GMPC 住宅任務版、四方法 0.26 m/s',
-                done=n, total=24, skips=sum(1 for s in log if 'skipping' in s), caps=sum(1 for s in log if 'cap hit' in s),
-                running=run, status=status(n, 24, run), last=(log[-1] if log else ''), stats_note=''), recent
+    nc = next((int(x.split('cases=')[1]) for x in log if 'cases=' in x), 6)
+    bname = os.path.basename(R)
+    nm_ = {'n1hardpilot': 'N1 加難先導（種子 101–102）'}.get(bname, f'N1 批次 {bname}')
+    return dict(id='n1pilot', name=nm_, design='三種複雜布局 × 交會 × 4 方法（穿越、對向會車、轉角未知障礙）；GMPC 住宅任務版、四方法 0.26 m/s；3 條車道並行',
+                done=n, total=nc * 4, skips=sum(1 for s in log if 'skipping' in s), caps=sum(1 for s in log if 'cap hit' in s),
+                running=run, status=status(n, nc * 4, run), last=(log[-1] if log else ''), stats_note=''), recent
 
 
 def main():
@@ -166,7 +169,7 @@ def main():
                 conditions=[], methods=[], recent=recent)
     json.dump(snap, open(a.out, 'w'), ensure_ascii=False, indent=1)
     core = [e for e in exps if e['tier'] == '核心']
-    print(f"核心 {sum(e['done'] for e in core)}/{sum(e['total'] for e in core)}；含選配 {sum(e['done'] for e in exps)}/{sum(e['total'] for e in exps)}；N1 先導 {pilot['done']}/24")
+    print(f"核心 {sum(e['done'] for e in core)}/{sum(e['total'] for e in core)}；含選配 {sum(e['done'] for e in exps)}/{sum(e['total'] for e in exps)}；{pilot['name']} {pilot['done']}/{pilot['total']}")
 
 
 if __name__ == '__main__':
