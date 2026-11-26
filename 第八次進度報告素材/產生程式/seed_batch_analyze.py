@@ -22,7 +22,7 @@ def analyze(N):
     cfg = reg.get('config', '')
     mseed = re.findall(r'CYL_SEED=(\d+)', cfg)
     seed = int(mseed[-1]) if mseed else None
-    mode = 'S' if 'PARK_STRICT=1' in cfg else ('P' if '停車操作' in cfg[-400:] else 'M')   # S＝嚴格停車操作（11/25 Howard 指正後）；P＝舊停車操作（只關移動中抓取，收臂／展開仍邊走邊做）
+    mode = 'S' if ('PARK_STRICT=1' in cfg + reg.get('status', '') or '嚴格停車' in cfg[-400:]) else ('P' if '停車操作' in cfg[-400:] else 'M')   # S＝嚴格停車操作（11/25 Howard 指正後）；P＝舊停車操作（只關移動中抓取，收臂／展開仍邊走邊做）
     mw_ = re.findall(r'D2_WALKERS=(\d)', cfg)                         # 登錄文字前段是預設設定、尾段是本趟覆寫 ⇒ 取最後一個
     walk = int(mw_[-1]) if mw_ else 0
     out = dict(run=N, seed=seed, mode=mode, walk=walk)

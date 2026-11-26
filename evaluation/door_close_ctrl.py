@@ -30,6 +30,7 @@ CL_R_TOL = float(os.environ.get('DC_CL_R_TOL', '0.008'))             # 共轉停
 T_SWING_MIN = float(os.environ.get('DC_T_SWING_MIN', '3.0'))          # 共轉時長下限（s）；實際時長在綁定瞬間依輪速／輪加速度上限算（Howard 11/20：不寫死 14 s）
 SWING_V_FRAC, SWING_A_FRAC = float(os.environ.get('DC_SWING_V_FRAC', '0.8')), float(os.environ.get('DC_SWING_A_FRAC', '0.3'))   # 留給追蹤與停止軌跡的餘裕
 UNF_QD = float(os.environ.get('DC_UNF_QD', '0.6'))
+PARK_PRE = float(os.environ.get('DC_PARK_PRE', '0'))                  # 嚴格停車：展開目標＝抓取線後退此距離的預抓構型（0＝抓取線長 d_line）；Isaac 186–201 停穩後關節空間直接展開到 q_c ⇒ 夾爪橫掃撞門扇 85°→75°、閉爪落空（移動中組底盤仍在轉、掃掠路徑不同）
 H_FQ, H_FQ_TOL, H_FSUM = 0.0018, 0.0006, 1.0                         # 門把手同 26 mm 橫桿（同抽屜判準）
 H_FLOSS_S = 0.5                                                      # 共轉中合力 <H_FSUM 連續超過此時間才判丟失
 
@@ -62,6 +63,7 @@ class DoorCloseCtrl(PK.TablePickCtrl):
         self.q_c = np.asarray(de['q'], float).copy()
         self.door_bind, self.door_bound, self.release, self.unbound = False, False, False, False
         self.q_u0, self.T_u, self.b_s0, self.q_s0, self.T_rel_s = None, None, None, None, None
+        self.q_ut = None                                               # 展開目標（嚴格停車＝預抓構型；否則 q_c）
         self.phase = 'UNFOLD'
         self._ev('pick_door_close_start', phi_c_deg=round(math.degrees(self.phi_c), 2), T_grasp=[round(float(x), 4) for x in self.T_grasp[:3, 3]])
 
@@ -69,9 +71,33 @@ class DoorCloseCtrl(PK.TablePickCtrl):
         f, fm = self.finger_force, self.finger_meas
         return f is not None and fm is not None and all(abs(float(x) - H_FQ) <= H_FQ_TOL for x in fm) and float(sum(f)) >= H_FSUM
 
+    def _unf_tgt(self):
+        return self.q_c if self.q_ut is None else self.q_ut
+
     def _unf_q(self, t_abs):
         u = XE.minjerk(min(max((self._pt(t_abs) - self.t_ph0) / max(self.T_u, 1e-6), 0.0), 1.0))[0]
-        return (1.0 - u) * self.q_u0 + u * self.q_c
+        return (1.0 - u) * self.q_u0 + u * self._unf_tgt()
+
+    def _park_pre_q(self, q):
+        """停穩底盤上、抓取線後退 d 的手臂構型（DLS，種子 q_c）；不收斂或出界 ⇒ None（退回 q_c）。"""
+        d_ = PARK_PRE if PARK_PRE > 0 else self._dl()
+        Tg = self._T_line(d_)
+        b = np.asarray(q[:3], float)
+        qa = self.q_c.copy()
+        res = np.inf
+        for _ in range(40):
+            q9 = np.r_[b, qa]
+            Tc = K.fk(q9, 'link_tcp')
+            dR = Tg[:3, :3] @ Tc[:3, :3].T
+            e = np.r_[Tg[:3, 3] - Tc[:3, 3], 0.5 * np.array([dR[2, 1] - dR[1, 2], dR[0, 2] - dR[2, 0], dR[1, 0] - dR[0, 1]])]
+            res = float(np.linalg.norm(e))
+            if res < 1e-9:
+                break
+            J = K.jacobian(q9, 'link_tcp')[:, 3:9]
+            qa = qa + np.linalg.solve(J.T @ J + 1e-8 * np.eye(6), J.T @ e)
+        ok = res < 1e-5 and bool(np.all(qa >= XO.LITE6_SAFE.lower)) and bool(np.all(qa <= XO.LITE6_SAFE.upper))
+        self._ev('park_pre', d=round(d_, 3), res=float('%.2e' % res), ok=ok, dq=round(float(np.abs(qa - self.q_c).max()), 3))
+        return qa if ok else None
 
     def _swing_T(self, q, dphi):
         """最小急動門角剖面的最短時長：共轉時底盤體速度與門角速度 ω 成正比（位置繞鉸鏈轉、偏航 −ω），
@@ -99,11 +125,17 @@ class DoorCloseCtrl(PK.TablePickCtrl):
                 self.q_u0 = np.asarray(q[3:], float).copy()
                 self.T_u = 1.875 * float(np.abs(self.q_c - self.q_u0).max()) / UNF_QD + 0.5
                 return
+            if self.q_ut is None and not getattr(self, '_park_pre_done', False):   # 停穩瞬間：展開目標改預抓構型，之後走抓取線（APPROACH）
+                self._park_pre_done = True
+                self.q_ut = self._park_pre_q(q)
+                self.t_ph0, el = self.t, 0.0
+                self.q_u0 = np.asarray(q[3:], float).copy()
+                self.T_u = 1.875 * float(np.abs(self._unf_tgt() - self.q_u0).max()) / UNF_QD + 0.5
         if self.phase == 'UNFOLD':
             if self.q_u0 is None:
                 self.q_u0 = np.asarray(q[3:], float).copy()
-                self.T_u = 1.875 * float(np.abs(self.q_c - self.q_u0).max()) / UNF_QD + 0.5
-            if el >= self.T_u and float(np.abs(np.asarray(q[3:], float) - self.q_c).max()) <= 0.03:
+                self.T_u = 1.875 * float(np.abs(self._unf_tgt() - self.q_u0).max()) / UNF_QD + 0.5
+            if el >= self.T_u and float(np.abs(np.asarray(q[3:], float) - self._unf_tgt()).max()) <= 0.03:
                 self.T_rel0 = np.linalg.inv(_T3(q[:3])) @ K.fk(q, 'link_tcp')
                 self._goto('APPROACH', unfold_s=round(el, 2))
             elif el > self.T_u + PK.PH_TO_S:
