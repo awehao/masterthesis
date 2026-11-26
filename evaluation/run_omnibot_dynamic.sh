@@ -33,7 +33,8 @@ source "${WS_ROOT}/install/setup.bash"
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-LOCKFILE="/tmp/omnibot_dynamic.pid"
+# 11/27 PAR_SAFE=1＋PAR_ID=<n>：平行車道模式（N1 同時跑多個模擬；每車道自己的 ROS_DOMAIN_ID／GZ_PARTITION、鎖檔、只收自己 session 的程序）。未設＝原行為。
+LOCKFILE="/tmp/omnibot_dynamic${PAR_ID:+_${PAR_ID}}.pid"
 if [ -f "$LOCKFILE" ] && kill -0 "$(cat "$LOCKFILE" 2>/dev/null)" 2>/dev/null; then
     echo "ERROR: another run_omnibot_dynamic.sh is already running (pid $(cat "$LOCKFILE"))."
     echo "       Stop it first:  pkill -TERM -f run_omnibot_dynamic.sh"
@@ -101,6 +102,18 @@ cleanup() {
         kill  -INT     "$pid" 2>/dev/null || true
     done
     sleep 3
+    if [ "${PAR_SAFE:-0}" = "1" ]; then
+        # 平行車道：只收同一 session（車道的 setsid）裡、本腳本與其上層以外的程序；不用名稱比對、不重啟全域 ros2 daemon
+        local sid_ p_
+        sid_=$(ps -o sid= -p $$ | tr -d ' ')
+        for sig_ in INT KILL; do
+            p_=$(pgrep -s "$sid_" | grep -vxE "$$|$PPID|$sid_|$BASHPID" | tr '\n' ' ')
+            [ -n "$p_" ] && kill -$sig_ $p_ 2>/dev/null || true
+            sleep 2
+        done
+        PIDS=()
+        return 0
+    fi
     pkill -INT -f "$NODE_PAT" 2>/dev/null || true
     sleep 2
     pkill -KILL -f "$NODE_PAT" 2>/dev/null || true
