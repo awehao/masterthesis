@@ -1,0 +1,130 @@
+diff --git a/src/my_omnibot_description/launch/omni_bot_baseline.launch.py b/src/my_omnibot_description/launch/omni_bot_baseline.launch.py
+index 077a44d59..39fff539d 100644
+--- a/src/my_omnibot_description/launch/omni_bot_baseline.launch.py
++++ b/src/my_omnibot_description/launch/omni_bot_baseline.launch.py
+@@ -36,6 +36,42 @@ def _dyn_names(traj_file):
+     return [d['name'] for d in (cfg.get('dynamic_obstacles') or [])]
+ 
+ 
++def _nav_vmax_yaml(src):
++    """11/27 Howard「四個導航方法速度上限統一 0.26」：NAV_VMAX 設定時，複製參數檔並把平移速度上限壓到該值
++    （MPPI vx/vy_max、vx/vy_min，DWB max/min_vel_x/y、max_speed_xy，RPP desired_linear_vel，平滑器 max/min_velocity 的 x、y）；
++    角速度與加速度不動，防護層與輪級限制仍用硬體值 0.2775。未設 NAV_VMAX 時回傳原檔（行為不變）。"""
++    import tempfile
++    import yaml as _y
++    v = os.environ.get('NAV_VMAX', '')
++    if not v:
++        return src
++    v = float(v)
++    d = _y.safe_load(open(src))
++
++    def walk(o):
++        if isinstance(o, dict):
++            for k, val in list(o.items()):
++                num = isinstance(val, (int, float)) and not isinstance(val, bool)
++                if k in ('vx_max', 'vy_max', 'max_vel_x', 'max_vel_y', 'max_speed_xy', 'desired_linear_vel') and num and val > 0:
++                    o[k] = min(float(val), v)
++                elif k in ('vx_min', 'vy_min', 'min_vel_x', 'min_vel_y') and num and val < 0:
++                    o[k] = max(float(val), -v)
++                elif k == 'max_velocity' and isinstance(val, list) and len(val) == 3:
++                    o[k] = [min(float(val[0]), v), min(float(val[1]), v), val[2]]
++                elif k == 'min_velocity' and isinstance(val, list) and len(val) == 3:
++                    o[k] = [max(float(val[0]), -v), max(float(val[1]), -v), val[2]]
++                else:
++                    walk(val)
++        elif isinstance(o, list):
++            for x in o:
++                walk(x)
++    walk(d)
++    fd, path = tempfile.mkstemp(prefix='navvmax_' + os.path.basename(src)[:-5] + '_', suffix='.yaml')
++    with os.fdopen(fd, 'w') as f:
++        _y.safe_dump(d, f)
++    return path
++
++
+ def generate_launch_description():
+     desc_pkg = get_package_share_directory('my_omnibot_description')
+     bringup  = get_package_share_directory('ammr_bringup')
+@@ -83,6 +119,7 @@ def generate_launch_description():
+         Command(['xacro ', urdf_file, ' use_camera:=false']), value_type=str)
+ 
+     def params(cfg):
++        cfg = _nav_vmax_yaml(cfg)                       # NAV_VMAX（未設＝原檔）
+         rw = {'yaml_filename': map_file,
+               'tf_broadcast': 'false'}          # EKF owns map->odom
+         # BASE_ACCEL=1 clamps the baseline's acceleration to the same box the
+diff --git a/src/my_omnibot_description/launch/omni_bot_dynamic.launch.py b/src/my_omnibot_description/launch/omni_bot_dynamic.launch.py
+index 4edad663b..826a65fb6 100644
+--- a/src/my_omnibot_description/launch/omni_bot_dynamic.launch.py
++++ b/src/my_omnibot_description/launch/omni_bot_dynamic.launch.py
+@@ -45,6 +45,42 @@ def _dyn_names(traj_file):
+     return [d['name'] for d in (cfg.get('dynamic_obstacles') or [])]
+ 
+ 
++def _nav_vmax_yaml(src):
++    """11/27 Howard「四個導航方法速度上限統一 0.26」：NAV_VMAX 設定時，複製參數檔並把平移速度上限壓到該值
++    （MPPI vx/vy_max、vx/vy_min，DWB max/min_vel_x/y、max_speed_xy，RPP desired_linear_vel，平滑器 max/min_velocity 的 x、y）；
++    角速度與加速度不動，防護層與輪級限制仍用硬體值 0.2775。未設 NAV_VMAX 時回傳原檔（行為不變）。"""
++    import tempfile
++    import yaml as _y
++    v = os.environ.get('NAV_VMAX', '')
++    if not v:
++        return src
++    v = float(v)
++    d = _y.safe_load(open(src))
++
++    def walk(o):
++        if isinstance(o, dict):
++            for k, val in list(o.items()):
++                num = isinstance(val, (int, float)) and not isinstance(val, bool)
++                if k in ('vx_max', 'vy_max', 'max_vel_x', 'max_vel_y', 'max_speed_xy', 'desired_linear_vel') and num and val > 0:
++                    o[k] = min(float(val), v)
++                elif k in ('vx_min', 'vy_min', 'min_vel_x', 'min_vel_y') and num and val < 0:
++                    o[k] = max(float(val), -v)
++                elif k == 'max_velocity' and isinstance(val, list) and len(val) == 3:
++                    o[k] = [min(float(val[0]), v), min(float(val[1]), v), val[2]]
++                elif k == 'min_velocity' and isinstance(val, list) and len(val) == 3:
++                    o[k] = [max(float(val[0]), -v), max(float(val[1]), -v), val[2]]
++                else:
++                    walk(val)
++        elif isinstance(o, list):
++            for x in o:
++                walk(x)
++    walk(d)
++    fd, path = tempfile.mkstemp(prefix='navvmax_' + os.path.basename(src)[:-5] + '_', suffix='.yaml')
++    with os.fdopen(fd, 'w') as f:
++        _y.safe_dump(d, f)
++    return path
++
++
+ def generate_launch_description():
+     desc_pkg  = get_package_share_directory('my_omnibot_description')
+     bringup   = get_package_share_directory('ammr_bringup')
+@@ -75,8 +111,11 @@ def generate_launch_description():
+     else:
+         world_file = os.path.join(bringup,  'worlds', 'random_room_dynamic.sdf')
+         map_file   = os.path.join(bringup,  'maps',   'random_room.yaml')
+-    nav_params = os.path.join(desc_pkg, 'config', 'nav2_localization.yaml')
++    nav_params = _nav_vmax_yaml(os.path.join(desc_pkg, 'config', 'nav2_localization.yaml'))   # NAV_VMAX：平滑器上限（未設＝原檔）
+     gmpc_params= os.path.join(wbmpc_pkg,'config', 'gmpc_params.yaml')
++    # NAV_VMAX：GMPC 的逐軸上限與名目速度也壓到同值（與 MPPI／DWB／RPP 相同上限）；未設時為空字典＝原行為
++    _vmax_over = ({'vx_max': float(os.environ['NAV_VMAX']), 'vy_max': float(os.environ['NAV_VMAX']),
++                   'v_nominal': min(0.26, float(os.environ['NAV_VMAX']))} if os.environ.get('NAV_VMAX') else {})
+     # Scenario selection. Every scenario is just a trajectories YAML -- the world
+     # provides four dynamic model slots and four unknown static cylinders, so a
+     # new encounter geometry costs a file, not a world edit.
+@@ -487,12 +526,12 @@ def generate_launch_description():
+         # cmd_vel_nav so velocity_smoother (above) can rate-limit it.
+         Node(package='ammr_wholebody_mpc', executable=_gmpc_exec,
+              name='gmpc_controller', output='screen',
+-             parameters=[gmpc_params, cbf_overrides, heading_overrides,
++             parameters=[gmpc_params, cbf_overrides, heading_overrides, _vmax_over,
+                          {'cmd_vel_topic': gmpc_cmd_topic}],
+              condition=IfCondition(cbf)),
+         Node(package='ammr_wholebody_mpc', executable=_gmpc_exec,
+              name='gmpc_controller', output='screen',
+-             parameters=[gmpc_params, heading_overrides,
++             parameters=[gmpc_params, heading_overrides, _vmax_over,
+                          {'cmd_vel_topic': gmpc_cmd_topic}],
+              condition=UnlessCondition(cbf)),
+         # Perception (scan mode): real /scan -> dynamic /gmpc/obstacles + static
