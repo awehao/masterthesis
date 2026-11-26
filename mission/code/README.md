@@ -13,7 +13,7 @@
 | `collision/` | 手臂／底盤淨空、自碰撞、停止掃掠 | `door_clear_door_fast.py`、`door_clear_fast.py`、`drawer_scene.py` |
 | `scene/` | 場景登錄、行人與未知箱、門／抽屜／筆／收納盒資產 | ★`20261121_m8_house_r2w3_scene.json`、★`mission_obstacles_m8_house_r2w3.json`、`walkers.py` |
 | `sim/` | Isaac 執行器、替身、控制工作程序、啟動鏈 | ★`isaac_m8_house_d2.py`、`stub_isaac_d2.py`、★`world_d2_node.py`、`run_d2_isaac.sh` |
-| `nav_original/` | 原導航（你的避障主體，改前要先確認） | `omni_bot_dynamic.launch.py`、`gmpc.py`、`gmpc_node.py`（凍結）、`gmpc_task_node.py`、`scan_safety_shield.py`、`wheel_limit_guard.py` |
+| `nav/` | **封存導航＝住宅任務版**（11/27 起；N1 比較也用這版；開關與檔案雜湊見 `nav/NAV_VERSION.md`） | `omni_bot_dynamic.launch.py`、`gmpc_task_node.py`、`gmpc_wb.py`、`gmpc.py`／`gmpc_node.py`（底層不改）、`yield_side.py`（會車層）、`scan_obstacle_tracker.py`、`scan_safety_shield.py`、`wheel_limit_guard.py`、`goal_to_plan_relay.py`、`omni_bot_baseline.launch.py`（基線） |
 | `legacy_bottle/` | 瓶子線舊模組，目前仍被主線間接引用（勿刪） | — |
 
 清單由入口程式（監督、world、替身、Isaac 執行器、重播、資料收集）的 import 追出來，共 121 個現役模組；`evaluation/` 裡其餘約 1,900 個 .py 是歷史實驗，主線不會用到。

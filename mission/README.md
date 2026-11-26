@@ -51,12 +51,15 @@
 | 回程關門流程（找門扇、共轉關門） | `b_d2_node.py` 的 `door_tick` |
 | 控制工作程序、交權、控制期限、停止 | `evaluation/motm_dry/world_d2_node.py` |
 
-### 導航（原有，Howard 的避障主體，不隨意改）
+### 導航（封存版＝住宅任務版，11/27 起；捷徑在 `mission/code/nav/`，版本說明 `mission/code/nav/NAV_VERSION.md`）
 | 功能 | 檔案 |
 |---|---|
 | 導航整套啟動（規劃、GMPC、Shield、GUARD、追蹤器、參數） | `src/my_omnibot_description/launch/omni_bot_dynamic.launch.py` |
-| GMPC 導航控制器（凍結） | `src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc.py`、`gmpc_node.py` |
-| 任務版導航前端 | `src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_task_node.py` |
+| 導航控制器（任務擴充節點，`GMPC_TASK=1`） | `src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_task_node.py` |
+| 求解核心（共同核心） | `src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_wb.py` |
+| 底層類別（被繼承，不改） | `src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc.py`、`gmpc_node.py` |
+| 會車層 | `evaluation/yield_side.py`（`D2_YIELD_SIDE=1 YS_PRED=1`） |
+| 導航比較（N1）跑法 | `evaluation/run_n1_par.sh`（平行車道）、`run_n1_batch.sh`；情境 `src/ammr_bringup/scripts/make_n1_scenario.py` |
 
 ### 全身控制（W-GMPC 單一控制器）
 | 功能 | 檔案 |
