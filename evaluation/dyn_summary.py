@@ -54,6 +54,9 @@ def collect(batch):
             traj = os.path.join(D, f'bigarena_route_{sp}_{pt}_r{rt}_k1.yaml')
             import yaml
             radii = {d['name']: float(d['radius']) for d in yaml.safe_load(open(traj))['dynamic_obstacles']}
+            meta = json.load(open(traj[:-5] + '_meta.json'))
+            if row['path_m'] and meta.get('path_len_m'):
+                row['path_ratio'] = round(row['path_m'] / meta['path_len_m'], 3)       # 實際路長／名目 A* 路長（繞路程度）
             try:
                 row.update({k: v for k, v in E.one(bags[-1], radii, G[rt]).items() if k != 'bag'})
             except Exception as e:                                  # noqa: BLE001
@@ -78,7 +81,8 @@ def summarize(rows):
                                           dyn_contact_passive=sum(r.get('n_contact_passive') or 0 for r in x),
                                           dmin_dyn_mean=round(float(np.mean([r['dmin_dyn_m'] for r in x if 'dmin_dyn_m' in r])), 3) if any('dmin_dyn_m' in r for r in x) else None,
                                           t_d05_mean=round(float(np.mean([r['t_d05_s'] for r in x if 't_d05_s' in r])), 1) if any('t_d05_s' in r for r in x) else None,
-                                          time_ok_mean=round(float(np.mean([r['time_s'] for r in ok if r['time_s']])), 1) if ok else None)
+                                          time_ok_mean=round(float(np.mean([r['time_s'] for r in ok if r['time_s']])), 1) if ok else None,
+                                          path_ratio_ok_median=round(float(np.median([r['path_ratio'] for r in ok if r.get('path_ratio')])), 3) if any(r.get('path_ratio') for r in ok) else None)
     # 四方法都到達的案例：與 GMPC 的成對時間差
     cases = sorted({(r['speed'], r['pattern'], r['route']) for r in rows})
     for meth in ('mppi', 'dwb', 'rpp'):

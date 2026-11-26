@@ -2,7 +2,9 @@
 """導航動態批次逐趟健檢：dyn_health.py <批次名> [--json out.json]
 把每一趟分成三類，決定要不要補跑（Howard 11/26「系統失敗要補齊趟次」）：
   INFRA  系統失敗＝和被測方法無關、跑法本身沒成立 ⇒ 該趟作廢、補跑：
-         機器人整趟幾乎沒動（<1 m）、任一行人在區間內沒移動（位移 <0.3 m）、定位（地圖位姿 vs gz 真值里程）偏差 >0.5 m、
+         機器人整趟幾乎沒動（<1 m）、任一行人在區間內沒移動（位移 <0.3 m）、
+         任一行人偏離排程 >0.5 m（實際 vs 排程位置，同一份 schedule_state；四方法同時序的直接證據）、
+         定位（地圖位姿 vs gz 真值里程）偏差 >0.5 m、
          區間內有節點非收尾性死亡、沒有 /plan。
   NAV    導航失敗＝方法本身沒到（Nav2 行為樹中止、卡住、繞圈逾時）⇒ 照實計入。
   OK     到達。
@@ -22,6 +24,9 @@ sys.path.insert(0, HERE)
 os.environ.setdefault('BIGARENA', '1')
 os.environ.setdefault('SCENE', 'bigarena_ghost')
 import analyze as A                                                   # noqa: E402
+import preposition_obstacles_gz as PP                                 # noqa: E402
+
+SCHED = PP.load_schedule()                                             # 與驅動同一份排程函式
 
 BAGTAG = dict(gmpc_scan=('gmpc_cbf', 'scan'), mppi=('mppi', 'mppi'), dwb=('dwb', 'dwb'), rpp=('rpp', 'rpp'))
 ANSI = re.compile(r'\x1b\[[0-9;]*m')
@@ -48,7 +53,25 @@ def log_reasons(logf):
     return dict(bt_fail=fails, reasons=reasons, early_death=early)
 
 
-def one(bag, logf, goal):
+def sched_err(M, traj, epoch, t0_sim, t1_sim):
+    """每個移動體在區間內「實際位置 vs 排程位置」的最大偏差（pose 標頭＝模擬時間；排程時間＝模擬時間 − phase_epoch）。
+    四個方法面對同一組時序的直接證據；偏差大＝驅動／橋接沒照排程走（例：dyn_obs_9 卡在原地）。"""
+    import yaml
+    obs = {d['name']: PP.obstacle_dict(d) for d in yaml.safe_load(open(traj))['dynamic_obstacles']}
+    out = {}
+    for nm, ob in obs.items():
+        v = M.get(f'/model/{nm}/pose', [])
+        e = 0.0
+        for _, m in v[::5]:
+            t = m.header.stamp.sec + m.header.stamp.nanosec * 1e-9
+            if t0_sim <= t <= t1_sim:
+                p, _ = SCHED(ob, t - epoch)
+                e = max(e, float(np.hypot(m.pose.position.x - p[0], m.pose.position.y - p[1])))
+        out[nm] = round(e, 3)
+    return out
+
+
+def one(bag, logf, goal, traj=None, csj=None):
     M = A.read_bag(bag)
     to, xyth = A.extract_odom(M)
     plans = M.get('/plan', [])
@@ -77,11 +100,22 @@ def one(bag, logf, goal):
         if s.sum() < 2 or float(np.ptp(xy[s, 0]) + np.ptp(xy[s, 1])) < 0.3:
             still.append(nm)
     out['still_movers'] = still
+    if traj and csj and os.path.exists(csj):
+        ep = json.load(open(csj)).get('phase_epoch')
+        od = M.get('/odom', [])
+        if ep is not None and od:
+            # 區間換成模擬時間：用 odom 的接收時間 ↔ 標頭時間對應
+            rt = np.array([x[0] / 1e9 for x in od]); st = np.array([x[1].header.stamp.sec + x[1].header.stamp.nanosec * 1e-9 for x in od])
+            e = sched_err(M, traj, float(ep), float(np.interp(t0, rt, st)), float(np.interp(t1, rt, st)))
+            out['sched_err_max_m'] = max(e.values()) if e else None
+            out['sched_err_bad'] = [k for k, v in e.items() if v > 0.5]
     inf = []
     if out['robot_path_m'] < 1.0:
         inf.append('robot_not_moving')
     if still:
         inf.append('mover_still:' + ','.join(still))
+    if out.get('sched_err_bad'):
+        inf.append('mover_off_schedule:' + ','.join(out['sched_err_bad']))
     if out.get('loc_err_max_m', 0) > 0.5:
         inf.append('loc_err>0.5')
     out.update(log_reasons(logf))
@@ -111,15 +145,17 @@ def main():
             continue
         b = bags[-1]
         logf = os.path.join(HERE, 'logs', os.path.basename(b) + '.log')
+        csj = os.path.join(HERE, 'logs', os.path.basename(b) + '_case_start.json')
+        traj = os.path.join(HERE, 'experiments', 'dyn_scenarios_' + batch, f'bigarena_route_{sp}_{pt}_r{rt}_k1.yaml')
         r = dict(case=f'{sp}_{pt}_r{rt}', method=meth, bag=os.path.basename(b), success=rec[-1].get('success') == 'True')
         try:
-            r.update(one(b, logf, G[rt]))
+            r.update(one(b, logf, G[rt], traj, csj))
         except Exception as e:                                       # noqa: BLE001
             r['infra'] = ['analysis_error:' + repr(e)[:60]]
         r['cls'] = 'INFRA' if r['infra'] else ('OK' if r['success'] else 'NAV')
         rows.append(r)
-        print('%-18s %-9s %-5s path %6s loc %6s plan %4s btfail %s %s %s' % (
-            r['case'], meth, r['cls'], r.get('robot_path_m'), r.get('loc_err_max_m'), r.get('n_plan'), r.get('bt_fail'),
+        print('%-18s %-9s %-5s path %6s loc %6s sched %6s plan %4s btfail %s %s %s' % (
+            r['case'], meth, r['cls'], r.get('robot_path_m'), r.get('loc_err_max_m'), r.get('sched_err_max_m'), r.get('n_plan'), r.get('bt_fail'),
             ';'.join(r['infra']), ('| ' + ' / '.join(r.get('reasons') or [])) if r.get('reasons') else ''))
     n = {c: sum(1 for r in rows if r['cls'] == c) for c in ('OK', 'NAV', 'INFRA')}
     print('合計', n)
