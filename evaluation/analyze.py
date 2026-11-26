@@ -708,7 +708,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('bag',     help='Path to rosbag directory (contains metadata.yaml + .db3)')
     ap.add_argument('--method', required=True,
-                    choices=['rpp', 'mppi', 'gmpc', 'gmpc_cbf'],
+                    choices=['rpp', 'mppi', 'dwb', 'gmpc', 'gmpc_cbf'],
                     help='Controller used in this run')
     ap.add_argument('--run',    required=True, help='Run identifier (e.g. seed42_run1)')
     ap.add_argument('--out',    default=str(here / 'results' / 'runs.csv'),

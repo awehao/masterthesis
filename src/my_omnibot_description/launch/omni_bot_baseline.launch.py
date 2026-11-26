@@ -61,11 +61,13 @@ def generate_launch_description():
     ekf_config = os.path.join(desc_pkg, 'config', 'ekf_fusion.yaml')
     mppi_cfg   = os.path.join(desc_pkg, 'config', 'nav2_baseline_mppi.yaml')
     rpp_cfg    = os.path.join(desc_pkg, 'config', 'nav2_baseline_rpp.yaml')
+    dwb_cfg    = os.path.join(desc_pkg, 'config', 'nav2_baseline_dwb.yaml')   # 11/26：DWB Omni baseline
 
     gui    = LaunchConfiguration('gui')
-    method = LaunchConfiguration('method')          # mppi | rpp
+    method = LaunchConfiguration('method')          # mppi | rpp | dwb
     is_mppi = PythonExpression(["'", method, "' == 'mppi'"])
     is_rpp  = PythonExpression(["'", method, "' == 'rpp'"])
+    is_dwb  = PythonExpression(["'", method, "' == 'dwb'"])
 
     robot_description = ParameterValue(
         Command(['xacro ', urdf_file, ' use_camera:=false']), value_type=str)
@@ -91,6 +93,7 @@ def generate_launch_description():
                              param_rewrites=rw)
     mppi_params = params(mppi_cfg)
     rpp_params  = params(rpp_cfg)
+    dwb_params  = params(dwb_cfg)
 
     rp = os.path.dirname(desc_pkg)
     prev = os.environ.get('GZ_SIM_RESOURCE_PATH', '')
@@ -145,10 +148,12 @@ def generate_launch_description():
     nav_nodes = (
         loc_stack(mppi_params, IfCondition(is_mppi)) +
         loc_stack(rpp_params,  IfCondition(is_rpp)) +
+        loc_stack(dwb_params,  IfCondition(is_dwb)) +
         [Node(package='robot_localization', executable='ekf_node', name='ekf_global',
               output='screen', parameters=[ekf_config])] +
         nav2_stack(mppi_params, IfCondition(is_mppi)) +
         nav2_stack(rpp_params,  IfCondition(is_rpp)) +
+        nav2_stack(dwb_params,  IfCondition(is_dwb)) +
         [Node(package='nav2_lifecycle_manager', executable='lifecycle_manager',
               name='lifecycle_manager_localization', output='screen',
               parameters=[{'use_sim_time': True, 'autostart': True,
@@ -171,7 +176,7 @@ def generate_launch_description():
                                '/usr/share/glvnd/egl_vendor.d/10_nvidia.json'),
         DeclareLaunchArgument('gui', default_value='true'),
         DeclareLaunchArgument('method', default_value='mppi',
-                              description='mppi | rpp'),
+                              description='mppi | rpp | dwb'),
 
         ExecuteProcess(cmd=['gz', 'sim', '-r', world_file], output='screen',
                        condition=IfCondition(gui)),

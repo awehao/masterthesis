@@ -73,7 +73,8 @@ case "$METHOD" in
   gmpc_nocbf)     LAUNCH_ARGS="omni_bot_dynamic.launch.py $GUI_ARG obstacle_source:=scan cbf:=false";    AMETHOD="gmpc_cbf"; TAG="nocbf"     ;;
   mppi)           LAUNCH_ARGS="omni_bot_baseline.launch.py $GUI_ARG method:=mppi";                            AMETHOD="mppi";     TAG="mppi"      ;;
   rpp)            LAUNCH_ARGS="omni_bot_baseline.launch.py $GUI_ARG method:=rpp";                             AMETHOD="rpp";      TAG="rpp"       ;;
-  *) echo "ERROR: METHOD (arg 5) = gmpc_scan | gmpc_scan_nosm | gmpc_nocbf | gmpc_truth | mppi | rpp"; exit 1 ;;
+  dwb)            LAUNCH_ARGS="omni_bot_baseline.launch.py $GUI_ARG method:=dwb";                             AMETHOD="dwb";      TAG="dwb"       ;;
+  *) echo "ERROR: METHOD (arg 5) = gmpc_scan | gmpc_scan_nosm | gmpc_nocbf | gmpc_truth | mppi | rpp | dwb"; exit 1 ;;
 esac
 
 OUT_CSV="${HERE}/results/omnibot_dynamic_${METHOD}.csv"
