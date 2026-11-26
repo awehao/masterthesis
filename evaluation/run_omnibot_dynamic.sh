@@ -182,7 +182,8 @@ $([ "$ARM" = "1" ] && echo ", arm")$([ "${DETOUR:-0}" = "1" ] && echo ", detour"
                DETOUR_CLEAR_PAD DETOUR_SIDE_PROJ PLAN_BLEND \
                HORIZON SPAWN_X SPAWN_Y POSES_CSV GOAL_DELAY_MIN GOAL_DELAY_MAX INFLATION CBF_VEL_MARGIN CBF_PRUNE_RANGE CBF_FAR_STRIDE ST_WEIGHT PROG_WEIGHT CBF_ALPHA CBF_SAFE_MARGIN PLANNER_SCAN CBF_SLACK_W STUCK_WINDOW STUCK_PROGRESS STATIC_MARGIN \
                CBF_MARGIN_GROWTH AX_MAX AY_MAX AZ_MAX \
-               STATIC_WINDOW MIN_NET_SPEED STATIC_KEEP_VEL MIN_CLUSTER_PTS EKF_REJECT REPLAN BASE_ACCEL; do
+               STATIC_WINDOW MIN_NET_SPEED STATIC_KEEP_VEL MIN_CLUSTER_PTS EKF_REJECT REPLAN BASE_ACCEL \
+               AMMR_OBSTACLE_MODE AMMR_TRAJ_FILE TAG_SUFFIX OUT_CSV; do
         echo "###   $v=${!v-<unset>}"
       done
     } >> "$log_file"
@@ -222,6 +223,38 @@ $([ "$ARM" = "1" ] && echo ", arm")$([ "${DETOUR:-0}" = "1" ] && echo ", detour"
         >> "$log_file" 2>&1 < /dev/null &
     REC_PID=$!
     PIDS+=( $REC_PID )
+
+    # 3b. scheduled 情境（11/26 動態能力比較）：相位 0 定位 → 確認 → 單次 /case_start → 移動確認。
+    # 同一份 AMMR_TRAJ_FILE＋同一種子 ⇒ 每個方法遇到同一組動態障礙時序（legacy 相位由啟動時序決定、不可重現）。
+    # 流程與 run_bigarena_isaac.sh 相同；gz 端多一步瞬移（障礙物是 kinematic，驅動在 /case_start 前只送零速度）。
+    if [ "${AMMR_OBSTACLE_MODE:-legacy}" = "scheduled" ]; then
+        local cs_pre="${HERE}/logs/${AMETHOD}__${run_tag}"
+        local cs_fail=""
+        if [ -z "${AMMR_TRAJ_FILE:-}" ]; then
+            cs_fail="AMMR_TRAJ_FILE 未設"
+        elif ! python3 "${HERE}/preposition_obstacles_gz.py" --traj "$AMMR_TRAJ_FILE" --world "$GZ_WORLD" \
+                --out "${cs_pre}_prepos.json" >> "$log_file" 2>&1; then
+            cs_fail="相位 0 瞬移失敗"
+        else
+            sleep 1
+            if ! timeout 40 python3 "${HERE}/case_start_check.py" preposition --traj "$AMMR_TRAJ_FILE" \
+                    --out "${cs_pre}_preposition.json" >> "$log_file" 2>&1; then
+                cs_fail="相位 0 定位未通過"
+            elif ! timeout 90 python3 "${HERE}/publish_case_start.py" --out "${cs_pre}_case_start.json" >> "$log_file" 2>&1; then
+                cs_fail="/case_start 握手未完成"
+            elif ! timeout 40 python3 "${HERE}/case_start_check.py" moving --traj "$AMMR_TRAJ_FILE" \
+                    --out "${cs_pre}_moving.json" >> "$log_file" 2>&1; then
+                cs_fail="移動體未如預期啟動"
+            fi
+        fi
+        if [ -n "$cs_fail" ]; then
+            echo "[$(date +%T)]     scheduled: ${cs_fail} -- skipping trial ${seed}"
+            "${HERE}/archive_experiment_manifest.sh" finalize "$MANIFEST_ID" failed 1 || true
+            cleanup
+            return 1
+        fi
+        echo "[$(date +%T)] [3b] scheduled 情境就緒：phase_epoch=$(python3 -c "import json;print(json.load(open('${cs_pre}_case_start.json')).get('phase_epoch'))" 2>/dev/null)"
+    fi
 
     # 4. publish the goal, retrying until /plan comes back
     echo "[$(date +%T)] [4/5] publish goal, wait for /plan ..."
@@ -285,7 +318,7 @@ $([ "$ARM" = "1" ] && echo ", arm")$([ "${DETOUR:-0}" = "1" ] && echo ", detour"
 }
 
 echo "[$(date +%T)] === omni_bot DYNAMIC batch: method=${METHOD} N=${N_TRIALS}, dur=${DURATION}s, goal=(${GOAL_X},${GOAL_Y}) ==="
-for s in $(seq 1 "$N_TRIALS"); do
+for s in $(seq "${SEED_FIRST:-1}" $(( ${SEED_FIRST:-1} + N_TRIALS - 1 ))); do   # SEED_FIRST：從指定路線列開始（11/26）
     run_trial "$s" || echo "[$(date +%T)] trial ${s} skipped"
 done
 

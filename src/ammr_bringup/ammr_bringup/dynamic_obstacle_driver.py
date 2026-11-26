@@ -43,6 +43,81 @@ REACH_TOL = 0.20  # m，legacy 模式：距離小於此值就切換 target (ping
 RATE_HZ   = 20.0
 
 
+def profile_arclength(prof, v0, t):
+    """含 offset_s：輪廓本身的時間偏移（各障礙物的停走／變速不同步）；回傳仍是自 t=0 起的弧長，故相位 0 位置不變。"""
+    o = float((prof or {}).get('offset_s', 0.0))
+    if o:
+        d1, v1 = _profile_raw(prof, v0, t + o)
+        d0, _ = _profile_raw(prof, v0, o)
+        return d1 - d0, v1
+    return _profile_raw(prof, v0, t)
+
+
+def _profile_raw(prof, v0, t):
+    """速度輪廓下 [0, t] 走過的弧長與 t 時刻速率（皆 ≥0，閉式、只依模擬時間 ⇒ 可重現）。
+    prof=None 或 type 'const'：等速 v0。
+    'sine'：v(t)=v0·(1+amp·sin(2πt/T))，amp∈[0,1)；平均速率仍為 v0。
+    'stopgo'：週期 go_s＋stop_s；go 段內前後各 ramp_s 線性加減速、中間以 v0 巡航，stop 段靜止。
+             平均速率＝v0·(go_s−ramp_s)/(go_s+stop_s)。"""
+    t = max(float(t), 0.0)                                         # 相位零點前視同 t=0
+    typ = (prof or {}).get('type', 'const')
+    if typ == 'const':
+        return v0 * t, v0
+    if typ == 'sine':
+        a, T = float(prof.get('amp', 0.5)), float(prof.get('period_s', 8.0))
+        w = 2.0 * math.pi / T
+        return v0 * t + v0 * a * (1.0 - math.cos(w * t)) / w, v0 * (1.0 + a * math.sin(w * t))
+    if typ == 'stopgo':
+        go, st = float(prof.get('go_s', 6.0)), float(prof.get('stop_s', 2.0))
+        r = min(float(prof.get('ramp_s', 1.0)), 0.5 * go)
+        P = go + st
+        D = v0 * (go - r)                                           # 每週期距離（梯形面積）
+        n, tau = divmod(t, P)
+        if tau < r:
+            d, v = 0.5 * v0 * tau * tau / r, v0 * tau / r
+        elif tau < go - r:
+            d, v = 0.5 * v0 * r + v0 * (tau - r), v0
+        elif tau < go:
+            u = go - tau
+            d, v = D - 0.5 * v0 * u * u / r, v0 * u / r
+        else:
+            d, v = D, 0.0
+        return n * D + d, v
+    raise ValueError('unknown speed_profile type %r' % typ)
+
+
+def polyline_at(pts, cum, d):
+    """折線 pts（累積弧長 cum）上弧長 d 處的位置與單位切向。"""
+    L = cum[-1]
+    d = min(max(d, 0.0), L)
+    for i in range(1, len(pts)):
+        if d <= cum[i] or i == len(pts) - 1:
+            seg = cum[i] - cum[i - 1]
+            ux = (pts[i][0] - pts[i - 1][0]) / seg if seg > 1e-12 else 0.0
+            uy = (pts[i][1] - pts[i - 1][1]) / seg if seg > 1e-12 else 0.0
+            f = d - cum[i - 1]
+            return [pts[i - 1][0] + ux * f, pts[i - 1][1] + uy * f], (ux, uy)
+    return list(pts[-1]), (0.0, 0.0)
+
+
+def schedule_state(ob, t):
+    """scheduled 模式 t 時刻的排程位置與前饋速度：沿路線（start→end 或 waypoints 折線）弧長三角波來回，
+    弧長進度依速度輪廓。無 waypoints、無 speed_profile 時與原等速直線版本逐值相同。"""
+    pts, cum = ob['pts'], ob['cum']
+    L = cum[-1]
+    if L < 1e-9:
+        return list(pts[0]), [0.0, 0.0]
+    s0 = ob['phase0_m'] if ob['direction'] >= 0 else (2.0 * L - ob['phase0_m'])
+    dist, v = profile_arclength(ob.get('profile'), ob['speed'], t)
+    s = (s0 + dist) % (2.0 * L)
+    if s <= L:
+        d, sgn = s, +1.0
+    else:
+        d, sgn = 2.0 * L - s, -1.0
+    p, (ux, uy) = polyline_at(pts, cum, d)
+    return p, [ux * v * sgn, uy * v * sgn]
+
+
 class DynamicObstacleDriver(Node):
     def __init__(self):
         super().__init__('dynamic_obstacle_driver')
@@ -84,6 +159,8 @@ class DynamicObstacleDriver(Node):
                 'direction'  : float(d.get('direction', 1.0)),
                 'phase0_m'   : float(d.get('phase0_m', 0.0)),
                 'target'     : [float(d['start'][0]), float(d['start'][1])],
+                # scheduled 模式選用欄位（11/26 動態能力比較）：waypoints 折線路線、speed_profile 速度輪廓
+                'profile'    : d.get('speed_profile'),
                 # publisher: VelocityControl 預設訂閱 /model/<name>/cmd_vel
                 'pub' : self.create_publisher(
                     Twist, f'/model/{d["name"]}/cmd_vel', 10),
@@ -93,6 +170,13 @@ class DynamicObstacleDriver(Node):
                 PoseStamped, f'/model/{d["name"]}/pose',
                 partial(self._pose_cb, ob), 10,
             )
+            wp = d.get('waypoints')
+            ob['pts'] = ([[float(x), float(y)] for x, y in wp] if wp else [list(ob['start']), list(ob['end'])])
+            ob['cum'] = [0.0]
+            for k in range(1, len(ob['pts'])):
+                ob['cum'].append(ob['cum'][-1] + math.hypot(ob['pts'][k][0] - ob['pts'][k - 1][0], ob['pts'][k][1] - ob['pts'][k - 1][1]))
+            if (wp or ob['profile']) and self.mode != 'scheduled':
+                self.get_logger().warn(f'{ob["name"]}: waypoints/speed_profile 只在 scheduled 模式生效（目前 {self.mode}）')
             self.obstacles.append(ob)
             self.get_logger().info(
                 f'Loaded {ob["name"]}: {ob["start"]} <-> {ob["end"]} '
@@ -142,28 +226,9 @@ class DynamicObstacleDriver(Node):
                 '這一趟不能當作有效情境')
 
     def _schedule(self, ob, t):
-        """Scheduled position at sim time t: a triangle wave in arclength.
-
-        Reversal is instantaneous at the endpoint, so the velocity jumps by 2v
-        there. legacy also reversed abruptly, but it did so REACH_TOL = 0.20 m
-        BEFORE the endpoint and at a feedback-dependent instant; scheduled
-        therefore sweeps up to 0.20 m further at each end. Listed rather than
-        hidden, because it changes the swept region.
-        """
-        sx, sy = ob['start']
-        ex, ey = ob['end']
-        L = math.hypot(ex - sx, ey - sy)
-        if L < 1e-9:
-            return [sx, sy], [0.0, 0.0]
-        ux, uy = (ex - sx) / L, (ey - sy) / L
-        s0 = ob['phase0_m'] if ob['direction'] >= 0 else (2.0 * L - ob['phase0_m'])
-        s = (s0 + ob['speed'] * t) % (2.0 * L)
-        if s <= L:
-            d, sgn = s, +1.0
-        else:
-            d, sgn = 2.0 * L - s, -1.0
-        return ([sx + ux * d, sy + uy * d],
-                [ux * ob['speed'] * sgn, uy * ob['speed'] * sgn])
+        """Scheduled position at sim time t（見模組函式 schedule_state）。
+        端點仍是瞬間反向（速度跳變 2v）；scheduled 會比 legacy 每端多掃 0.20 m。"""
+        return schedule_state(ob, t)
 
     def _step_scheduled(self, ob, now, pose_array, targets):
         # Before /case_start the obstacle is held at its configured start, so

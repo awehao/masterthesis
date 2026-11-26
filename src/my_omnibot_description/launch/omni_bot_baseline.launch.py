@@ -58,6 +58,10 @@ def generate_launch_description():
     traj_file  = os.path.join(
         bringup, 'config',
         f'dynamic_trajectories_{_traj}.yaml' if _traj else 'dynamic_trajectories.yaml')
+    # 11/26：與 omni_bot_dynamic.launch.py 相同的覆寫——AMMR_TRAJ_FILE 指定場景檔、AMMR_OBSTACLE_MODE=scheduled
+    # 用可重現相位（/case_start 對齊），基線與 GMPC 才會遇到同一個動態情境。未設時行為不變（legacy）。
+    traj_file = os.environ.get('AMMR_TRAJ_FILE') or traj_file
+    _obstacle_mode = os.environ.get('AMMR_OBSTACLE_MODE', 'legacy')
     ekf_config = os.path.join(desc_pkg, 'config', 'ekf_fusion.yaml')
     mppi_cfg   = os.path.join(desc_pkg, 'config', 'nav2_baseline_mppi.yaml')
     rpp_cfg    = os.path.join(desc_pkg, 'config', 'nav2_baseline_rpp.yaml')
@@ -205,7 +209,8 @@ def generate_launch_description():
                        '-z', '0.0'], output='screen')]),
         TimerAction(period=8.0, actions=[Node(
             package='ammr_bringup', executable='dynamic_obstacle_driver',
-            parameters=[{'use_sim_time': True}, {'trajectories_file': traj_file}],
+            parameters=[{'use_sim_time': True}, {'trajectories_file': traj_file},
+                        {'mode': _obstacle_mode}],
             output='screen')]),
         TimerAction(period=10.0, actions=nav_nodes),
 

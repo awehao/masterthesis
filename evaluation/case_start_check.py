@@ -30,19 +30,15 @@ ap.add_argument('--out', default='')
 a = ap.parse_args()
 
 import yaml
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 
 def phase0(d):
-    sx, sy = [float(v) for v in d['start']]
-    ex, ey = [float(v) for v in d['end']]
-    L = math.hypot(ex - sx, ey - sy)
-    if L < 1e-9:
-        return sx, sy
-    ux, uy = (ex - sx) / L, (ey - sy) / L
-    p0 = float(d.get('phase0_m', 0.0)); dr = float(d.get('direction', 1.0))
-    s0 = p0 if dr >= 0 else (2.0 * L - p0)
-    s = s0 % (2.0 * L)
-    dd = s if s <= L else 2.0 * L - s
-    return sx + ux * dd, sy + uy * dd
+    """相位 0 位置：與驅動同一份函式（dynamic_obstacle_driver.schedule_state，t=0），支援 waypoints 折線（11/26）。
+    直線、無 waypoints 時與原公式逐值相同。"""
+    import preposition_obstacles_gz as _pp
+    p, _ = _pp.load_schedule()(_pp.obstacle_dict(d), 0.0)
+    return p[0], p[1]
 
 rclpy.init()
 n = Node('case_start_check')
