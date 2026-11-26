@@ -93,7 +93,22 @@ def summarize(rows):
             if g and o:
                 d.append(o[0]['time_s'] - g[0]['time_s'])
         if d:
-            S[f'paired_time_{meth}_minus_gmpc'] = dict(n=len(d), mean=round(float(np.mean(d)), 1), median=round(float(np.median(d)), 1))
+            from scipy.stats import wilcoxon
+            p = float(wilcoxon(d).pvalue) if len(d) >= 6 and any(abs(x) > 1e-9 for x in d) else None
+            S[f'paired_time_{meth}_minus_gmpc'] = dict(n=len(d), mean=round(float(np.mean(d)), 1), median=round(float(np.median(d)), 1),
+                                                       n_faster=sum(1 for x in d if x < 0), wilcoxon_p=round(p, 4) if p is not None else None)
+        # 成對二元（同案例）：碰到行人與否、到達與否 ⇒ McNemar 精確檢定（只看不一致的案例）
+        from scipy.stats import binomtest
+        for key, fn in (('contact', lambda r: (r.get('n_contact_dyn') or 0) > 0), ('success', lambda r: bool(r['success']))):
+            b = c_ = 0
+            for c in cases:
+                g = [r for r in rows if (r['speed'], r['pattern'], r['route']) == c and r['method'] == 'gmpc_scan']
+                o = [r for r in rows if (r['speed'], r['pattern'], r['route']) == c and r['method'] == meth]
+                if g and o:
+                    gv, ov = fn(g[0]), fn(o[0])
+                    b += int(gv and not ov); c_ += int(ov and not gv)
+            S[f'paired_{key}_{meth}_vs_gmpc'] = dict(gmpc_only=b, other_only=c_,
+                                                     mcnemar_p=round(float(binomtest(b, b + c_, 0.5).pvalue), 4) if b + c_ else None)
     return S
 
 
