@@ -14,7 +14,7 @@ set -e
 
 if [[ $# -lt 2 ]]; then
     echo "usage: $0 METHOD RUN_TAG [DURATION_S]" >&2
-    echo "  METHOD = rpp | mppi | gmpc | gmpc_cbf" >&2
+    echo "  METHOD = rpp | mppi | dwb | gmpc | gmpc_cbf" >&2
     exit 1
 fi
 
@@ -27,8 +27,8 @@ DURATION="${3:-60}"
 # is checked on the method itself. Without this the Isaac trials died here
 # instantly under `set -e`, before recording a single message.
 case "$(echo "$METHOD" | sed -E 's/^(isaac|gz)_//')" in
-    rpp|mppi|gmpc|gmpc_cbf) ;;
-    *) echo "ERROR: METHOD must be [isaac_|gz_]{rpp | mppi | gmpc | gmpc_cbf}, got '$METHOD'"
+    rpp|mppi|dwb|gmpc|gmpc_cbf) ;;
+    *) echo "ERROR: METHOD must be [isaac_|gz_]{rpp | mppi | dwb | gmpc | gmpc_cbf}, got '$METHOD'"
        exit 1 ;;
 esac
 
