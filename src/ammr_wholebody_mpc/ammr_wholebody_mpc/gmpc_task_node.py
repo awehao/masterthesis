@@ -120,7 +120,14 @@ class GMPCTaskNode(GMPCNode):
                 xi_[len(X_) - 1] = xi_[len(X_) - 2].copy()
             return np.asarray(X_), xi_
 
+        # N2 消融 B（11/27 新規劃）：NAV_ZERO_OBS_VEL=1 ⇒ 送進會車層與 CBF 的非靜態障礙速度設為 0（追蹤器、關聯、目前幾何不變）；未設＝原行為。
+        self._t_zero_vel = os.environ.get('NAV_ZERO_OBS_VEL', '0') == '1'
+        if self._t_zero_vel:
+            self.get_logger().info('gmpc_task_node: NAV_ZERO_OBS_VEL＝障礙速度設為 0（N2 消融 B）')
+
         def _solve_pub(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles=None, _o=_orig_solve):
+            if self._t_zero_vel and obstacles is not None:
+                obstacles = [o if o.get('static') else {**o, 'vx': 0.0, 'vy': 0.0} for o in obstacles]
             try:
                 X_ref_win, xi_ref_win = _yield(X_now, X_ref_win, xi_ref_win, obstacles)
             except Exception as e_:                                   # noqa: BLE001
