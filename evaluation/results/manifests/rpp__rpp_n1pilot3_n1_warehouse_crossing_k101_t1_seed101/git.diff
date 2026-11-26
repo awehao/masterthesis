@@ -1,0 +1,86 @@
+diff --git a/src/ammr_bringup/scripts/make_n1_scenario.py b/src/ammr_bringup/scripts/make_n1_scenario.py
+index ee6d9e417..ef168af6f 100644
+--- a/src/ammr_bringup/scripts/make_n1_scenario.py
++++ b/src/ammr_bringup/scripts/make_n1_scenario.py
+@@ -183,7 +183,7 @@ for i in range(len(P)):
+             CORNER_S.append(float(cum[i]))
+ 
+ # ---- 未知靜態障礙 ----
+-for attempt in range(200):
++for attempt in range(300):
+     occ_t = OCC_K.copy(); placed = []
+     order = list(range(len(UNK))); rng.shuffle(order)
+     # 壓在路線上的優先用放得進一般通道的（包覆半徑 ≤0.6 m：細桿、垃圾桶、小箱、推車、中箱），大件（棧板、長凳、長條）多半放路旁或隨機
+@@ -192,9 +192,10 @@ for attempt in range(200):
+     for j, k in enumerate(order):
+         nm, kind, sx, sy = UNK[k]
+         rad = 0.5 * math.hypot(sx, sy) if kind == 'box' else sx / 2
+-        mode = ('corner' if j < min(a.n_corner, a.n_on_path) and CORNER_S else
+-                'on_path' if j < a.n_on_path else ('near_path' if j < a.n_on_path + a.n_near_path else 'random'))
+-        allow_fb = attempt >= 150                                      # 前 150 輪：路線上／旁放不下就整組重抽；最後 50 輪才允許改隨機（meta 記實際值）
++        n_on = a.n_on_path if attempt < 150 else (min(a.n_on_path, 3) if attempt < 225 else min(a.n_on_path, 2))   # 放不下時逐步減少路線上的個數（至少 2）
++        mode = ('corner' if j < min(a.n_corner, n_on) and CORNER_S else
++                'on_path' if j < n_on else ('near_path' if j < n_on + a.n_near_path else 'random'))
++        allow_fb = attempt >= 200                                      # 前 150 輪：路線上／旁放不下就整組重抽；最後 50 輪才允許改隨機（meta 記實際值）
+         got = False
+         for _t in range(6000):
+             if mode == 'corner' and _t >= 1500:
+@@ -207,10 +208,10 @@ for attempt in range(200):
+                 x, y = rng.uniform(ox + 1, ox + w * res - 1), rng.uniform(oy + 1, oy + h * res - 1)
+             elif mode == 'corner':                                     # 轉角／門口之後 1.0–2.5 m、離路線中心 0–0.5 m：轉過去才看得到
+                 pc_, tc_ = at_s(min(rng.choice(CORNER_S) + rng.uniform(1.0, 2.5), 0.85 * SLEN))
+-                x, y = pc_ + rng.choice([-1, 1]) * rng.uniform(0.0, 0.5) * np.array([-tc_[1], tc_[0]])
++                x, y = pc_ + rng.choice([-1, 1]) * rng.uniform(0.2, 0.7) * np.array([-tc_[1], tc_[0]])
+             else:
+                 i_ = rng.randrange(len(mid) - 1); q = mid[i_]; tq = mid[i_ + 1] - q; tq = tq / max(np.linalg.norm(tq), 1e-9)
+-                lat = rng.uniform(0.0, 0.6) if mode == 'on_path' else rng.uniform(0.6, 2.0)
++                lat = rng.uniform(0.2, 0.8) if mode == 'on_path' else rng.uniform(0.8, 2.0)   # 路線上的偏一側：另一側留出 ≥1.1 m 通道（走廊 2.4 m 置中會兩側都窄）
+                 x, y = q + rng.choice([-1, 1]) * lat * np.array([-tq[1], tq[0]])
+             if at(D_K, (x, y)) < rad + (0.70 if mode in ('on_path', 'corner') else 0.75):   # 路線上的：至少一側留 0.70 m（車寬 0.6＋0.1）
+                 continue
+@@ -267,7 +268,7 @@ def seg_ok(p, q, R):
+ def cross_point(p, q):
+     """路段 pq 與名目路徑在 20–80% 弧長內的第一個交點 → (弧長, 點)。"""
+     for i in range(len(P) - 1):
+-        if not (0.2 * SLEN <= cum[i] <= 0.8 * SLEN):
++        if not (0.15 * SLEN <= cum[i] <= 0.85 * SLEN):
+             continue
+         a1, a2 = P[i], P[i + 1]
+         d1, d2 = q - p, a2 - a1
+@@ -308,7 +309,7 @@ def sample(nm, want_cross, min_len, tries):
+         if not seg_ok(p, q, R):
+             continue
+         cp = cross_point(p, q)
+-        if want_cross and (cp is None or any(abs(cp[0] - u) < 2.0 for u in USED_S)):
++        if want_cross and (cp is None or any(abs(cp[0] - u) < 1.5 for u in USED_S)):
+             continue                                                   # 穿越點彼此沿路徑 ≥2 m，不擠在同一處
+         return p, q, cp
+     return None
+@@ -321,22 +322,22 @@ def sample_counter(nm, tries):
+     """走廊對向會車：沿名目路線一小段（偏好窄處：走廊、走道、門口附近，已知淨空 <1.6 m）放一條與路線平行的路段，
+     行人由前方（機器人要去的方向）朝機器人走來，在機器人以 V_NOM 到達該處時刻 ±4 s 通過。"""
+     R = SHAPE[nm]
+-    cand = list(np.linspace(0.3 * SLEN, 0.75 * SLEN, 60))
++    cand = list(np.linspace(0.2 * SLEN, 0.8 * SLEN, 80))
+     narrow = [sv for sv in cand if at(D_K, at_s(sv)[0]) < 1.6]
+     pool = narrow if narrow else cand
+     for _t in range(tries):
+         sm = float(rng.choice(pool))
+-        if any(abs(sm - u) < 2.0 for u in USED_S):
++        if any(abs(sm - u) < 1.5 for u in USED_S):
+             continue
+-        hl = rng.uniform(1.8, 3.0)
++        hl = rng.uniform(1.5, 2.5)
+         pa, _ = at_s(min(sm + hl, 0.92 * SLEN)); pb, _ = at_s(max(sm - hl, 0.08 * SLEN)); pm, tm = at_s(sm)
+-        off = rng.uniform(-0.3, 0.3) * np.array([-tm[1], tm[0]])
++        off = rng.uniform(-0.5, 0.5) * np.array([-tm[1], tm[0]])
+         p, q = pa + off, pb + off
+         L_ = float(np.hypot(*(q - p)))
+         if L_ < 3.0 or not seg_ok(p, q, R):
+             continue
+         pts = p + np.outer(np.linspace(0, 1, 12), q - p)               # 直線段要貼著路線（離路線點 <0.7 m）
+-        if max(float(np.min(np.hypot(P[:, 0] - x_, P[:, 1] - y_))) for x_, y_ in pts) > 0.7:
++        if max(float(np.min(np.hypot(P[:, 0] - x_, P[:, 1] - y_))) for x_, y_ in pts) > 0.8:
+             continue
+         d_c = float(np.dot(pm + off - p, (q - p) / L_))
+         return p, q, sm, d_c
