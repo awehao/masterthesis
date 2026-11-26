@@ -1,0 +1,259 @@
+diff --git a/evaluation/case_start_check.py b/evaluation/case_start_check.py
+index eec80a5c5..3aa5fd8e2 100644
+--- a/evaluation/case_start_check.py
++++ b/evaluation/case_start_check.py
+@@ -30,19 +30,15 @@ ap.add_argument('--out', default='')
+ a = ap.parse_args()
+ 
+ import yaml
++import os as _os, sys as _sys
++_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+ 
+ def phase0(d):
+-    sx, sy = [float(v) for v in d['start']]
+-    ex, ey = [float(v) for v in d['end']]
+-    L = math.hypot(ex - sx, ey - sy)
+-    if L < 1e-9:
+-        return sx, sy
+-    ux, uy = (ex - sx) / L, (ey - sy) / L
+-    p0 = float(d.get('phase0_m', 0.0)); dr = float(d.get('direction', 1.0))
+-    s0 = p0 if dr >= 0 else (2.0 * L - p0)
+-    s = s0 % (2.0 * L)
+-    dd = s if s <= L else 2.0 * L - s
+-    return sx + ux * dd, sy + uy * dd
++    """相位 0 位置：與驅動同一份函式（dynamic_obstacle_driver.schedule_state，t=0），支援 waypoints 折線（11/26）。
++    直線、無 waypoints 時與原公式逐值相同。"""
++    import preposition_obstacles_gz as _pp
++    p, _ = _pp.load_schedule()(_pp.obstacle_dict(d), 0.0)
++    return p[0], p[1]
+ 
+ rclpy.init()
+ n = Node('case_start_check')
+diff --git a/evaluation/run_omnibot_dynamic.sh b/evaluation/run_omnibot_dynamic.sh
+index 2e8147a5e..52ab4c83e 100755
+--- a/evaluation/run_omnibot_dynamic.sh
++++ b/evaluation/run_omnibot_dynamic.sh
+@@ -182,7 +182,8 @@ $([ "$ARM" = "1" ] && echo ", arm")$([ "${DETOUR:-0}" = "1" ] && echo ", detour"
+                DETOUR_CLEAR_PAD DETOUR_SIDE_PROJ PLAN_BLEND \
+                HORIZON SPAWN_X SPAWN_Y POSES_CSV GOAL_DELAY_MIN GOAL_DELAY_MAX INFLATION CBF_VEL_MARGIN CBF_PRUNE_RANGE CBF_FAR_STRIDE ST_WEIGHT PROG_WEIGHT CBF_ALPHA CBF_SAFE_MARGIN PLANNER_SCAN CBF_SLACK_W STUCK_WINDOW STUCK_PROGRESS STATIC_MARGIN \
+                CBF_MARGIN_GROWTH AX_MAX AY_MAX AZ_MAX \
+-               STATIC_WINDOW MIN_NET_SPEED STATIC_KEEP_VEL MIN_CLUSTER_PTS EKF_REJECT REPLAN BASE_ACCEL; do
++               STATIC_WINDOW MIN_NET_SPEED STATIC_KEEP_VEL MIN_CLUSTER_PTS EKF_REJECT REPLAN BASE_ACCEL \
++               AMMR_OBSTACLE_MODE AMMR_TRAJ_FILE TAG_SUFFIX OUT_CSV; do
+         echo "###   $v=${!v-<unset>}"
+       done
+     } >> "$log_file"
+@@ -223,6 +224,38 @@ $([ "$ARM" = "1" ] && echo ", arm")$([ "${DETOUR:-0}" = "1" ] && echo ", detour"
+     REC_PID=$!
+     PIDS+=( $REC_PID )
+ 
++    # 3b. scheduled 情境（11/26 動態能力比較）：相位 0 定位 → 確認 → 單次 /case_start → 移動確認。
++    # 同一份 AMMR_TRAJ_FILE＋同一種子 ⇒ 每個方法遇到同一組動態障礙時序（legacy 相位由啟動時序決定、不可重現）。
++    # 流程與 run_bigarena_isaac.sh 相同；gz 端多一步瞬移（障礙物是 kinematic，驅動在 /case_start 前只送零速度）。
++    if [ "${AMMR_OBSTACLE_MODE:-legacy}" = "scheduled" ]; then
++        local cs_pre="${HERE}/logs/${AMETHOD}__${run_tag}"
++        local cs_fail=""
++        if [ -z "${AMMR_TRAJ_FILE:-}" ]; then
++            cs_fail="AMMR_TRAJ_FILE 未設"
++        elif ! python3 "${HERE}/preposition_obstacles_gz.py" --traj "$AMMR_TRAJ_FILE" --world "$GZ_WORLD" \
++                --out "${cs_pre}_prepos.json" >> "$log_file" 2>&1; then
++            cs_fail="相位 0 瞬移失敗"
++        else
++            sleep 1
++            if ! timeout 40 python3 "${HERE}/case_start_check.py" preposition --traj "$AMMR_TRAJ_FILE" \
++                    --out "${cs_pre}_preposition.json" >> "$log_file" 2>&1; then
++                cs_fail="相位 0 定位未通過"
++            elif ! timeout 90 python3 "${HERE}/publish_case_start.py" --out "${cs_pre}_case_start.json" >> "$log_file" 2>&1; then
++                cs_fail="/case_start 握手未完成"
++            elif ! timeout 40 python3 "${HERE}/case_start_check.py" moving --traj "$AMMR_TRAJ_FILE" \
++                    --out "${cs_pre}_moving.json" >> "$log_file" 2>&1; then
++                cs_fail="移動體未如預期啟動"
++            fi
++        fi
++        if [ -n "$cs_fail" ]; then
++            echo "[$(date +%T)]     scheduled: ${cs_fail} -- skipping trial ${seed}"
++            "${HERE}/archive_experiment_manifest.sh" finalize "$MANIFEST_ID" failed 1 || true
++            cleanup
++            return 1
++        fi
++        echo "[$(date +%T)] [3b] scheduled 情境就緒：phase_epoch=$(python3 -c "import json;print(json.load(open('${cs_pre}_case_start.json')).get('phase_epoch'))" 2>/dev/null)"
++    fi
++
+     # 4. publish the goal, retrying until /plan comes back
+     echo "[$(date +%T)] [4/5] publish goal, wait for /plan ..."
+     # --seed makes the release-to-goal delay reproducible per trial: the
+@@ -285,7 +318,7 @@ $([ "$ARM" = "1" ] && echo ", arm")$([ "${DETOUR:-0}" = "1" ] && echo ", detour"
+ }
+ 
+ echo "[$(date +%T)] === omni_bot DYNAMIC batch: method=${METHOD} N=${N_TRIALS}, dur=${DURATION}s, goal=(${GOAL_X},${GOAL_Y}) ==="
+-for s in $(seq 1 "$N_TRIALS"); do
++for s in $(seq "${SEED_FIRST:-1}" $(( ${SEED_FIRST:-1} + N_TRIALS - 1 ))); do   # SEED_FIRST：從指定路線列開始（11/26）
+     run_trial "$s" || echo "[$(date +%T)] trial ${s} skipped"
+ done
+ 
+diff --git a/src/ammr_bringup/ammr_bringup/dynamic_obstacle_driver.py b/src/ammr_bringup/ammr_bringup/dynamic_obstacle_driver.py
+index 8785b31fd..b0a480876 100644
+--- a/src/ammr_bringup/ammr_bringup/dynamic_obstacle_driver.py
++++ b/src/ammr_bringup/ammr_bringup/dynamic_obstacle_driver.py
+@@ -43,6 +43,81 @@ REACH_TOL = 0.20  # m，legacy 模式：距離小於此值就切換 target (ping
+ RATE_HZ   = 20.0
+ 
+ 
++def profile_arclength(prof, v0, t):
++    """含 offset_s：輪廓本身的時間偏移（各障礙物的停走／變速不同步）；回傳仍是自 t=0 起的弧長，故相位 0 位置不變。"""
++    o = float((prof or {}).get('offset_s', 0.0))
++    if o:
++        d1, v1 = _profile_raw(prof, v0, t + o)
++        d0, _ = _profile_raw(prof, v0, o)
++        return d1 - d0, v1
++    return _profile_raw(prof, v0, t)
++
++
++def _profile_raw(prof, v0, t):
++    """速度輪廓下 [0, t] 走過的弧長與 t 時刻速率（皆 ≥0，閉式、只依模擬時間 ⇒ 可重現）。
++    prof=None 或 type 'const'：等速 v0。
++    'sine'：v(t)=v0·(1+amp·sin(2πt/T))，amp∈[0,1)；平均速率仍為 v0。
++    'stopgo'：週期 go_s＋stop_s；go 段內前後各 ramp_s 線性加減速、中間以 v0 巡航，stop 段靜止。
++             平均速率＝v0·(go_s−ramp_s)/(go_s+stop_s)。"""
++    t = max(float(t), 0.0)                                         # 相位零點前視同 t=0
++    typ = (prof or {}).get('type', 'const')
++    if typ == 'const':
++        return v0 * t, v0
++    if typ == 'sine':
++        a, T = float(prof.get('amp', 0.5)), float(prof.get('period_s', 8.0))
++        w = 2.0 * math.pi / T
++        return v0 * t + v0 * a * (1.0 - math.cos(w * t)) / w, v0 * (1.0 + a * math.sin(w * t))
++    if typ == 'stopgo':
++        go, st = float(prof.get('go_s', 6.0)), float(prof.get('stop_s', 2.0))
++        r = min(float(prof.get('ramp_s', 1.0)), 0.5 * go)
++        P = go + st
++        D = v0 * (go - r)                                           # 每週期距離（梯形面積）
++        n, tau = divmod(t, P)
++        if tau < r:
++            d, v = 0.5 * v0 * tau * tau / r, v0 * tau / r
++        elif tau < go - r:
++            d, v = 0.5 * v0 * r + v0 * (tau - r), v0
++        elif tau < go:
++            u = go - tau
++            d, v = D - 0.5 * v0 * u * u / r, v0 * u / r
++        else:
++            d, v = D, 0.0
++        return n * D + d, v
++    raise ValueError('unknown speed_profile type %r' % typ)
++
++
++def polyline_at(pts, cum, d):
++    """折線 pts（累積弧長 cum）上弧長 d 處的位置與單位切向。"""
++    L = cum[-1]
++    d = min(max(d, 0.0), L)
++    for i in range(1, len(pts)):
++        if d <= cum[i] or i == len(pts) - 1:
++            seg = cum[i] - cum[i - 1]
++            ux = (pts[i][0] - pts[i - 1][0]) / seg if seg > 1e-12 else 0.0
++            uy = (pts[i][1] - pts[i - 1][1]) / seg if seg > 1e-12 else 0.0
++            f = d - cum[i - 1]
++            return [pts[i - 1][0] + ux * f, pts[i - 1][1] + uy * f], (ux, uy)
++    return list(pts[-1]), (0.0, 0.0)
++
++
++def schedule_state(ob, t):
++    """scheduled 模式 t 時刻的排程位置與前饋速度：沿路線（start→end 或 waypoints 折線）弧長三角波來回，
++    弧長進度依速度輪廓。無 waypoints、無 speed_profile 時與原等速直線版本逐值相同。"""
++    pts, cum = ob['pts'], ob['cum']
++    L = cum[-1]
++    if L < 1e-9:
++        return list(pts[0]), [0.0, 0.0]
++    s0 = ob['phase0_m'] if ob['direction'] >= 0 else (2.0 * L - ob['phase0_m'])
++    dist, v = profile_arclength(ob.get('profile'), ob['speed'], t)
++    s = (s0 + dist) % (2.0 * L)
++    if s <= L:
++        d, sgn = s, +1.0
++    else:
++        d, sgn = 2.0 * L - s, -1.0
++    p, (ux, uy) = polyline_at(pts, cum, d)
++    return p, [ux * v * sgn, uy * v * sgn]
++
++
+ class DynamicObstacleDriver(Node):
+     def __init__(self):
+         super().__init__('dynamic_obstacle_driver')
+@@ -84,6 +159,8 @@ class DynamicObstacleDriver(Node):
+                 'direction'  : float(d.get('direction', 1.0)),
+                 'phase0_m'   : float(d.get('phase0_m', 0.0)),
+                 'target'     : [float(d['start'][0]), float(d['start'][1])],
++                # scheduled 模式選用欄位（11/26 動態能力比較）：waypoints 折線路線、speed_profile 速度輪廓
++                'profile'    : d.get('speed_profile'),
+                 # publisher: VelocityControl 預設訂閱 /model/<name>/cmd_vel
+                 'pub' : self.create_publisher(
+                     Twist, f'/model/{d["name"]}/cmd_vel', 10),
+@@ -93,6 +170,13 @@ class DynamicObstacleDriver(Node):
+                 PoseStamped, f'/model/{d["name"]}/pose',
+                 partial(self._pose_cb, ob), 10,
+             )
++            wp = d.get('waypoints')
++            ob['pts'] = ([[float(x), float(y)] for x, y in wp] if wp else [list(ob['start']), list(ob['end'])])
++            ob['cum'] = [0.0]
++            for k in range(1, len(ob['pts'])):
++                ob['cum'].append(ob['cum'][-1] + math.hypot(ob['pts'][k][0] - ob['pts'][k - 1][0], ob['pts'][k][1] - ob['pts'][k - 1][1]))
++            if (wp or ob['profile']) and self.mode != 'scheduled':
++                self.get_logger().warn(f'{ob["name"]}: waypoints/speed_profile 只在 scheduled 模式生效（目前 {self.mode}）')
+             self.obstacles.append(ob)
+             self.get_logger().info(
+                 f'Loaded {ob["name"]}: {ob["start"]} <-> {ob["end"]} '
+@@ -142,28 +226,9 @@ class DynamicObstacleDriver(Node):
+                 '這一趟不能當作有效情境')
+ 
+     def _schedule(self, ob, t):
+-        """Scheduled position at sim time t: a triangle wave in arclength.
+-
+-        Reversal is instantaneous at the endpoint, so the velocity jumps by 2v
+-        there. legacy also reversed abruptly, but it did so REACH_TOL = 0.20 m
+-        BEFORE the endpoint and at a feedback-dependent instant; scheduled
+-        therefore sweeps up to 0.20 m further at each end. Listed rather than
+-        hidden, because it changes the swept region.
+-        """
+-        sx, sy = ob['start']
+-        ex, ey = ob['end']
+-        L = math.hypot(ex - sx, ey - sy)
+-        if L < 1e-9:
+-            return [sx, sy], [0.0, 0.0]
+-        ux, uy = (ex - sx) / L, (ey - sy) / L
+-        s0 = ob['phase0_m'] if ob['direction'] >= 0 else (2.0 * L - ob['phase0_m'])
+-        s = (s0 + ob['speed'] * t) % (2.0 * L)
+-        if s <= L:
+-            d, sgn = s, +1.0
+-        else:
+-            d, sgn = 2.0 * L - s, -1.0
+-        return ([sx + ux * d, sy + uy * d],
+-                [ux * ob['speed'] * sgn, uy * ob['speed'] * sgn])
++        """Scheduled position at sim time t（見模組函式 schedule_state）。
++        端點仍是瞬間反向（速度跳變 2v）；scheduled 會比 legacy 每端多掃 0.20 m。"""
++        return schedule_state(ob, t)
+ 
+     def _step_scheduled(self, ob, now, pose_array, targets):
+         # Before /case_start the obstacle is held at its configured start, so
+diff --git a/src/my_omnibot_description/launch/omni_bot_baseline.launch.py b/src/my_omnibot_description/launch/omni_bot_baseline.launch.py
+index 50da985d4..a48237b48 100644
+--- a/src/my_omnibot_description/launch/omni_bot_baseline.launch.py
++++ b/src/my_omnibot_description/launch/omni_bot_baseline.launch.py
+@@ -58,6 +58,10 @@ def generate_launch_description():
+     traj_file  = os.path.join(
+         bringup, 'config',
+         f'dynamic_trajectories_{_traj}.yaml' if _traj else 'dynamic_trajectories.yaml')
++    # 11/26：與 omni_bot_dynamic.launch.py 相同的覆寫——AMMR_TRAJ_FILE 指定場景檔、AMMR_OBSTACLE_MODE=scheduled
++    # 用可重現相位（/case_start 對齊），基線與 GMPC 才會遇到同一個動態情境。未設時行為不變（legacy）。
++    traj_file = os.environ.get('AMMR_TRAJ_FILE') or traj_file
++    _obstacle_mode = os.environ.get('AMMR_OBSTACLE_MODE', 'legacy')
+     ekf_config = os.path.join(desc_pkg, 'config', 'ekf_fusion.yaml')
+     mppi_cfg   = os.path.join(desc_pkg, 'config', 'nav2_baseline_mppi.yaml')
+     rpp_cfg    = os.path.join(desc_pkg, 'config', 'nav2_baseline_rpp.yaml')
+@@ -205,7 +209,8 @@ def generate_launch_description():
+                        '-z', '0.0'], output='screen')]),
+         TimerAction(period=8.0, actions=[Node(
+             package='ammr_bringup', executable='dynamic_obstacle_driver',
+-            parameters=[{'use_sim_time': True}, {'trajectories_file': traj_file}],
++            parameters=[{'use_sim_time': True}, {'trajectories_file': traj_file},
++                        {'mode': _obstacle_mode}],
+             output='screen')]),
+         TimerAction(period=10.0, actions=nav_nodes),
+ 
