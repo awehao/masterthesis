@@ -81,6 +81,9 @@ class WheelLimitGuard(Node):
         # 冷啟動時是否已由啟動流程確認機器人靜止。預設 False ——
         # 不可預設為零，guard 重啟時機器人可能仍在執行舊命令。
         p('assume_stopped_at_start', False)
+        # 11/27 N1 公平性（Howard「四個方法速度上限統一 0.26」）：合成平移速度上限 ‖(vx,vy)‖ ≤ v_xy_max（等比例縮、方向不變；0＝關，原行為）。
+        # 本車兩平移軸用不同輪對、各自飽和（斜向可到 √2·r·ω_max），只限各軸時 MPPI 斜走可達 0.37 m/s；這一層對所有方法相同。
+        p('v_xy_max', 0.0)
 
         g = lambda k: self.get_parameter(k).value          # noqa: E731
         self.r = float(g('wheel_radius'))
@@ -92,6 +95,7 @@ class WheelLimitGuard(Node):
         self.dt_max = float(g('dt_max'))
         self.stopped_speed = float(g('stopped_speed'))
         self.stopped_count = int(g('stopped_count'))
+        self.v_xy_max = float(g('v_xy_max'))
 
         be = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT,
                         history=HistoryPolicy.KEEP_LAST)
@@ -122,6 +126,10 @@ class WheelLimitGuard(Node):
 
     def _in(self, m):
         self.target = np.array([m.linear.x, m.linear.y, m.angular.z], float)
+        if self.v_xy_max > 0.0:
+            n_ = math.hypot(self.target[0], self.target[1])
+            if n_ > self.v_xy_max:
+                self.target[:2] *= self.v_xy_max / n_
         self.t_in = self._now()
 
     def _odom(self, m):

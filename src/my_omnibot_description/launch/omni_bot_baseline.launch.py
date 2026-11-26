@@ -192,6 +192,7 @@ def generate_launch_description():
                               'odom_topic': '/odom', 'wheel_radius': 0.05, 'wheel_base_L': 0.245,
                               'wheel_w_max': 5.55, 'wheel_a_max': 125.0, 'publish_rate': 20.0,
                               'input_timeout': float(os.environ.get('GUARD_IN_TO', '0.25')), 'dt_max': 0.50,
+                              'v_xy_max': float(os.environ.get('NAV_VMAX', '0') or 0),   # NAV_VMAX：合成平移上限（同 GMPC launch）
                               'assume_stopped_at_start': True}]) if _guard else None,
             Node(package='ammr_wholebody_mpc', executable='scan_safety_shield',
                  name='scan_safety_shield', output='screen', condition=cond,

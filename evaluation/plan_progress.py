@@ -124,9 +124,31 @@ def dyn_rows(stats_path):
             methods.append(dict(id=k, name=nm, n=v['n'], success=v['success'], contact_runs=v['dyn_contact_runs'],
                                 t_d05=v['t_d05_mean'], time_mean=v['time_ok_mean'], path_ratio=v['path_ratio_ok_median'],
                                 dt_vs_gmpc=(p or {}).get('median')))
+    stopped = any('stop file' in s for s in log[-5:])
     batch = dict(done=n_done, total=160, skips=skips, caps=caps, running=running or fill_running,
-                 status=status(n_done, 160, running or fill_running), last=(log[-1] if log else ''), stats_note=stats_note)
+                 status=('已停止' if stopped else status(n_done, 160, running or fill_running)), last=(log[-1] if log else ''), stats_note=stats_note)
     return batch, conds, methods, recent
+
+
+def n1pilot_row():
+    """N1 先導（三布局 × 靜態／交會 × 種子 101 × 4 方法 = 24 趟）。"""
+    R = os.path.join(HERE, 'results', 'n1pilot')
+    lp = os.path.join(R, 'n1pilot.log')
+    log = open(lp).read().splitlines() if os.path.exists(lp) else []
+    n = sum(1 for f in glob.glob(os.path.join(R, 'n1_*_k*_*.csv')) if sum(1 for _ in open(f)) > 1)
+    run = bool(log) and not any('BATCH DONE' in s for s in log)
+    recent = []
+    for s in [s for s in log if ' try' in s][-8:][::-1]:
+        m = re.match(r'(\d\d:\d\d:\d\d) (n1_\w+?) (static|crossing) k(\d+) (\w+) try(\d+) : (.*)$', s)
+        if m:
+            res = m.group(7)
+            short = '到達' if 'goal reached' in res else ('逾時（200 s）' if 'cap hit' in res else ('系統失敗、重來' if 'skipping' in res else res[:20]))
+            lay = dict(n1_bigarena='多房間', n1_office='辦公室', n1_warehouse='倉儲').get(m.group(2), m.group(2))
+            recent.append(dict(id=f'p{m.group(1)}-{m.group(5)}-{m.group(6)}', time=m.group(1), case=f"N1 先導・{lay}・{'交會' if m.group(3) == 'crossing' else '靜態'}",
+                               method=dict(DYN_METH).get(m.group(5), m.group(5)), attempt=int(m.group(6)), result=short))
+    return dict(id='n1pilot', name='N1 先導（種子 101）', design='三種複雜布局 × 靜態／交會 × 4 方法；GMPC 住宅任務版、四方法 0.26 m/s',
+                done=n, total=24, skips=sum(1 for s in log if 'skipping' in s), caps=sum(1 for s in log if 'cap hit' in s),
+                running=run, status=status(n, 24, run), last=(log[-1] if log else ''), stats_note=''), recent
 
 
 def main():
@@ -136,13 +158,15 @@ def main():
     a = ap.parse_args()
     exps, cells = plan_rows()
     batch, conds, methods, recent = dyn_rows(a.stats)
+    pilot, precent = n1pilot_row()
+    recent = (precent + recent)[:10]
     now = dt.datetime.now()
     snap = dict(at=now.isoformat(timespec='seconds'), at_label=now.strftime('%m/%d %H:%M'),
-                experiments=exps, cells=cells, batch=[dict(id=DYN, name='導航動態能力批次 dyn1126', design='bigarena 10 路線 × 步行／快速 × 等速／停走 × 4 方法（新規劃前開跑，不計入上表）', **batch)],
+                experiments=exps, cells=cells, batch=[pilot, dict(id=DYN, name='dyn1126（11/26，已停）', design='行人太快、GMPC 設定不對，只當有瑕疵的先導', **batch)],
                 conditions=conds, methods=methods, recent=recent)
     json.dump(snap, open(a.out, 'w'), ensure_ascii=False, indent=1)
     core = [e for e in exps if e['tier'] == '核心']
-    print(f"核心 {sum(e['done'] for e in core)}/{sum(e['total'] for e in core)}；含選配 {sum(e['done'] for e in exps)}/{sum(e['total'] for e in exps)}；dyn1126 {batch['done']}/160")
+    print(f"核心 {sum(e['done'] for e in core)}/{sum(e['total'] for e in core)}；含選配 {sum(e['done'] for e in exps)}/{sum(e['total'] for e in exps)}；N1 先導 {pilot['done']}/24；dyn1126 {batch['done']}/160（{batch['status']}）")
 
 
 if __name__ == '__main__':

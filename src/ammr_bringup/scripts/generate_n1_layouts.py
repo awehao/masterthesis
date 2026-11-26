@@ -7,7 +7,7 @@ gz world 名稱沿用 "bigarena"（run_omnibot_dynamic.sh 在 BIGARENA=1 時用�
   n1_office     L2 辦公室走廊：十字走廊 2.4 m、八間辦公室、門 1.6 m、辦公桌
   n1_warehouse  L3 倉儲貨架：左右兩區貨架（中間有橫向通道）、中央主通道 3 m、右側暫存區棧板
 三張共同：
-  * 未知靜態障礙 unknown_obs_0..6：尺寸同 bigarena 的 7 個未知箱；kinematic、有碰撞體、不在地圖；
+  * 未知靜態障礙 unknown_obs_0..7：8 種形狀（細桿、垃圾桶、小箱、推車、長凳、棧板、長條、中箱）；kinematic、有碰撞體、不在地圖；
     平常停在場外，每個種子由情境檔（unknown_static）以 gz set_pose 放到位（make_n1_scenario.py）。
   * 行人 dyn_obs_0..9：形狀同 bigarena；只有外觀、沒有碰撞體（同 bigarena_ghost：不推擠機器人與彼此，雷射看得到）。
   * 地圖只含牆與已知家具。
@@ -25,8 +25,17 @@ import generate_bigarena as GB                                       # noqa: E40
 
 ROOT = Path(__file__).resolve().parents[1]
 LO, HI, T = GB.LO, GB.HI, GB.WALL_T
-UNK_SIZES = [(0.998, 0.973), (1.259, 0.756), (0.704, 0.883), (0.850, 0.859), (0.847, 0.881), (0.804, 0.862), (0.744, 0.905)]
-PARK = [(40.0 + 3.0 * i, 40.0) for i in range(len(UNK_SIZES))]      # 場外停放處（未放置時）
+# 11/27 Howard「路徑上要有各種未知障礙物、要有鑑別度」：8 種形狀（('cyl', r) 或 ('box', sx, sy)）
+UNK_SHAPES = [('cyl', 0.15),            # 細桿（雷射點少）
+              ('cyl', 0.30),            # 垃圾桶
+              ('box', 0.50, 0.50),      # 小箱
+              ('box', 0.80, 0.60),      # 推車
+              ('box', 1.20, 0.40),      # 長凳
+              ('box', 1.00, 1.00),      # 棧板
+              ('box', 1.60, 0.35),      # 長條（橫在路上最難繞）
+              ('box', 0.70, 0.45)]      # 中箱
+UNK_SIZES = UNK_SHAPES                  # 舊名相容
+PARK = [(40.0 + 3.0 * i, 40.0) for i in range(len(UNK_SHAPES))]      # 場外停放處（未放置時）
 
 
 def outer():
@@ -102,15 +111,17 @@ def bigarena_layout():
     return W, known
 
 
-def unknown_sdf(i, sx, sy):
+def unknown_sdf(i, shape):
     x, y = PARK[i]
+    g = (f'<cylinder><radius>{shape[1]:.3f}</radius><length>1.0</length></cylinder>' if shape[0] == 'cyl'
+         else f'<box><size>{shape[1]:.3f} {shape[2]:.3f} 1.000</size></box>')
     return f"""
     <model name="unknown_obs_{i}">
       <pose>{x:.3f} {y:.3f} 0.500 0 0 0</pose>
       <link name="link">
         {GB.BODY_HEAD}
-        <collision name="c"><geometry><box><size>{sx:.3f} {sy:.3f} 1.000</size></box></geometry></collision>
-        <visual name="v"><geometry><box><size>{sx:.3f} {sy:.3f} 1.000</size></box></geometry>
+        <collision name="c"><geometry>{g}</geometry></collision>
+        <visual name="v"><geometry>{g}</geometry>
           <material><ambient>0.9 0.7 0.1 1</ambient><diffuse>0.9 0.7 0.1 1</diffuse></material></visual>
       </link>
     </model>"""
@@ -128,11 +139,11 @@ def write(name, W, known):
                     'negate': 0, 'occupied_thresh': 0.65, 'free_thresh': 0.196}, open(ROOT / 'maps' / f'{name}.yaml', 'w'))
     parts = [GB.box_sdf(f'wall_{i}', *w, '0.4 0.4 0.4 1') for i, w in enumerate(W)]
     parts += [GB.box_sdf(f'known_obs_{i}', *k, '0.45 0.45 0.5 1', 1.0) for i, k in enumerate(known)]
-    parts += [unknown_sdf(i, *s) for i, s in enumerate(UNK_SIZES)]
+    parts += [unknown_sdf(i, sh) for i, sh in enumerate(UNK_SHAPES)]
     parts += [ghost(GB.mover_sdf(nm, 30.0 + 2.0 * j, 30.0, shape, size)) for j, (nm, shape, size) in enumerate(GB.DYN_SHAPES)]
     world = GB.WORLD.replace('<world name="bigarena">', f'<world name="bigarena">\n    <!-- {name}：generate_n1_layouts.py 產生；world 名稱沿用 bigarena 供 set_pose -->')
     (ROOT / 'worlds' / f'{name}.sdf').write_text(world % ''.join(parts))
-    print(f'{name}: {len(W)} 牆段、{len(known)} 已知家具、{len(UNK_SIZES)} 未知箱（場外待放）、{len(GB.DYN_SHAPES)} 行人（無碰撞體）')
+    print(f'{name}: {len(W)} 牆段、{len(known)} 已知家具、{len(UNK_SHAPES)} 未知障礙（8 種形狀，場外待放）、{len(GB.DYN_SHAPES)} 行人（無碰撞體）')
 
 
 def main():

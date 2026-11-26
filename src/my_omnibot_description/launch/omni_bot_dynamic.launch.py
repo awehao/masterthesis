@@ -462,6 +462,8 @@ def generate_launch_description():
                           'publish_rate': 20.0,
                           'input_timeout': float(os.environ.get('GUARD_IN_TO', '0.25')),
                           'dt_max': 0.50,
+                          # NAV_VMAX：合成平移速度上限（四方法共用的最後一層；未設＝0＝關）
+                          'v_xy_max': float(os.environ.get('NAV_VMAX', '0') or 0),
                           # The navigation chain starts with the robot spawned
                           # stationary and no command published yet, so the cold
                           # start really is a confirmed stop.

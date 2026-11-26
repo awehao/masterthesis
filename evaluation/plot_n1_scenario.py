@@ -29,9 +29,13 @@ def draw(ax, yf):
     w, h = map(int, ln.split()); f.readline(); img = np.frombuffer(f.read(), np.uint8).reshape(h, w); r = my['resolution']; ox, oy = my['origin'][:2]
     ax.imshow(img, cmap='gray', extent=[ox, ox + w * r, oy, oy + h * r], alpha=0.9)
     sdf = open(os.path.join(B, 'worlds', lay + '.sdf')).read()
-    size = {mm.group(1): [float(v) for v in re.search(r'<box><size>([\d.]+) ([\d.]+)', mm.group(2)).groups()]
-            for mm in re.finditer(r'<model name="(unknown_obs_\d+)">(.*?)</model>', sdf, re.S)}
+    size = {}
+    for mm in re.finditer(r'<model name="(unknown_obs_\d+)">(.*?)</model>', sdf, re.S):
+        bx = re.search(r'<box><size>([\d.]+) ([\d.]+)', mm.group(2)); cy = re.search(r'<cylinder><radius>([\d.]+)', mm.group(2))
+        size[mm.group(1)] = [float(bx.group(1)), float(bx.group(2))] if bx else ['cyl', float(cy.group(1))]
     for u in Y.get('unknown_static') or []:
+        if size[u['name']][0] == 'cyl':
+            ax.add_patch(Circle((u['x'], u['y']), size[u['name']][1], color='#c53030')); continue
         sx, sy = size[u['name']]; c, s = math.cos(u['yaw']), math.sin(u['yaw'])
         pts = [(u['x'] + c * dx - s * dy, u['y'] + s * dx + c * dy) for dx, dy in ((-sx / 2, -sy / 2), (sx / 2, -sy / 2), (sx / 2, sy / 2), (-sx / 2, sy / 2))]
         ax.add_patch(Polygon(pts, color='#c53030'))
