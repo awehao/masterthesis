@@ -1,0 +1,180 @@
+{
+  "status": "proposed_not_executed",
+  "scope": "simulation_only",
+  "date": "2026-11-26",
+  "pilot": {
+    "first_diagnostic_runs": 12,
+    "composition": {
+      "one_nav_case_four_methods": 4,
+      "two_local_tasks_three_methods": 6,
+      "two_fault_stopping_cases": 2
+    },
+    "included_in_formal_budget": false,
+    "development_and_tuning": "Budget and cases must be frozen separately; pilot runs are not reliability evidence."
+  },
+  "required_decisions_before_freeze": [
+    "method code revision and exact diff",
+    "nominal object, furniture and robot assets",
+    "training/validation/test scene lists",
+    "nominal MPC horizon selected using validation only",
+    "baseline output-interface adapters",
+    "common runtime pacing and command budget",
+    "physical contact configuration",
+    "task tolerances and timeout caps"
+  ],
+  "development_seed_range": [
+    10001,
+    10100
+  ],
+  "formal_case_seed_range": [
+    1,
+    20
+  ],
+  "case_generation": {
+    "note": "Initial proposals for development calibration, not measurements or established robot limits.",
+    "nav_layout_families_core": [
+      "open",
+      "narrow",
+      "cluttered"
+    ],
+    "nav_layout_families_comprehensive": [
+      "open",
+      "narrow",
+      "cluttered",
+      "heldout_house"
+    ],
+    "static_geometry": "Save instantiated obstacle placements and route, not only the random seed; maintain reachability without reference to controller success.",
+    "narrow_passage_width_relative_to_body_diameter": [
+      1.3,
+      1.8
+    ],
+    "other_passage_width_relative_to_body_diameter": [
+      2.0,
+      4.0
+    ],
+    "obstacle_speed_ratio_to_robot_norm_speed_cap": [
+      0.25,
+      0.5,
+      0.75,
+      1.0,
+      1.25
+    ],
+    "single_obstacle_motions": [
+      "crossing",
+      "opposing",
+      "merging"
+    ],
+    "multi_motion_profiles": [
+      "constant_speed",
+      "piecewise_speed",
+      "curved_path"
+    ],
+    "route_length_relative_to_body_diameter": [
+      12,
+      30
+    ],
+    "local_start_xy_perturbation_m": [
+      -0.1,
+      0.1
+    ],
+    "local_start_yaw_perturbation_deg": [
+      -10,
+      10
+    ],
+    "object_nominal_dimension_scale_range": [
+      0.9,
+      1.1
+    ],
+    "size_prior": "The same allowed geometry prior is supplied to all methods; this plan does not claim unknown-object size inference.",
+    "local_door_goal_deg": 45,
+    "house_door_goal_deg": 85,
+    "strict_park_feasibility": "Pre-screen the entire local mechanism path at fixed base for every case using method-independent geometry/IK; publish rejected candidate counts. House sequential strategy may move during mechanism operation.",
+    "physics_material_and_mass": "Record nominal mass, inertia, contact/friction and joint limits from the frozen assets. Physical friction is the main condition; fixed relative constraint is a diagnostic only."
+  },
+  "fairness": {
+    "nav_methods": [
+      "nav_full",
+      "mppi_omni_shared_guard",
+      "dwb_omni_shared_guard",
+      "rpp_shared_guard"
+    ],
+    "local_methods": [
+      "wb_mpc_full",
+      "holistic_qp_adapted",
+      "strict_park_wb_mpc"
+    ],
+    "house_methods": [
+      "wb_mpc_full",
+      "holistic_qp_adapted",
+      "sequential_approach_wb_mpc"
+    ],
+    "nav_common_guard": true,
+    "guard_intervention_metrics_required": true,
+    "translational_limit": "same velocity-vector norm cap plus same wheel limits; not independent vx/vy caps only",
+    "rpp_role": "forward/yaw reference; lateral capability differs",
+    "tuning": "same development data and predeclared tuning budget; allow method-specific internal costs; no formal-test retuning",
+    "wholebody_adapter": "document the external QP adaptation to this robot and position interface; verify free-space command response; N=1 is an internal ablation, not the external baseline",
+    "runtime_pacing": "same fixed target pacing for all methods within a comparison; prefer 1.0 if feasible in pilot; slower common pacing supports control effectiveness but not unverified real-time claims"
+  },
+  "nominal_horizon_candidates": [
+    1,
+    5,
+    10,
+    20
+  ],
+  "physics_dt_s": 0.01,
+  "controller_dt_s": 0.05,
+  "success_thresholds_initial_proposal": {
+    "nav_position_m": 0.15,
+    "nav_yaw_deg": 10,
+    "nav_hold_s": 0.5,
+    "door_open_tolerance_deg": 5,
+    "door_closed_deg": 3,
+    "drawer_open_m": 0.2,
+    "drawer_tolerance_m": 0.005,
+    "drawer_closed_m": 0.005,
+    "storage": "whole object geometry within bin interior and stable for 1 s",
+    "full_task": "all required stages, terminal base/arm state, and no unpermitted contact",
+    "stopping": "measure actual base and joint velocities continuously, report fault-to-stop and last-input-to-stop separately; a tail-done event or frozen physics is insufficient",
+    "timeouts": "Set family-level simulation caps and infrastructure caps on validation data before test; all methods share the same caps."
+  },
+  "perception_test": {
+    "core_scene_seeds": 30,
+    "comprehensive_scene_seeds": 60,
+    "views_per_scene": 10,
+    "minimum_valid_instances_per_class": 50,
+    "split_unit": "scene/asset/sequence, never adjacent frames",
+    "offline_methods": [
+      "predicted_mask_same_geometry",
+      "ground_truth_mask_same_geometry"
+    ],
+    "metrics": [
+      "mask_AP_50_95",
+      "AP50",
+      "IoU",
+      "miss_rate",
+      "false_positives",
+      "3D_position_error",
+      "orientation_error_symmetry_aware",
+      "door_angle_error"
+    ],
+    "network_training_data_included_in_budget": false
+  },
+  "primary_outcome": "task completion without unintended contact",
+  "statistical_unit": "paired scenario seed; cluster repeated frames and ticks within the scenario",
+  "timing_analysis": "report paired-both-success sample size and conditional times; all-attempt success and preregistered failure-penalized score separately",
+  "multiple_comparisons": "predeclare primary comparator; adjust multiple primary contrasts (e.g. Holm)",
+  "confidence_intervals": "paired/cluster bootstrap for continuous summaries; stratify layouts; binomial bounds only under their assumptions",
+  "failures": [
+    "unintended_contact",
+    "task_geometry_failure",
+    "grasp_failure",
+    "deadline",
+    "solver_failure",
+    "sensor_stale",
+    "timeout",
+    "stop_not_verified",
+    "infrastructure_error"
+  ],
+  "not_run": "This directory contains planning artifacts and generators only; no ROS or simulator launch is performed."
+}
