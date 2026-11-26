@@ -93,6 +93,67 @@ def summarize(rows):
     return S
 
 
+COL = dict(gmpc_scan='#2b6cb0', mppi='#c05621', dwb='#2f855a', rpp='#8a8f98')
+COND = [('walk', 'const', '步行・等速'), ('walk', 'stopgo', '步行・停走'), ('fast', 'const', '快速・等速'), ('fast', 'stopgo', '快速・停走')]
+
+
+def plot(rows, out):
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    plt.rcParams['font.sans-serif'] = ['Noto Sans CJK TC', 'Noto Sans CJK JP', 'WenQuanYi Zen Hei', 'DejaVu Sans']
+    plt.rcParams['axes.unicode_minus'] = False
+    M = list(BAGTAG)
+    fig, ax = plt.subplots(1, 4, figsize=(20, 4.8), gridspec_kw=dict(width_ratios=[1.4, 1, 1, 1]))
+    w = 0.2
+    conds = [c for c in COND if any(r['speed'] == c[0] and r['pattern'] == c[1] for r in rows)]
+    for j, m in enumerate(M):
+        ys, txt = [], []
+        for sp, pt, _ in conds:
+            x = [r for r in rows if r['method'] == m and r['speed'] == sp and r['pattern'] == pt]
+            ys.append(100.0 * sum(1 for r in x if (r.get('n_contact_dyn') or 0) > 0) / len(x) if x else np.nan)
+            txt.append('%d/%d' % (sum(1 for r in x if r['success']), len(x)))
+        xs = np.arange(len(conds)) + (j - 1.5) * w
+        ax[0].bar(xs, ys, w, color=COL[m], label=NAME[m])
+        for xx, yy, tt in zip(xs, ys, txt):
+            if np.isfinite(yy):
+                ax[0].text(xx, yy + 1.5, tt, ha='center', va='bottom', fontsize=6.5, rotation=90)
+    ax[0].set_xticks(range(len(conds))); ax[0].set_xticklabels([c[2] for c in conds])
+    ax[0].set_ylabel('有碰到行人的趟數比例（%）'); ax[0].set_title('與行人碰撞（柱上＝到達／總趟數）', fontsize=10)
+    ax[0].legend(frameon=False, fontsize=8, ncol=4, loc='upper left'); ax[0].set_ylim(0, 115)
+    for k, (key, lab, ttl) in enumerate((('dmin_dyn_m', '對行人最小表面距離（m，<0＝碰撞）', '最近距離（全部情境）'),
+                                         ('t_d05_s', '行人 0.5 m 內時間（s）', '貼近行人的時間'))):
+        data = [[r[key] for r in rows if r['method'] == m and key in r] for m in M]
+        bp = ax[1 + k].boxplot(data, widths=0.55, patch_artist=True, showfliers=False)
+        for b, m in zip(bp['boxes'], M):
+            b.set_facecolor(COL[m]); b.set_alpha(0.35); b.set_edgecolor(COL[m])
+        for i, (d, m) in enumerate(zip(data, M)):
+            ax[1 + k].scatter(np.full(len(d), i + 1) + np.random.default_rng(i).uniform(-0.18, 0.18, len(d)), d, s=10, color=COL[m], alpha=0.8, zorder=3)
+        ax[1 + k].set_xticks(range(1, len(M) + 1)); ax[1 + k].set_xticklabels([NAME[m] for m in M], fontsize=8)
+        ax[1 + k].set_ylabel(lab); ax[1 + k].set_title(ttl, fontsize=10)
+        if key == 'dmin_dyn_m':
+            ax[1 + k].axhline(0, color='#1a1a1a', lw=0.8, ls='--')
+    cases = sorted({(r['speed'], r['pattern'], r['route']) for r in rows})
+    for i, m in enumerate(('mppi', 'dwb', 'rpp')):
+        d = []
+        for c in cases:
+            g = [r for r in rows if (r['speed'], r['pattern'], r['route']) == c and r['method'] == 'gmpc_scan' and r['success']]
+            o = [r for r in rows if (r['speed'], r['pattern'], r['route']) == c and r['method'] == m and r['success']]
+            if g and o:
+                d.append(o[0]['time_s'] - g[0]['time_s'])
+        ax[3].scatter(np.full(len(d), i) + np.random.default_rng(10 + i).uniform(-0.15, 0.15, len(d)), d, s=12, color=COL[m])
+        if d:
+            ax[3].plot([i - 0.25, i + 0.25], [np.median(d)] * 2, color='#1a1a1a', lw=1.6)
+            ax[3].text(i, max(d) + 2, '中位 %+.1f s\nn=%d' % (np.median(d), len(d)), ha='center', va='bottom', fontsize=7.5)
+    ax[3].axhline(0, color='#1a1a1a', lw=0.8, ls='--')
+    lo_, hi_ = ax[3].get_ylim(); ax[3].set_ylim(lo_, hi_ + 0.25 * (hi_ - lo_))   # 中位數標註留空間，不壓標題
+    ax[3].set_xticks(range(3)); ax[3].set_xticklabels(['MPPI', 'DWB', 'RPP']); ax[3].set_ylabel('到達時間 − GMPC（s，同案例）')
+    ax[3].set_title('到達時間（兩者都到達的案例）', fontsize=10)
+    for a in ax:
+        a.spines['top'].set_visible(False); a.spines['right'].set_visible(False); a.grid(axis='y', alpha=0.25)
+    fig.tight_layout(); fig.savefig(out, dpi=130)
+
+
 def main():
     av = sys.argv
     rows = collect(av[1])
@@ -104,6 +165,8 @@ def main():
     print(json.dumps(S, ensure_ascii=False, indent=1))
     if '--json' in av:
         json.dump(dict(summary=S, runs=rows), open(av[av.index('--json') + 1], 'w'), ensure_ascii=False, indent=1)
+    if '--png' in av:
+        plot(rows, av[av.index('--png') + 1])
 
 
 if __name__ == '__main__':
