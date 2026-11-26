@@ -2,7 +2,7 @@
 # N1 導航外部基線批次（11/27 新規劃；Howard：三種複雜布局、行人 0.10–0.25 m/s、未知靜態障礙、隨機起終點、障礙不刻意）
 # 用法：run_n1_batch.sh <批次名> <布局,...> <條件,...> <種子起> <種子迄>
 #   例：run_n1_batch.sh n1pilot n1_bigarena,n1_office,n1_warehouse static,crossing 101 101
-# 種子 1–10＝正式測試（登記 status=done）；101 以後＝先導／開發（登記 status=pilot，不計入 N1 完成數）。
+# 種子 1–20＝正式測試（登記 status=done；11/27 Howard：每布局 20 種子、全部交會）；101 以後＝先導／開發（登記 status=pilot）。
 # 共同條件：SCENE=<布局>（世界＋地圖）、scheduled 時序、SHIELD=1 GUARD=1、NAV_VMAX=0.26（四方法平移上限一致，Howard 11/27 選「全部 0.26」）、時限 200 s。
 # GMPC（gmpc_scan）＝住宅任務版（Howard 11/27 選）：與 run_d2_isaac.sh 相同的導航開關 HEADING=1 GMPC_TASK=1（6 個 CBF／規劃參數用程式預設，同住宅任務），
 #   加會車層 NAV_YIELD=1 D2_YIELD_SIDE=1 YS_PRED=1（住宅任務 task.env 同值；地圖淨空 M8_MAP=<布局>），接在任務擴充節點的參考視窗（gmpc_task_node）。
@@ -46,7 +46,7 @@ for K in $(seq "$K0" "$K1"); do
           RES=$(grep -E 'goal reached|cap hit|skipping' "$OUT" | tail -1 | sed 's/^\[[0-9:]*\] *//')
           echo "$(date +%T) $LY $CD k$K $M try$TRY : ${RES:-no_result}" >> "$LOG"
           case "$RES" in *skipping*|"") sleep 10; continue;; esac
-          if [ "$K" -le 10 ]; then ST=done; else ST=pilot; fi
+          if [ "$K" -le 20 ]; then ST=done; else ST=pilot; fi
           break
         done
         echo "N1/N/$LY/$CD/seed$(printf %02d "$K")/$M,$ST,$B,$R/${LY}_${CD}_k${K}_${M}.csv,$(date +%F_%T)" >> "$REG"
