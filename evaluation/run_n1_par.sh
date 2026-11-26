@@ -31,6 +31,17 @@ for K in $(seq "$K0" "$K1"); do
 done
 echo "$(date +%T) cases=${#CASES[@]}" >> "$LOG"
 
+lane_kill() {   # 收掉環境變數含 GZ_PARTITION=n1lane<車道> 的所有程序（本車道開的 gz、ros2、橋接、節點）
+  local tag="GZ_PARTITION=n1lane$1" p sig
+  for sig in INT KILL; do
+    for p in $(pgrep -u "$(id -u)"); do
+      [ "$p" = "$$" ] && continue
+      tr '\0' '\n' < /proc/$p/environ 2>/dev/null | grep -qx "$tag" && kill -$sig "$p" 2>/dev/null
+    done
+    sleep 2
+  done
+}
+
 run_case() {   # $1 lane  $2 layout  $3 cond  $4 seed
   local LN=$1 LY=$2 CD=$3 K=$4
   local F=$D/${LY}_${CD}_k${K}.yaml
@@ -51,6 +62,7 @@ run_case() {   # $1 lane  $2 layout  $3 cond  $4 seed
       pid=$!
       wait $pid
       pkill -INT -s $pid 2>/dev/null; sleep 2; pkill -KILL -s $pid 2>/dev/null    # 車道保險：這趟 session 殘留的程序全收
+      lane_kill "$LN"                                                   # 再依環境變數 GZ_PARTITION 收（換了 session 的 gz 也收得到；11/27 先導：上一趟 gz 殘留 ⇒ 下一趟時鐘等不到）
       RES=$(grep -E 'goal reached|cap hit|skipping' "$OUT" | tail -1 | sed 's/^\[[0-9:]*\] *//')
       echo "$(date +%T) L$LN $LY $CD k$K $M try$TRY : ${RES:-no_result}" >> "$LOG"
       case "$RES" in *skipping*|"") sleep 8; continue;; esac
