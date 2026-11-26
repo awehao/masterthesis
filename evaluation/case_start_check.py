@@ -17,7 +17,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument('stage', choices=['preposition', 'epoch', 'moving'])
 ap.add_argument('--traj', default='', help='相位資產（preposition 需要）')
 ap.add_argument('--window', type=float, default=3.0)
-ap.add_argument('--discover', type=float, default=12.0,
+ap.add_argument('--discover', type=float, default=25.0,   # 11/27 平行車道：3 個模擬同時啟動時 12 s 內常只配對到一半主題 ⇒ 25 s（只延後起跑、不影響情境時序）
                 help='開始取樣前，等訂閱配對上的最長秒數')
 ap.add_argument('--tol', type=float, default=0.05, help='定位容差 m')
 ap.add_argument('--max-speed', type=float, default=0.02)
