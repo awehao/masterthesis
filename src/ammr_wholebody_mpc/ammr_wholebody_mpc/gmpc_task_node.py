@@ -138,6 +138,13 @@ class GMPCTaskNode(GMPCNode):
         def _unstuck(X_now, obstacles, xi_ref_win=None):
             if not self._t_unstuck or obstacles is None:
                 return obstacles
+            # 只在一般導航作用：住宅任務的任務模式（速度框／朝向條件、區域模式、前端模式）車子本來就會停（例：門口停車讓手臂開門），
+            # 不能當成卡住去縮安全距離。進入任務模式時若正在解鎖，立即結束並清歷史。
+            if self._t_mode != 'idle' or self._t_region is not None or self._t_frontend:
+                if self._t_us.get('on_since') is not None:
+                    self.get_logger().info('UNSTUCK off（進入任務模式）')
+                self._t_us.update(on_since=None, slow_since=None, hist=[])
+                return obstacles
             P_ = self._t_us_par; st = self._t_us
             now = self.get_clock().now().nanoseconds * 1e-9
             X_now = np.asarray(X_now, float); pxy = np.array([X_now[0, 2], X_now[1, 2]])
