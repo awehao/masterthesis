@@ -287,19 +287,19 @@ def overall_workflow():
     ax=plain(fig,[.025,.025,.95,.95],(0,11),(0,12.2))
     x=3.85;w=5.55;h=1.05
     node(ax,x,11.25,w,h,"1　更新狀態與感知","位姿、關節、設定點與有效觀測")
-    node(ax,x,9.35,w,h,"2　建立生效狀態與參考","前推既定命令；更新導航及操作目標")
+    node(ax,x,9.35,w,h,"2　建立預測狀態與參考","補償命令延遲；更新導航及操作目標")
     node(ax,x,7.45,w,h,"3　全身 GMPC 求解","共同計算底盤與手臂命令")
     for y1,y2 in [(10.725,9.875),(8.825,7.975),(6.925,6.18)]:arrow(ax,(x,y1),(x,y2))
     diamond=Polygon([(x,6.18),(x+2.15,5.35),(x,4.52),(x-2.15,5.35)],
                      ec=INK,fc="white",lw=1.05,zorder=5)
-    ax.add_patch(diamond);text(ax,x,5.35,"控制段通過核對？",10.7)
+    ax.add_patch(diamond);text(ax,x,5.35,"命令通過限制檢查？",10.7)
     arrow(ax,(x,4.52),(x,3.63));text(ax,x-.28,4.08,"是",10,ha="right")
-    node(ax,x,3.10,w,h,"4　執行新控制段","底盤命令防護；手臂設定點更新")
+    node(ax,x,3.10,w,h,"4　執行控制命令","底盤命令防護；手臂設定點更新")
     stopx=8.80
-    arrow(ax,(x+2.15,5.35),(stopx,5.35));text(ax,7.18,5.70,"否／逾時",10.1)
+    arrow(ax,(x+2.15,5.35),(stopx,5.35));text(ax,7.18,5.70,"否",10.1)
     line(ax,[(stopx,5.35),(stopx,3.95)],lw=1.15)
     arrow(ax,(stopx,3.95),(stopx,3.63))
-    node(ax,stopx,3.10,3.15,h,"停止備援","沿停止尾段",fill=LIGHT,size=10.7)
+    node(ax,stopx,3.10,3.15,h,"減速與停止","依實際速度判定",fill=LIGHT,size=10.7)
     node(ax,x,1.15,w,h,"5　執行回授","回報最終命令、設定點與新狀態")
     arrow(ax,(x,2.575),(x,1.675))
     line(ax,[(stopx,2.575),(stopx,1.15),(x+w/2,1.15)],lw=1.15)
@@ -308,7 +308,7 @@ def overall_workflow():
     arrow(ax,(.40,11.25),(x-w/2,11.25),ls="--",lw=1)
     text(ax,.66,6.10,"下一控制週期",10,rotation=90)
     export(fig,"wholebody_control_workflow","全身預測控制之計算、命令核對與執行回授流程",
-           "3.7.4 第一段之後、控制步驟列表之前","從有效觀測到共同求解，再經接受判定與實際執行回授形成閉迴路。")
+           "3.7.4 第一段之後、控制步驟列表之前","從有效觀測到共同求解，再經限制檢查與實際執行回授形成閉迴路。")
 
 
 def contact_sheet(items=None,name="chapter3_figures_overview.png",columns=2):

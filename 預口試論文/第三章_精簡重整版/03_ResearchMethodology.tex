@@ -199,9 +199,14 @@ $B_a$ 的第 $i$ 個對角元素為
 $\alpha_i\Delta t_p\sum_{\ell=0}^{m-1}\ell\beta_i^{m-1-\ell}$，
 且 $(c_a)_i=(b_a)_i(1-\beta_i^m)/\alpha_i$。
 
-結合底盤誤差，定義
-$\zeta_k=[e_{B,k}^\top,q_{a,k}^\top,s_{a,k}^\top]^\top\in\mathbb R^{15}$，
-$u_k=[\delta\xi_k^\top,u_{a,k}^\top]^\top\in\mathbb R^9$，可得
+結合底盤誤差，定義增廣狀態與控制輸入為
+\[
+    \begin{aligned}
+        \zeta_k&=[e_{B,k}^\top,q_{a,k}^\top,s_{a,k}^\top]^\top\in\mathbb R^{15},\\
+        u_k&=[\delta\xi_k^\top,u_{a,k}^\top]^\top\in\mathbb R^9 .
+    \end{aligned}
+\]
+則增廣預測模型為
 \begin{equation}
     \begin{gathered}
     \zeta_{k+1}=F_k\zeta_k+G_ku_k+d_k,\\
@@ -293,27 +298,26 @@ $\mathcal I_{\mathrm{est}}$ 為估計資料索引，估計後檢查 $0<\hat\alph
     \end{bmatrix}.
     \label{eq:ch3_tcp_pose_residual}
 \end{equation}
-姿態殘差轉至世界座標，與幾何雅可比一致。
-基本目標函數為
+姿態殘差轉至世界座標，與幾何雅可比一致。完整成本包含六項：
 \begin{equation}
-    \begin{aligned}
-        J={}&\sum_{i=1}^{N}
-        \left(\|e_{B,i|k}\|_{Q_{B,i}}^2+
-              \|r_{E,i|k}\|_{W_E}^2\right)\\
-        &+\sum_{i=0}^{N-1}
-        \left(\|u_{i|k}\|_R^2+
-              \|\Delta v_{i|k}\|_S^2\right).
-    \end{aligned}
+    J_{\mathrm{total}}
+    =J_B+J_E+J_u+J_\Delta+J_{\mathrm{post}}+J_\varepsilon .
     \label{eq:ch3_wholebody_objective}
 \end{equation}
-其中 $v=[\xi_B^\top,u_a^\top]^\top$ 為完整命令，
-$\xi_B=\xi_r+\delta\xi$。
-以下將四項成本依序記為 $J_B$、$J_E$、$J_u$ 與 $J_\Delta$，
-以對角權重展開各分量；各分量係數皆為非負值。
+其中前四項為基本成本，構型引導與避障鬆弛依任務啟用。
+令完整命令 $v=[\xi_B^\top,u_a^\top]^\top$，$\xi_B=\xi_r+\delta\xi$；
+以下以非負對角權重展開各項。
 
 \noindent\textbf{（一）底盤追蹤成本。}
-令 $e_B=[e_{B,x},e_{B,y},e_{B,\theta}]^\top$，
-$Q_{B,i}=\operatorname{diag}(w_{B,x,i},w_{B,y,i},w_{B,\theta,i})$，則
+令底盤誤差向量與對角權重矩陣分別為
+\[
+    \begin{aligned}
+        e_B&=[e_{B,x},e_{B,y},e_{B,\theta}]^\top,\\
+        Q_{B,i}&=\operatorname{diag}
+        (w_{B,x,i},w_{B,y,i},w_{B,\theta,i}).
+    \end{aligned}
+\]
+則底盤追蹤成本為
 \begin{equation}
     J_B=\sum_{i=1}^{N}\left[
         w_{B,x,i}e_{B,x,i|k}^{2}
@@ -340,12 +344,9 @@ $Q_{B,N}$ 是預測最後一步使用的終端權重，
     \end{aligned}
     \label{eq:ch3_tcp_tracking_cost_expanded}
 \end{equation}
-位置項要求 TCP 接近目標位置，姿態項要求工具方向符合抓取或機構操作姿態。
-位置以公尺、姿態以弧度計算，須依容許偏差設定相對尺度；
-姿態分量採式\eqref{eq:ch3_tcp_pose_residual}的旋轉誤差向量。
-末端位姿同時取決於底盤與手臂，因此此項會共同調整兩者的運動；
-其局部交叉項於第 3.3.3 節說明。
-持物階段改依第 3.6.3 節使用底盤相對殘差，沿用相同的加權方式。
+位置項要求 TCP 接近目標，姿態項要求工具方向符合操作需求，兩者分別以公尺與弧度計算。
+權重依容許偏差設定相對尺度；此項透過末端運動學共同調整底盤與手臂。
+持物階段改用第 3.6.3 節的底盤相對殘差。
 
 \noindent\textbf{（三）輸入大小成本。}
 以 $\delta\xi=[\delta v_x^B,\delta v_y^B,\delta\omega_B]^\top$ 表示底盤速度修正量，
@@ -365,7 +366,7 @@ $Q_{B,N}$ 是預測最後一步使用的終端權重，
 輸入權重亦提供數值正則化，與關節及速度硬限制共同約束命令。
 
 \noindent\textbf{（四）命令差分成本。}
-令 $v_k^{\mathrm{prev}}$ 為預測生效起點前的放行命令，則
+令 $v_k^{\mathrm{prev}}$ 為預測起點前實際作用的命令，則
 \begin{equation}
     \begin{gathered}
         \Delta v_{i|k}=
@@ -399,7 +400,7 @@ $\Delta u_a$ 為手臂設定點變化率的差分。
 此處採命令差，其與命令變化率的換算為 $\Delta v/\Delta t$；
 速度與命令變化的可執行上限另由限制條件施加。
 
-\noindent\textbf{（五）選用成本與權重配置。}
+\noindent\textbf{（五）構型引導與（六）避障鬆弛成本。}
 啟用構型引導時，以參考關節構型 $q_{a,i}^{\mathrm{exp}}$ 引導手臂分支；
 啟用 CBF 鬆弛時，對各限制群組與預測步的鬆弛量加入成本：
 \begin{equation}
@@ -409,9 +410,7 @@ $\Delta u_a$ 為手臂設定點變化率的差分。
         \kappa_j(q_{a,j,i|k}-q_{a,j,i}^{\mathrm{exp}})^2,\\
         J_\varepsilon
         &=\sum_{i=0}^{N-1}\sum_{g\in\mathcal C}
-        w_{\varepsilon,g,i}\varepsilon_{g,i|k}^{2},\\
-        J_{\mathrm{total}}
-        &=J_B+J_E+J_u+J_\Delta+J_{\mathrm{post}}+J_\varepsilon .
+        w_{\varepsilon,g,i}\varepsilon_{g,i|k}^{2} .
     \end{aligned}
     \label{eq:ch3_optional_cost_terms}
 \end{equation}
@@ -420,13 +419,10 @@ $\mathcal C$ 為啟用的 CBF 限制群組，$w_{\varepsilon,g,i}>0$ 為鬆弛�
 鬆弛權重越大，違反屏障條件的代價越高，仍須檢查實際鬆弛量與間距。
 未啟用的選用成本取零，關節及速度等硬限制持續施加。
 
-各權重先依位置、角度與命令的容許尺度調整，再配合任務階段設定相對比重。
-底盤與末端追蹤項分別反映路徑推進及操作精度需求，
-輸入與差分項則抑制過大修正及命令突變；其比重形成同一 QP 內的軟性取捨。
-目前手臂配置以共用設定點變化率上限 $\bar u_a$ 正規化命令成本，
-即 $r_{a,j}=w_a/\bar u_a^2$、$\sigma_{a,j}=w_s/\bar u_a^2$，
-其中 $w_a,w_s$ 為對應調整係數。
-各階段的實際權重與啟用組合於實驗配置中列示。
+各權重依容許偏差與命令尺度設定，再調整路徑追蹤、操作精度及命令平滑的相對比重。
+手臂命令以設定點變化率上限 $\bar u_a$ 正規化，
+取 $r_{a,j}=w_a/\bar u_a^2$、$\sigma_{a,j}=w_s/\bar u_a^2$；
+$w_a,w_s$ 為調整係數，實際數值與啟用組合於第四章列示。
 
 % ==================================================
 % 3.3.2 關節、命令變化與輪級運動限制
@@ -501,32 +497,9 @@ $C_i=\partial[x_B,y_B,\theta_B]^\top/\partial e_B$
 $\bar r_{E,i|k}$ 為名目殘差。
 $L_{i,k}$ 同時包含底盤與手臂分量，使末端成本產生兩者的交叉項。
 
-將各步殘差與命令差分堆疊：
-\begin{equation}
-    \begin{aligned}
-        \mathbf E_{B,k}&=M_{B,k}\mathbf U_k+c_{B,k},\\
-        \mathbf r_{E,k}&\approx\mathbf r_{0,k}-\mathcal L_k\mathbf U_k,\\
-        \Delta\mathbf V_k&=D\mathbf U_k+c_{\Delta,k}.
-    \end{aligned}
-    \label{eq:ch3_stacked_objective_maps}
-\end{equation}
-$M_{B,k},c_{B,k}$ 由底盤預測列取得，
-$\mathcal L_k,\mathbf r_{0,k}$ 由末端近似堆疊；
-$D$ 為一階差分矩陣，$c_{\Delta,k}$ 包含參考速度變化與先前命令。
-令 $\mathcal Q_B,\mathcal W_E,\mathcal R,\mathcal S$ 為分塊權重矩陣，
-代入式\eqref{eq:ch3_wholebody_objective}並省略常數項後，
-\begin{equation}
-    \begin{aligned}
-        H_k=2\big(&M_{B,k}^\top\mathcal Q_B M_{B,k}
-        +\mathcal L_k^\top\mathcal W_E\mathcal L_k\\
-        &+\mathcal R+D^\top\mathcal S D\big),\\
-        g_k=2\big(&M_{B,k}^\top\mathcal Q_B c_{B,k}
-        -\mathcal L_k^\top\mathcal W_E\mathbf r_{0,k}\\
-        &+D^\top\mathcal S c_{\Delta,k}\big).
-    \end{aligned}
-    \label{eq:ch3_wholebody_qp_cost_matrices}
-\end{equation}
-構型引導啟用時另加入其二次項與一次項。
+將各步追蹤殘差、完整命令差分及構型引導代入式\eqref{eq:ch3_wholebody_objective}，
+省略常數項後，累加得到二次項矩陣 $H_k$ 與一次項向量 $g_k$；
+避障鬆弛成本另以 $J_\varepsilon$ 表示。
 連同命令、關節、輪級與避障限制，形成二次規劃（Quadratic Programming, QP）：
 \begin{equation}
     \begin{aligned}
@@ -556,8 +529,8 @@ $\varepsilon$ 僅放寬允許鬆弛的限制，硬限制對應的 $B_{\varepsilo
 每次更新依新狀態、參考與障礙資訊重建局部問題。
 首步底盤命令為 $\xi_{B,k}^{\mathrm{cmd}}=\xi_{r,k}+\delta\xi_{0|k}^{*}$，
 手臂命令為 $u_{a,0|k}^{*}$。
-控制段通過接受檢查後，於指定生效步接續；求解完成與命令生效分別記錄。
-參考或任務切換時，承接實際狀態、設定點及已接受命令，重新建立名目預測。
+命令通過限制與幾何檢查後執行。
+參考或任務切換時，承接實際狀態、設定點及目前命令，重新建立名目預測。
 
 % ==================================================
 % 3.4 動態障礙預測與導航參考調整
@@ -568,7 +541,7 @@ $\varepsilon$ 僅放寬允許鬆弛的限制，硬限制對應的 $B_{\varepsilo
 完整導航配置由障礙運動估測、速度與偏移候選調整、QP 內 CBF，
 以及執行端原始掃描防護組成，分別處理交會時間、通行位置與接近速度。
 純導航與住宅任務沿用此方法結構，
-各項實驗的模組開關與版本則於第四章分別列示。
+各項實驗的模組配置則於第四章分別列示。
 
 % ==================================================
 % 3.4.1 障礙物表示與運動估測
@@ -592,9 +565,8 @@ $\varepsilon$ 僅放寬允許鬆弛的限制，硬限制對應的 $B_{\varepsilo
 $\Delta\tau$ 為追蹤更新間隔，$w_g,n_g$ 為雜訊。
 追蹤器交替進行狀態預測與量測修正\cite{welch2004kalman}，
 其循環如\cref{fig:ref_kalman_predict_update}所示。
-同一物件的表面樣本共用估計平移速度；
-短暫失去觀測時依中心位移更新樣本，並限制保留時間。
-此近似未描述遮蔽期間的物件旋轉與變形。
+同物件樣本共用估計平移速度；短暫遮蔽時依中心位移更新並限制保留時間，
+此近似未描述物件旋轉與變形。
 
 \begin{figure}[htbp]
     \centering
@@ -613,17 +585,8 @@ CBF 使用追蹤器的樣本速度，兩者不視為同一估測量。
 \label{subsec:future_motion_conflict}
 
 令 $T_{\mathrm{pred}}$ 為候選評估時域，$\tau_i$ 為未來取樣時刻。
-依導航視窗主要方向 $e_{\mathrm{nav},k}$ 與前進速度 $v_{\mathrm{nav},k}$，
-候選 $c$ 的局部運動近似為
-\begin{equation}
-    p_B^{(c)}(\tau_i)=p_{B,0}
-    +\rho_c v_{\mathrm{nav},k}e_{\mathrm{nav},k}\tau_i
-    +\delta_c(\tau_i)n_c.
-    \label{eq:ch3_candidate_base_motion}
-\end{equation}
-$p_{B,0}$ 為起點，$\rho_c\geq0$ 為速度比例，
-$n_c$ 為偏移方向，$\delta_c$ 為受變化率限制的偏移量。
-候選包含維持路徑、調速、左右側移及向障礙來向退讓；
+對維持路徑、調速、左右側移及向障礙來向退讓等候選，
+依速度與偏移變化率限制生成未來底盤位置 $p_B^{(c)}(\tau_i)$。
 抓取接近階段則限制為不加速及不新增偏移。
 
 以外形補償中心 $\tilde c_{g,k}$ 與歷史速度 $\tilde v_{g,k}$ 外推障礙，
@@ -658,41 +621,15 @@ CBF 使用表面樣本，不重複加入完整物件半徑。
 \subsection{速度與側移候選評估及導航參考更新}
 \label{subsec:candidate_reference_update}
 
-偏移候選先以地圖距離場及未知靜態回波排除會新增障礙侵入的偏移。
-候選成本為
-\begin{equation}
-    \begin{aligned}
-        J_c={}&T_{\mathrm{pred}}
-        -\frac{e_{\mathrm{nav},k}^\top
-        [p_B^{(c)}(T_{\mathrm{pred}})-p_{B,0}]}
-        {v_{\mathrm{nav},k}}\\
-        &+w_{\mathrm{lat}}\delta_{c,\max}
-        +w_{\mathrm{sw}}\mathbb I(c\ne c_{k-1}).
-    \end{aligned}
-    \label{eq:ch3_candidate_motion_cost}
-\end{equation}
-$\delta_{c,\max}=\max_i|\delta_c(\tau_i)|$，$\mathbb I$ 為指示函數，
-$w_{\mathrm{lat}},w_{\mathrm{sw}}\geq0$。
-前兩項將進度損失換算為時間，其餘抑制偏移與切換；
-前進速度過小時不啟用評分。
+偏移候選先以地圖距離場及未知靜態回波排除會新增障礙侵入的偏移，
+再依前進進度損失、側移量及候選切換評分。
+進度損失換算為時間，側移與切換成本抑制過大偏移及反覆變更；前進速度過低時不評分。
 
-令 $\mathcal A_k$ 為本輪實際評估且通過幾何篩選的候選，
-$\mathcal A_k^+=\{c\in\mathcal A_k:D_c\geq0\}$，則
-\begin{equation}
-    c_k^*=
-    \begin{cases}
-        \displaystyle\arg\min_{c\in\mathcal A_k^+}J_c,
-        &\mathcal A_k^+\ne\varnothing,\\[1mm]
-        \displaystyle\arg\max_{c\in\mathcal A_k}D_c,
-        &\mathcal A_k^+=\varnothing.
-    \end{cases}
-    \label{eq:ch3_candidate_selection_rule}
-\end{equation}
-新候選另需額外間距裕度以形成遲滯，超過計算預算時取已評估者中的最佳候選。
-全數不符合間距時，保留間距最大的退化候選及其餘量，不能視為已通過避障。
-速度比例用於參考時間縮放，偏移逐步加入或收回；
-未取得可用調整時沿用參考或收回既有偏移，實際命令仍由 QP 與執行端防護核對。
-零前進速度候選不代表平台可瞬間停止。
+在本輪已評估且間距餘量非負的候選中選擇最低成本者；
+若全部餘量為負，則保留間距最大的退化候選，仍須經 QP 與執行端防護核對。
+額外間距裕度形成切換遲滯，評估範圍受計算預算限制。
+速度比例用於參考時間縮放，偏移逐步加入或收回；未取得調整時沿用參考或收回既有偏移。
+零速度候選不代表平台可瞬間停止。
 
 位置及朝向參考更新後，由相鄰位姿重建參考速度：
 \begin{equation}
@@ -760,14 +697,11 @@ $v_{\mathrm{app},\ell}$ 為輸入平移速度沿該方向的非負投影。
 各參數分別描述基本間距、延遲與掃描年齡、減速能力及近似裕度。
 圓盤模型的法向旋轉速度為零，未直接涵蓋伸展手臂的掃掠範圍。
 
-防護命令以有限次半空間投影處理，完成後檢查殘差。
-若需放寬主動退離要求為非接近條件，另外記錄該退化處理；
-仍不符合條件時請求停止。
-掃描逾時則限制速度。
-命令依序通過平滑、防護與輪級限制，
-最終放行值回報予預測模型，
-其作用位置如\cref{fig:ch3_navigation_command_layers}所示。
-操作門扇的回波例外與專用機構幾何檢查共同配置。
+防護以有限次半空間投影處理並檢查殘差；主動退離若無法滿足，則檢查非接近條件。
+仍不符合條件時停止，觀測更新不足時限速。
+命令經平滑、防護與輪級限制後，將實際輸入回授預測模型，
+如\cref{fig:ch3_navigation_command_layers}所示。
+門扇回波例外與專用機構檢查共同配置。
 
 \begin{figure}[htbp]
     \centering
@@ -798,12 +732,9 @@ ResNet-50-FPN v2 以 COCO 權重初始化，使用 Isaac Sim RGB 影像及語意
 分割結果再與深度配對，不以語意真值替代線上推論。
 資料配置與誤差於第二、四章說明，驗證範圍限於模擬影像。
 
-網路採 Torchvision v2 實作\cite{torchvisionmaskrcnnv2}，
-架構如\cref{fig:ref_mask_rcnn_framework}。
-ResNet-50\cite{he2016resnet}輸出 C2--C5，
-FPN\cite{lin2017fpn}建立多尺度特徵，RPN 產生候選框。
-偵測分支輸出類別與外框，遮罩分支以 RoIAlign 特徵及偵測後外框產生遮罩。
-輸出含六個前景與背景，共七類；圖中 Conv 包含對應正規化與啟用操作。
+網路採 Torchvision v2 實作\cite{torchvisionmaskrcnnv2}，如\cref{fig:ref_mask_rcnn_framework}。
+ResNet-50\cite{he2016resnet}結合 FPN\cite{lin2017fpn}建立多尺度特徵，RPN 產生候選框。
+偵測與遮罩分支輸出類別、外框及遮罩，共含六個前景與背景七類。
 
 \begin{figure}[htbp]
     \centering
@@ -838,9 +769,9 @@ FPN\cite{lin2017fpn}建立多尺度特徵，RPN 產生候選框。
     \label{eq:ch3_visual_timestamp_transform}
 \end{equation}
 本配置使用機身與手腕相機；前者外參固定，後者包含觀測時的手臂構型。
-目標封包保留原觀測時間、座標系、幾何量與有效性，
+目標估測結果保留原觀測時間、座標系、幾何量與有效性，
 接近前檢查資料年齡、可見點數及幾何一致性。
-短暫遮蔽可在期限內保留估計，逾期則重新觀測或停止推進。
+短暫遮蔽可在有效期間保留估計，失效後則重新觀測或停止推進。
 
 % ==================================================
 % 3.5.3 可行操作區域與底盤目標選擇
@@ -852,26 +783,14 @@ FPN\cite{lin2017fpn}建立多尺度特徵，RPN 產生候選框。
 移動中操作另沿區域取樣，以前一關節解初始化下一點並檢查連續性。
 以圓柱選位為例，對可行集合 $\mathcal F_k$ 求解
 \begin{equation}
-    \begin{aligned}
-        (b^*,q_a^*)&=\underset{(b,q_a)\in\mathcal F_k}{\operatorname{arg\,min}}
-        J_{\mathrm{sel}}(b,q_a),\\
-        J_{\mathrm{sel}}&=
-        w_LL_{\mathrm{route}}
-        +\frac{w_\sigma}{\max(\sigma_{\mathrm{path}},\epsilon_\sigma)}
-        +w_{\mathrm{ext}}[\ell_{\mathrm{ext}}-\ell_{\mathrm{comf}}]_+
-        +J_{\mathrm{heading}} .
-    \end{aligned}
+    (b^*,q_a^*)=\underset{(b,q_a)\in\mathcal F_k}{\operatorname{arg\,min}}
+    J_{\mathrm{sel}}(b,q_a).
     \label{eq:ch3_operation_base_selection}
 \end{equation}
-$L_{\mathrm{route}}$ 為進入路程，有下一目標時加入離開路程；
-有可用地圖時以 Dijkstra\cite{dijkstra1959note}估計，否則採直線距離近似。
-$\sigma_{\mathrm{path}}$ 為取樣構型雅可比最小奇異值的最小值。
-$\ell_{\mathrm{ext}}$ 為手臂基座至目標的水平距離，
-超過 $\ell_{\mathrm{comf}}$ 才以 $[x]_+=\max(x,0)$ 加入伸展成本；
-$J_{\mathrm{heading}}$ 考量進入及後續方向。
-這些項依配置啟用，成本下界剪枝用於減少 IK 次數。
-抽屜把手與筆採各自的距離、奇異值及淨空評分，不假設所有任務共用相同權重。
-選位示例如\cref{fig:ch3_visual_operation_reference}，接近路徑仍由導航前端更新。
+評分考量進入與後續路程、沿路構型的最小雅可比奇異值、手臂伸展程度及底盤朝向。
+路程在有地圖時以 Dijkstra\cite{dijkstra1959note}估計，否則採直線距離。
+各任務依需求選用權重，選位示例如\cref{fig:ch3_visual_operation_reference}；
+接近路徑仍由導航前端更新。
 
 \begin{figure}[htbp]
     \centering
@@ -887,79 +806,14 @@ $J_{\mathrm{heading}}$ 考量進入及後續方向。
 \subsection{導航路徑下之朝向與末端參考生成}
 \label{subsec:navigation_manipulation_reference}
 
-接近階段沿導航路徑調整局部位置、朝向與速度。
-令 $p_g$ 為操作底盤位置，$\hat t_i,\hat n_i$ 為路徑切向與法向，定義
-\begin{equation}
-    d_{\parallel,i}
-    =|(p_g-p_{\mathrm{nav},i})^\top\hat t_i|,
-    \qquad
-    \ell_{\perp,i}
-    =(p_g-p_{\mathrm{nav},i})^\top\hat n_i.
-    \label{eq:ch3_navigation_pull_geometry}
-\end{equation}
-採三次平滑函數 $S(x)=3x^2-2x^3$，建立距離與接手時間權重：
-\begin{equation}
-    \begin{aligned}
-        w_{\mathrm{pull},i}
-        &=S\!\left(\operatorname{clip}
-        \left(\frac{d_{\mathrm{pull,out}}-d_{\parallel,i}}
-        {d_{\mathrm{pull,out}}-d_{\mathrm{pull,in}}},0,1\right)\right),\\
-        a_k&=S\!\left(\operatorname{clip}
-        \left(\frac{t_k-t_{\mathrm{take}}}{T_{\mathrm{pull,in}}},0,1\right)\right).
-    \end{aligned}
-    \label{eq:ch3_navigation_pull_weight}
-\end{equation}
-其中 $d_{\mathrm{pull,out}}>d_{\mathrm{pull,in}}\geq0$，
-$t_{\mathrm{take}}$ 為接手時刻，$T_{\mathrm{pull,in}}>0$ 為側移加入時間。
-位置與朝向參考為
-\begin{equation}
-    \begin{aligned}
-        p_{r,i}&=p_{\mathrm{nav},i}
-        +a_k w_{\mathrm{pull},i}
-        \operatorname{clip}(\ell_{\perp,i},-\ell_{\max},\ell_{\max})\hat n_i,\\
-        \theta_{r,i}&=\theta_{\mathrm{seed},i}
-        +w_i\operatorname{wrap}(\theta_g-\theta_{\mathrm{seed},i}).
-    \end{aligned}
-    \label{eq:ch3_navigation_local_pull}
-\end{equation}
-$\ell_{\max}$ 為側移上限，$\theta_{\mathrm{seed},i}$ 承接既有朝向狀態，
-$w_i\in[0,1]$ 隨接近距離漸增至操作朝向 $\theta_g$，於抓取及抬升時保持。
-朝向跨控制週期延續，不反覆以瞬時實測值重新初始化。
+底盤沿導航路徑調整位置、朝向與速度，參考經限速重取樣後，
+依式\eqref{eq:ch3_reference_velocity_reconstruction}重建速度。
+朝向與側移跨控制週期平滑延續，手臂參考則使用同時刻的底盤構型。
 
-轉入收納導航時保留當下世界座標偏移 $\Delta p_{\mathrm{hold}}$，再平滑收回：
-\begin{equation}
-    \begin{aligned}
-        p_{r,i}&=p_{\mathrm{nav},i}
-        +a_{\mathrm{out},k}\Delta p_{\mathrm{hold}},\\
-        a_{\mathrm{out},k}
-        &=1-S\!\left(\operatorname{clip}
-        \left(\frac{t_k-t_{\mathrm{release}}}{T_{\mathrm{pull,out}}},0,1\right)\right).
-    \end{aligned}
-    \label{eq:ch3_navigation_pull_release}
-\end{equation}
-$t_{\mathrm{release}}$ 為開始收回時刻，$T_{\mathrm{pull,out}}>0$ 為收回時間。
-固定偏移方向可避免路徑法向改變造成跳變；朝向另依角速度限制銜接。
-參考經平移及偏航限速重取樣，再由式\eqref{eq:ch3_reference_velocity_reconstruction}重建速度。
-
-圓柱接近以前段關節展開、後段併入世界抓取線。
-採五次平滑函數 $\psi(\nu)=10\nu^3-15\nu^4+6\nu^5$\cite{flash1985coordination}，
-以距離與時間共同限制進度：
-\begin{equation}
-    \nu_i=
-    \min\left\{
-        \operatorname{clip}\left(
-        \frac{d_{\mathrm{out}}-d_i}{d_{\mathrm{out}}-d_{\mathrm{in}}},0,1\right),
-        \nu_k+\frac{t_i-t_k}{T_{\mathrm{exp,min}}}
-    \right\},
-    \qquad \beta_i=\psi(\nu_i).
-    \label{eq:ch3_distance_based_arm_progress}
-\end{equation}
-$d_i$ 為底盤參考至操作位置的距離，$\nu_k$ 為承接進度。
-最短展開時間取
-$T_{\mathrm{exp,min}}=\max(T_0,1.875\|q_a^g-q_{a,0}\|_\infty/\bar v_{q,\mathrm{target}})$。
-此為距離與狀態觸發的平滑進度，不視為整段固定時長的最小急動軌跡。
-
-由起始構型 $q_{a,0}$ 與選位構型 $q_a^g$ 建立
+以圓柱接近為例，先由起始構型 $q_{a,0}$ 朝選位構型 $q_a^g$ 展開，
+後段再銜接世界抓取線。令 $\nu_i\in[0,1]$ 為依接近距離與時間更新的進度，
+以五次平滑函數 $\psi(\nu)=10\nu^3-15\nu^4+6\nu^5$\cite{flash1985coordination}
+求得 $\beta_i=\psi(\nu_i)$，建立
 \begin{equation}
     q_{a,i}^{\mathrm{exp}}=q_{a,0}+\beta_i(q_a^g-q_{a,0}),\qquad
     T_{E,i}^{\mathrm{exp}}=
@@ -967,12 +821,8 @@ $T_{\mathrm{exp,min}}=\max(T_0,1.875\|q_a^g-q_{a,0}\|_\infty/\bar v_{q,\mathrm{t
     \label{eq:ch3_joint_space_unfold_reference}
 \end{equation}
 $b_{r,i}$ 為同時刻的底盤參考，$\operatorname{FK}_{\mathrm{WB}}$ 依
-式\eqref{eq:ch3_wholebody_forward_kinematics}計算。
-啟用時另加入構型成本
-$J_{\mathrm{post}}=\sum_i\|q_{a,i|k}-q_{a,i}^{\mathrm{exp}}\|_{Q_{\mathrm{post}}}^2$。
-展開後段以
-$\gamma_i=\psi(\operatorname{clip}((\beta_i-\beta_0)/(1-\beta_0),0,1))$
-併入世界抓取線：
+式\eqref{eq:ch3_wholebody_forward_kinematics}計算，參考構型亦供 $J_{\mathrm{post}}$ 使用。
+展開後段以平滑變化的 $\gamma_i\in[0,1]$ 併入世界抓取線：
 \begin{equation}
     \begin{aligned}
         p_{E,i}^{d}&=(1-\gamma_i)p_{\mathrm{exp},i}
@@ -982,10 +832,9 @@ $\gamma_i=\psi(\operatorname{clip}((\beta_i-\beta_0)/(1-\beta_0),0,1))$
     \end{aligned}
     \label{eq:ch3_continuous_approach_reference}
 \end{equation}
-抓取線由底盤接近程度與 TCP 到達預抓點的狀態推進。
-其他任務可採底盤相對位姿與世界接近線的平滑銜接，不一律使用此關節展開形式。
-距離規則如\cref{fig:ch3_mobile_approach_distance_profile}，
-實際命令仍受關節及輪級限制。
+抓取線由底盤接近程度與 TCP 到達狀態推進，實際命令仍受關節與輪級限制。
+其他任務依幾何需求銜接底盤相對與世界參考；距離規則示例如
+\cref{fig:ch3_mobile_approach_distance_profile}。
 
 \begin{figure}[htbp]
     \centering
@@ -1015,9 +864,8 @@ $\gamma_i=\psi(\operatorname{clip}((\beta_i-\beta_0)/(1-\beta_0),0,1))$
 接近時依第 3.5.4 節生成參考，由共同全身問題補償底盤與物件的相對位移。
 末端位姿與底盤接近程度符合條件後，才銜接夾爪及抬升或機構操作。
 
-可用操作窗口受手臂可達範圍與展開速度限制。
-接近未完成時降低底盤速度或延後進度；
-錯過可達窗口則停止並回報任務層，不假設底盤持續前進仍必能完成抓取。
+操作窗口受手臂可達範圍與展開速度限制；接近未完成時降低底盤速度或延後進度，
+超出可達窗口則停止並回報任務層。
 
 % ==================================================
 % 3.6.2 門與抽屜之機構約束建模
@@ -1033,9 +881,8 @@ $\gamma_i=\psi(\operatorname{clip}((\beta_i-\beta_0)/(1-\beta_0),0,1))$
     {}^WT_E(\chi)={}^WT_H(\eta)\,{}^HT_E .
     \label{eq:ch3_grasp_closed_chain}
 \end{equation}
-開門先由機構與全身幾何生成閉鏈相容的參考軌跡，
-線上控制追蹤該參考，並依量測門角調節進度；
-不將門角本身視為每次全身 QP 的新增控制輸入。
+開門先生成閉鏈相容參考，再依量測門角調節追蹤進度；
+門角為參考生成的機構座標，不是全身 QP 的新增控制輸入。
 對鉸鏈點 $h$ 與正門角軸 $a_h$，把手圓弧為
 \begin{equation}
     \begin{aligned}
@@ -1071,19 +918,16 @@ $\epsilon_c$ 分別設定位置與姿態容許量，$\mathcal I_c$ 為啟用步�
     \label{eq:ch3_door_corotation_reference}
 \end{equation}
 $\mathcal T_h$ 為繞鉸鏈的世界剛體變換。
-底盤配合旋轉，末端保持底盤相對位姿；時長依輪速與命令變化限制設定。
-操作期間由執行端門角回報更新進度與幾何檢查，
-並核對 TCP 至鉸鏈的水平半徑偏差及淨空，不稱為純視覺門角回授。
+底盤配合旋轉，末端保持底盤相對位姿，時長依輪級限制設定。
+操作進度使用執行端門角回報，並檢查 TCP 至鉸鏈的半徑偏差與淨空。
 
 對沿單位滑軌方向 $a_d$ 平移的抽屜，
 \begin{equation}
     p_H(d)=p_{H,0}+d a_d,\qquad R_H(d)=R_{H,0}.
     \label{eq:ch3_prismatic_handle_model}
 \end{equation}
-開關共用此模型，進度由 TCP 相對起始位置的軸向位移估計，
-底盤同步調整手臂伸展程度。
-取筆收納後重新觀測把手，再建立推回參考並保留終點行程餘量。
-各階段分別啟用參考、QP 限制與幾何檢查，構型如\cref{fig:ch3_drawer_operation_sequence}。
+開關共用此模型，由 TCP 軸向位移估計進度，底盤同步調整手臂伸展程度。
+重新觀測把手後建立推回參考並保留行程餘量，構型如\cref{fig:ch3_drawer_operation_sequence}。
 
 \begin{figure}[htbp]
     \centering
@@ -1106,7 +950,10 @@ $\mathcal T_h$ 為繞鉸鏈的世界剛體變換。
     \label{eq:ch3_base_relative_carry_target}
 \end{equation}
 殘差直接於底盤座標計算，其增廣幾何映射為
-$\mathcal J_E^{\mathrm{rel}}=[0_{6\times3},{}^BJ_A,0_{6\times6}]$，
+\[
+    \mathcal J_E^{\mathrm{rel}}=
+    \begin{bmatrix}0_{6\times3}&{}^BJ_A&0_{6\times6}\end{bmatrix}.
+\]
 因此底盤運動不直接改變此相對追蹤誤差。
 抬升、退出與收納採分段構型參考，以五次平滑內插及 FK 生成末端目標，
 導航可依階段同時執行，如\cref{fig:ch3_base_relative_carrying}。
@@ -1119,7 +966,6 @@ $\mathcal J_E^{\mathrm{rel}}=[0_{6\times3},{}^BJ_A,0_{6\times6}]$，
     \label{fig:ch3_base_relative_carrying}
 \end{figure}
 
-到達收納構型後依序釋放、等待物件落下及收臂。
 線上幾何檢查涵蓋機器人、家具與收納盒；
 持物與盒內既有物件的接觸尚未納入完整碰撞預測。
 
@@ -1129,16 +975,10 @@ $\mathcal J_E^{\mathrm{rel}}=[0_{6\times3},{}^BJ_A,0_{6\times6}]$，
 \subsection{任務階段切換與控制狀態延續}
 \label{subsec:task_transition_continuity}
 
-住宅整合任務依序執行開門通行、
-茶几圓柱移動中抓取與車尾收納、
-開抽屜取筆與收納、關抽屜、
-回程推門通行與關門，最後返回起點。
-任務層依觀測有效性、位姿誤差、操作進度及執行狀態，
-更新參考、權重與啟用限制。
-
-交接承接實際關節位置、設定點、在途命令、最近放行輸入與適用模型偏置；
-朝向、側移及展開進度依階段延續或初始化。
-目標無效或交接未通過時，保留已接受控制段，必要時使用停止備援。
+任務層依觀測有效性、位姿誤差與操作進度，更新參考、權重及啟用限制。
+切換承接實際關節位置、設定點、在途命令及適用模型偏置，並延續必要的參考進度。
+目標無效或切換條件未滿足時，暫停任務推進並依停止軌跡減速。
+住宅任務的完整順序於第四章說明。
 
 % ==================================================
 % 3.7 執行動態補償與控制實現
@@ -1146,18 +986,17 @@ $\mathcal J_E^{\mathrm{rel}}=[0_{6\times3},{}^BJ_A,0_{6\times6}]$，
 \section{執行動態補償與控制實現}
 \label{sec:execution_compensation}
 
-狀態取得至命令生效間，平台仍執行既定排程。
-本節將在途命令、模型偏置與控制段承接納入預測，
-使初始條件與實際放行輸入對應。
+狀態取得至命令作用間，機器人仍依目前命令運動。
+本節將命令延遲與模型偏置納入預測，使初始條件與實際輸入對應。
 
 % ==================================================
-% 3.7.1 在途命令與實際放行輸入之預測整合
+% 3.7.1 命令延遲與實際輸入之預測整合
 % ==================================================
-\subsection{在途命令與實際放行輸入之預測整合}
+\subsection{命令延遲與實際輸入之預測整合}
 \label{subsec:queued_applied_command_prediction}
 
 令 $z^{\mathrm{ex}}=[\chi^\top,s_a^\top]^\top$，
-$D_k$ 為新段生效前的既定物理步數。
+$D_k$ 為新命令作用前的離散步數。
 以底盤及設定點追蹤模型 $f_p$ 依序前推固定命令：
 \begin{equation}
     z_{0|k}^{\mathrm{ex}}=z_k^{\mathrm{ex}},\qquad
@@ -1169,7 +1008,7 @@ $D_k$ 為新段生效前的既定物理步數。
 前推含已知斜坡與限制處理，以終點建立 $\zeta_{0|k}$。
 底盤誤差相對 $X_r(t_k^{\mathrm{eff}})$ 計算，
 $t_k^{\mathrm{eff}}=t_k+D_k\Delta t_p$，參考亦從此時刻起算。
-尚未知的防護修正，於實際放行回報後更新下一輪預測。
+後續防護造成的命令修正，由實際輸入回授更新下一輪預測。
 
 採底盤拍內斜坡的階段，以相鄰命令的加權平均
 $\bar\xi_{B,i}=w_{\mathrm{old}}\xi_{B,i-1}+w_{\mathrm{new}}\xi_{B,i}$
@@ -1184,32 +1023,10 @@ $\bar\xi_{B,i}=w_{\mathrm{old}}\xi_{B,i-1}+w_{\mathrm{new}}\xi_{B,i}$
 \label{subsec:model_bias_tcp_compensation}
 
 以 $b_a=D_\alpha d_a$ 表示等效關節偏移。
-令估測區間含 $m_o$ 個物理步，
-$B_\ell=\operatorname{diag}(\beta_i^\ell)$、$\Lambda_{m_o}=I_6-B_{m_o}$。
-依更新前估計與實際作用設定點預測區間終點：
-\begin{equation}
-    \hat q_a^{j+m_o,-}=
-    B_{m_o}q_a^j+
-    \sum_{\ell=0}^{m_o-1}
-    B_{m_o-1-\ell}D_\alpha\tilde s_a^{j+\ell}
-    +\Lambda_{m_o}\hat d_a^- .
-    \label{eq:ch3_interval_offset_prediction}
-\end{equation}
-由終點殘差形成觀測並平滑投影：
-\begin{equation}
-    \begin{aligned}
-        d_a^{\mathrm{obs}}&=\hat d_a^-+
-        \Lambda_{m_o}^{-1}(q_a^{j+m_o}-\hat q_a^{j+m_o,-}),\\
-        \hat d_a^+&=\Pi_{\mathcal D}
-        [\hat d_a^-+\lambda_d(d_a^{\mathrm{obs}}-\hat d_a^-)],
-        \qquad \lambda_d=\frac{m_o\Delta t_p}{\tau_d}\in(0,1].
-    \end{aligned}
-    \label{eq:ch3_interval_offset_update}
-\end{equation}
-$\Pi_{\mathcal D}$ 限制絕對偏移及相對初值的修正量。
-僅使用對齊、有限且未重複的完整區間，並限制區間長度使濾波增益不超過一。
+利用已對齊的實際設定點歷程預測區間終點，再由關節位置殘差修正偏移估計。
+更新經平滑與投影限幅，限制絕對偏移及相對初值的修正量，並排除不完整或重複區間。
 目前門把接近配置在閉爪前更新，之後凍結並承接；
-同次 QP、在途前推及停止檢查使用一致模型。
+QP、在途前推及停止檢查使用一致模型。
 
 圓柱與抽屜接近末段另可加入有界 TCP 位置積分：
 \begin{equation}
@@ -1227,19 +1044,14 @@ $\Pi_{\mathcal D}$ 限制絕對偏移及相對初值的修正量。
 第四章的離線重播與操作案例分別解讀，其獨立效益仍須消融驗證。
 
 % ==================================================
-% 3.7.3 命令放行、停止軌跡檢查與逾時處置
+% 3.7.3 命令執行與停止判定
 % ==================================================
-\subsection{命令放行、停止軌跡檢查與逾時處置}
+\subsection{命令執行與停止判定}
 \label{subsec:command_acceptance_stopping}
 
-求解端產生帶版本、生效步與停止尾段的候選封包。
-平台延續已接受控制段，新封包通過期限、版本、有限性、幾何與交接檢查後才接續。
-停止軌跡保留在途命令、底盤斜坡、輪級限制及設定點追蹤，
-核對關節與設定點限位、啟用幾何淨空，以及閉鏈位姿或共轉半徑等機構條件。
-
-晚到或失敗候選予以拒絕，必要時使用已接受的停止尾段；無可用備援則中止。
-設定點變化率歸零不代表關節停穩，須另核對實際速度與保持時間。
-中止事件與已驗證的停止結果分別記錄，不以任務結束代替停穩證據。
+控制命令執行前，檢查關節、設定點、輪級限制與任務幾何條件。
+未通過檢查或需結束運動時，依已檢查的停止軌跡減速。
+停止判定採實際速度及保持時間，因設定點變化率歸零後，關節仍可能持續追蹤。
 
 % ==================================================
 % 3.7.4 整體控制流程與演算法
@@ -1249,12 +1061,15 @@ $\Pi_{\mathcal D}$ 限制絕對偏移及相對初值的修正量。
 
 閉迴路如\cref{fig:ch3_wholebody_control_workflow}：
 任務層更新參考與限制，共用模型建立預測，
-執行端承接通過檢查的控制段並回報最終輸入。
-演算法\ref{alg:wholebody_predictive_control}整理背景計算與物理步執行的關係。
+底盤與手臂執行通過檢查的命令，並回授實際輸入與狀態。
+演算法\ref{alg:wholebody_predictive_control}整理控制更新的主要步驟。
 
 % Keep the workflow and its pseudocode in one float.
+\newsavebox{\chThreeWorkflowAlgorithmBox}
 \begin{figure}[!p]
+    \ifdefined\RawFloats\RawFloats\fi
     \centering
+    \begin{lrbox}{\chThreeWorkflowAlgorithmBox}
     \begin{minipage}{\linewidth}
     \centering
     \small
@@ -1265,37 +1080,50 @@ $\Pi_{\mathcal D}$ 限制絕對偏移及相對初值的修正量。
 
     \vspace{0.5\baselineskip}
 \begin{algorithm}[H]
+    \ifdefined\RawFloats\RawFloats\fi
     \fontsize{11pt}{13pt}\selectfont
     \setstretch{1.0}
-    \caption{具命令承接與停止備援之全身預測控制}
+    \setlength{\abovecaptionskip}{3pt}
+    \setlength{\belowcaptionskip}{3pt}
+    \hrule height 0.8pt\relax
+    \caption{全身模型預測控制流程}
     \label{alg:wholebody_predictive_control}
+    \par\vspace{2pt}
+    \hrule height 0.4pt\relax
+    \vspace{4pt}
     \begin{algorithmic}[1]
-        \Require State and sensor data, task state, navigation path,
-                 scheduled commands, and model parameters
-        \Ensure Applied commands, setpoints, task events, and stopping records
-        \State Preserve the accepted segment and its stopping tail
+        \Require Robot states, observations, task targets, navigation path, and model parameters
+        \Ensure Base velocity commands, arm setpoints, and updated task state
         \While{the task is active or stopping is incomplete}
-            \If{an update is due and the solver is available}
-                \State Validate data and update enabled bias estimates
-                \State Propagate scheduled commands to the activation time
-                \State Update targets, references, and obstacle predictions
-                \State Launch asynchronous QP solving and trajectory checks
+            \State Acquire robot states and validate observations
+            \If{a control update is due}
+                \State Update task targets and enabled bias estimates
+                \State Predict the state at command application using pending commands
+                \State Generate synchronized references and obstacle predictions
+                \State Build the augmented model, active costs, and constraints
+                \State Solve the whole-body QP and check the predicted trajectory
+                \If{a feasible trajectory is available and motion is requested}
+                    \State Update base velocity and arm setpoint-rate commands
+                \Else
+                    \State Follow a checked deceleration trajectory
+                \EndIf
             \EndIf
-            \If{a candidate is ready and all checks pass}
-                \State Submit a versioned packet with its activation step and stopping tail
-            \EndIf
-            \Statex \textbf{At every physics step:}
-            \If{a valid packet reaches its activation step}
-                \State Activate the new segment and its stopping tail
-            \ElsIf{stopping is requested or the segment is nearly exhausted}
-                \State Execute the applicable stopping tail; abort if necessary
-            \EndIf
-            \State Process base commands and integrate arm setpoints
-            \State Report applied inputs, states, and task events
+            \State Apply base command limits and integrate arm setpoints
+            \State Feed back applied inputs and measured states
+            \State Update task progress and check measured stopping conditions
         \EndWhile
     \end{algorithmic}
+    \par\vspace{4pt}
+    \hrule height 0.8pt\relax
 \end{algorithm}
     \end{minipage}
+    \end{lrbox}
+    % Scale down only when the complete box exceeds the page-height limit.
+    \ifdim\dimexpr\ht\chThreeWorkflowAlgorithmBox+\dp\chThreeWorkflowAlgorithmBox\relax>0.98\textheight
+        \resizebox*{!}{0.98\textheight}{\usebox{\chThreeWorkflowAlgorithmBox}}
+    \else
+        \usebox{\chThreeWorkflowAlgorithmBox}
+    \fi
 \end{figure}
 
 第四章依模型預測、動態導航、協同操作及住宅整合任務，
