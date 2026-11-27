@@ -11,7 +11,7 @@
 | 中英文摘要 | [Markdown](00_摘要.md)、[中文 TeX](overleaf/abstract_zh.tex)、[英文 TeX](overleaf/abstract_en.tex) |
 | 第一章 | [1.1–1.2](overleaf/第一章_前言與動機_含圖.tex)、[1.4](overleaf/第一章_本文架構.tex)、[1.3.5 比較表](overleaf/01_03_05_research_comparison.tex)；1.3.1–1.3.4 完整稿目前不在本資料夾 |
 | 第二章 | [來源索引](02_研究系統介紹.md) |
-| 第三章 | [來源索引](03_研究方法與演算法設計.md) |
+| 第三章 | [現行精簡與一致性修訂稿](第三章_精簡重整版/03_ResearchMethodology.tex)、[替換方式與核對說明](第三章_精簡重整版/README_替換方式.md) |
 | 第四章 | [實驗方法與結果分析](overleaf/04_ExperimentalResults.tex)、[本章引用文獻](overleaf/第四章_參考文獻_完整.bib) |
 | 第五章 | [結論與未來工作](overleaf/05_Conclusions.tex) |
 | 章節規劃 | [章節架構](論文章節架構.md)、[LaTeX 骨架](overleaf/chapters_outline.tex) |
@@ -20,9 +20,9 @@
 | 摘要上傳包 | [thesis_abstract_overleaf.zip](thesis_abstract_overleaf.zip)；入口 main.tex，目前僅編譯摘要 |
 | 本次正文修訂包 | [20261124_計畫書修訂稿.zip](20261124_計畫書修訂稿.zip)；供替換學姐專案中的片段 |
 
-`03_01` 至 `03_07` 為第三章唯一撰寫來源。兩份合併稿由 `python3 預口試論文/overleaf/build_manuscript_materials.py` 產生；修改分節後重新執行，不在合併稿另修一套內容。
+2026-11-27：第三章現行來源為 `第三章_精簡重整版/03_ResearchMethodology.tex`，保留原有 48 組公式，另增 6 組成本展開式，共 54 組；含 13 張圖及 7 節／27 小節。`overleaf/03_01` 至 `03_07` 及兩份合併稿為較早分節版本；`build_manuscript_materials.py` 只重建那些舊合併稿，不更新現行精簡稿。
 
-關節展開與後段併線已有第 101 趟圓柱階段的 Isaac 證據，3.5.4 正文已更新；第 101 趟整體任務仍因回程門扇視覺估測錯誤而未完成。伸展評分正權重尚待實作與驗證，已完成批次對應權重為零。
+關節展開與後段併線已有圓柱操作紀錄，是否完成整體任務仍依各趟紀錄判定。現行圓柱選位已提供可配置的伸展成本；各批次權重及其效果須依當次設定與結果說明，不能將目前程式設定回填為舊批次的啟用證據。
 
 2026-11-26：第四、第五章現行正文為上表所列 LaTeX；同名 Markdown 仍是較早工作稿。第五章依第四章已呈現的結果整理，不能用舊批次替新版本背書。舊 Markdown、分章書目及舊摘要預覽已留存 [歷史版本](歷史版本/)，本次整併前的完整文字備份為 `歷史版本/20261124_整併前備份.zip`。
 

@@ -1,0 +1,220 @@
+# gmpc_controller: not_running
+
+# scan_obstacle_tracker: not_running
+
+/scan_safety_shield:
+  ros__parameters:
+    a_brake: 6.25
+    alpha: 2.0
+    base_frame: base_footprint
+    cmd_in_topic: /cmd_vel_pre_shield
+    cmd_out_topic: /cmd_vel_smoothed
+    d0: 0.05
+    emergency_d: 0.15
+    enable: true
+    eps_footprint: 0.02
+    eps_scan: 0.03
+    final_cmd_timeout: 0.25
+    final_cmd_topic: /cmd_vel
+    max_points: 360
+    neighbour_consistency: true
+    proj_iters: 6
+    range_of_interest: 2.0
+    robot_radius: 0.3
+    scan_timeout: 0.5
+    scan_topic: /scan
+    self_return_m: 0.02
+    self_return_radius: -1.0
+    stale_speed: 0.05
+    start_type_description_service: true
+    tau: 0.15
+    use_sim_time: true
+    vx_max: 0.2775
+    vy_max: 0.2775
+    wheel_a_max: 125.0
+    wheel_base_L: 0.245
+    wheel_dt: 0.045
+    wheel_margin: 0.002
+    wheel_radius: 0.05
+    wheel_rows: true
+    wheel_w_max: 5.55
+    wz_max: 1.1327
+
+
+/velocity_smoother:
+  ros__parameters:
+    /bond_disable_heartbeat_timeout: true
+    autostart_node: false
+    bond_heartbeat_period: 0.1
+    deadband_velocity:
+    - 0.0
+    - 0.0
+    - 0.0
+    enable_stamped_cmd_vel: false
+    feedback: OPEN_LOOP
+    max_accel:
+    - 6.25
+    - 6.25
+    - 25.51
+    max_decel:
+    - -6.25
+    - -6.25
+    - -25.51
+    max_velocity:
+    - 0.26
+    - 0.26
+    - 1.1327
+    min_velocity:
+    - -0.26
+    - -0.26
+    - -1.1327
+    odom_duration: 0.1
+    odom_topic: /odom
+    qos_overrides:
+      /clock:
+        subscription:
+          depth: 1
+          durability: volatile
+          history: keep_last
+          reliability: best_effort
+    scale_velocities: false
+    smoothing_frequency: 20.0
+    stamp_smoothed_velocity_with_smoothing_time: false
+    start_type_description_service: true
+    use_realtime_priority: false
+    use_sim_time: true
+    velocity_timeout: 1.0
+
+
+/controller_server:
+  ros__parameters:
+    /bond_disable_heartbeat_timeout: true
+    FollowPath:
+      BaseObstacle:
+        class: BaseObstacle
+        scale: 0.02
+        sum_scores: false
+      GoalAlign:
+        aggregation_type: last
+        class: GoalAlign
+        forward_point_distance: 0.1
+        scale: 24.0
+      GoalDist:
+        aggregation_type: last
+        class: GoalDist
+        scale: 24.0
+      Oscillation:
+        class: Oscillation
+        oscillation_reset_angle: 0.2
+        oscillation_reset_dist: 0.05
+        oscillation_reset_time: -1.0
+        scale: 1.0
+        x_only_threshold: 0.05
+      PathAlign:
+        aggregation_type: last
+        class: PathAlign
+        forward_point_distance: 0.1
+        scale: 32.0
+      PathDist:
+        aggregation_type: last
+        class: PathDist
+        scale: 32.0
+      RotateToGoal:
+        class: RotateToGoal
+        lookahead_time: -1.0
+        scale: 32.0
+        slowing_factor: 5.0
+      acc_lim_theta: 25.51
+      acc_lim_x: 6.25
+      acc_lim_y: 6.25
+      angular_granularity: 0.025
+      critics:
+      - RotateToGoal
+      - Oscillation
+      - BaseObstacle
+      - GoalAlign
+      - PathAlign
+      - PathDist
+      - GoalDist
+      debug_trajectory_details: false
+      decel_lim_theta: -25.51
+      decel_lim_x: -6.25
+      decel_lim_y: -6.25
+      default_critic_namespaces: []
+      discretize_by_time: false
+      forward_prune_distance: 2.0
+      include_last_point: true
+      limit_vel_cmd_in_traj: false
+      linear_granularity: 0.05
+      marker_lifetime: 0.1
+      max_speed_xy: 0.26
+      max_vel_theta: 1.1327
+      max_vel_x: 0.26
+      max_vel_y: 0.26
+      min_speed_theta: 0.0
+      min_speed_xy: 0.0
+      min_vel_x: -0.26
+      min_vel_y: -0.26
+      plugin: dwb_core::DWBLocalPlanner
+      prune_distance: 1.7
+      prune_plan: true
+      publish_cost_grid_pc: false
+      publish_evaluation: true
+      publish_global_plan: true
+      publish_local_plan: true
+      publish_trajectories: true
+      publish_transformed_plan: true
+      short_circuit_trajectory_evaluation: true
+      shorten_transformed_plan: true
+      sim_time: 1.7
+      time_granularity: 0.5
+      trajectory_generator_name: dwb_plugins::StandardTrajectoryGenerator
+      trans_stopped_velocity: 0.01
+      transform_tolerance: 2.0
+      vtheta_samples: 20
+      vx_samples: 11
+      vy_samples: 11
+      xy_goal_tolerance: 0.3
+    action_server_result_timeout: 10.0
+    autostart_node: false
+    bond_heartbeat_period: 0.1
+    controller_frequency: 20.0
+    controller_plugins:
+    - FollowPath
+    costmap_update_timeout: 0.3
+    enable_stamped_cmd_vel: false
+    failure_tolerance: 0.3
+    general_goal_checker:
+      plugin: nav2_controller::SimpleGoalChecker
+      stateful: true
+      symmetric_yaw_tolerance: false
+      xy_goal_tolerance: 0.3
+      yaw_goal_tolerance: 0.25
+    goal_checker_plugins:
+    - general_goal_checker
+    min_theta_velocity_threshold: 0.001
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.001
+    odom_topic: odom
+    progress_checker:
+      movement_time_allowance: 10.0
+      plugin: nav2_controller::SimpleProgressChecker
+      required_movement_radius: 0.5
+    progress_checker_plugins:
+    - progress_checker
+    publish_zero_velocity: true
+    qos_overrides:
+      /clock:
+        subscription:
+          depth: 1
+          durability: volatile
+          history: keep_last
+          reliability: best_effort
+    speed_limit_topic: speed_limit
+    start_type_description_service: true
+    use_realtime_priority: false
+    use_sim_time: true
+
+
+# obstacle_aggregator: not_running
+
