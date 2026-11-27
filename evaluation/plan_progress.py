@@ -68,7 +68,12 @@ def plan_rows():
     if os.path.exists(REG):
         rows = list(csv.DictReader(open(REG)))
         done = {r['run_key'] for r in rows if r.get('status') == 'done'}
-        for k in {r['run_key'] for r in rows if r.get('status') == 'done' and r['run_key'].startswith('N1/')}:
+        _r2 = os.path.join(HERE, 'results', 'plan1127', 'n1_r2_routes.txt')   # 11/28：這 15 條降難度重跑（n1r2）⇒ 只計 n1r2；其餘 45 條沿用 n1main
+        r2 = set(open(_r2).read().split()) if os.path.exists(_r2) else set()
+        def _n1ok(r):
+            ly, sd = r['run_key'].split('/')[2], int(r['run_key'].split('/')[4][4:])
+            return r.get('batch') == ('n1r2' if f'{ly}:{sd}' in r2 else 'n1main')
+        for k in {r['run_key'] for r in rows if r.get('status') == 'done' and r['run_key'].startswith('N1/') and _n1ok(r)}:
             meth = N1_METH.get(k.split('/')[-1], k.split('/')[-1])
             n1_done[meth] = n1_done.get(meth, 0) + 1
         for k in {r['run_key'] for r in rows if r.get('status') == 'done' and r['run_key'].startswith('N2/')}:   # N2：配置字母 ⇒ 規劃清單的方法名
@@ -153,7 +158,7 @@ def n1pilot_row(bname_=None):
             lay = dict(n1_bigarena='多房間', n1_office='辦公室', n1_warehouse='倉儲').get(m.group(2), m.group(2))
             recent.append(dict(id=f'p{m.group(1)}-{m.group(5)}-{m.group(6)}', time=m.group(1), case=f"N1 先導・{lay}・{'交會' if m.group(3) == 'crossing' else '靜態'}",
                                method=dict(DYN_METH).get(m.group(5), m.group(5)), attempt=int(m.group(6)), result=short))
-    nc = next((int(x.split('cases=')[1]) for x in log if 'cases=' in x), None)
+    nc = next((int(re.match(r'\d+', x.split('cases=')[1]).group()) for x in log if 'cases=' in x), None)
     if nc is None:                                                     # run_n1_batch.sh 沒有 cases= 行：由開頭的 layouts／conds／seeds 算
         hd = next((x for x in log if ' batch ' in x and 'layouts=' in x), '')
         mm = re.search(r'layouts=(.*?) conds=(.*?) seeds=(\d+)-(\d+)', hd)
@@ -162,7 +167,7 @@ def n1pilot_row(bname_=None):
         if mc:                                                         # N2／開發批次：每案例跑的是配置數，不是 4 個方法
             nc = nc * len(mc.group(1).split()) / 4.0
     bname = os.path.basename(R)
-    nm_ = {'n1hardpilot': 'N1 加難先導（平行，已停）', 'n1hard12': 'N1 加難先導（種子 101，12 趟）', 'n1main': 'N1 正式（種子 1–20，240 趟）',
+    nm_ = {'n1hardpilot': 'N1 加難先導（平行，已停）', 'n1hard12': 'N1 加難先導（種子 101，12 趟）', 'n1main': 'N1 正式第一輪（種子 1–20，240 趟）', 'n1r2': 'N1 第二版：15 條降難度路線 × 4 方法重跑（60 趟，其餘 45 條沿用第一輪）',
            'gmpcdev': 'GMPC 改進開發比較 v1（偵測錯誤，已停）', 'gmpcdev2': 'GMPC 改進開發比較（種子 101–104：原版 H／卡住解鎖 U／＋規劃器遮行人 UF）', 'gmpcdev3': 'GMPC 改進開發比較第二輪（種子 101–104：卡住解鎖＋緊急避讓 UE／三項全開 UFE）', 'n1v2': 'N1 正式重跑：GMPC 改進版（種子 1–20 × 3 布局，60 趟）', 'gmpcdev4': 'GMPC 擴大開發驗證（種子 105–114：原版 H／三項全開 UFE）', 'n2main': 'N2 導航消融（多房間＋辦公室 × 種子 1–10 × B／C／D／E）'}.get(bname, f'批次 {bname}')
     return dict(id='n1pilot', name=nm_, design='三種複雜布局 × 交會 × 4 方法（穿越、對向會車、轉角未知障礙）；GMPC 住宅任務版、四方法 0.26 m/s',
                 done=n, total=int(round(nc * 4)), skips=sum(1 for s in log if 'skipping' in s), caps=sum(1 for s in log if 'cap hit' in s),
