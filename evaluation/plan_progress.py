@@ -130,9 +130,9 @@ def dyn_rows(stats_path):
     return batch, conds, methods, recent
 
 
-def n1pilot_row():
-    """N1 先導（三布局 × 靜態／交會 × 種子 101 × 4 方法 = 24 趟）。"""
-    R = os.path.join(HERE, 'results', os.environ.get('PILOT_BATCH', open(os.path.join(HERE, 'results', 'plan1127', 'current_batch.txt')).read().strip() if os.path.exists(os.path.join(HERE, 'results', 'plan1127', 'current_batch.txt')) else 'n1pilot3'))
+def n1pilot_row(bname_=None):
+    """一個 N1／N2／開發批次的進度列（批次名預設取 current_batch.txt）。"""
+    R = os.path.join(HERE, 'results', bname_ or os.environ.get('PILOT_BATCH', open(os.path.join(HERE, 'results', 'plan1127', 'current_batch.txt')).read().strip() if os.path.exists(os.path.join(HERE, 'results', 'plan1127', 'current_batch.txt')) else 'n1pilot3'))
     lp = os.path.join(R, os.path.basename(R) + '.log')
     log = open(lp).read().splitlines() if os.path.exists(lp) else []
     n = sum(1 for f in glob.glob(os.path.join(R, 'n1_*_k*_*.csv')) if sum(1 for _ in open(f)) > 1)
@@ -151,11 +151,15 @@ def n1pilot_row():
         hd = next((x for x in log if ' batch ' in x and 'layouts=' in x), '')
         mm = re.search(r'layouts=(.*?) conds=(.*?) seeds=(\d+)-(\d+)', hd)
         nc = len(mm.group(1).split()) * len(mm.group(2).split()) * (int(mm.group(4)) - int(mm.group(3)) + 1) if mm else 6
+        mc = re.search(r'cfgs=(.*?) NAV_VMAX', hd)
+        if mc:                                                         # N2／開發批次：每案例跑的是配置數，不是 4 個方法
+            nc = nc * len(mc.group(1).split()) / 4.0
     bname = os.path.basename(R)
-    nm_ = {'n1hardpilot': 'N1 加難先導（平行，已停）', 'n1hard12': 'N1 加難先導（種子 101，12 趟）', 'n1main': 'N1 正式（種子 1–20，240 趟）'}.get(bname, f'N1 批次 {bname}')
+    nm_ = {'n1hardpilot': 'N1 加難先導（平行，已停）', 'n1hard12': 'N1 加難先導（種子 101，12 趟）', 'n1main': 'N1 正式（種子 1–20，240 趟）',
+           'gmpcdev': 'GMPC 改進開發比較（種子 101–104：原版／卡住解鎖／＋規劃器遮行人）'}.get(bname, f'批次 {bname}')
     return dict(id='n1pilot', name=nm_, design='三種複雜布局 × 交會 × 4 方法（穿越、對向會車、轉角未知障礙）；GMPC 住宅任務版、四方法 0.26 m/s',
-                done=n, total=nc * 4, skips=sum(1 for s in log if 'skipping' in s), caps=sum(1 for s in log if 'cap hit' in s),
-                running=run, status=status(n, nc * 4, run), last=(log[-1] if log else ''), stats_note=''), recent
+                done=n, total=int(round(nc * 4)), skips=sum(1 for s in log if 'skipping' in s), caps=sum(1 for s in log if 'cap hit' in s),
+                running=run, status=status(n, int(round(nc * 4)), run), last=(log[-1] if log else ''), stats_note=''), recent
 
 
 def main():
@@ -182,10 +186,18 @@ def main():
                                 dt_vs_gmpc=pv.get('time_median')))
     except Exception as e_:                                            # noqa: BLE001
         print('n1 summary skipped:', repr(e_)[:80])
+    extra = []
+    dv = os.path.join(HERE, 'results', 'plan1127', 'current_batch_dev.txt')
+    if os.path.exists(dv):
+        dvb = open(dv).read().strip()
+        if os.path.isdir(os.path.join(HERE, 'results', dvb)):
+            row2, rec2 = n1pilot_row(dvb)
+            row2['id'] = dvb
+            extra.append(row2); precent = rec2 + precent
     recent = precent[:10]
     now = dt.datetime.now()
     snap = dict(at=now.isoformat(timespec='seconds'), at_label=now.strftime('%m/%d %H:%M'),
-                experiments=exps, cells=cells, batch=[pilot],                    # 11/27 Howard：面板刪除 dyn1126
+                experiments=exps, cells=cells, batch=[pilot] + extra,                    # 11/27 Howard：面板刪除 dyn1126
                 conditions=[], methods=n1m, recent=recent)
     json.dump(snap, open(a.out, 'w'), ensure_ascii=False, indent=1)
     core = [e for e in exps if e['tier'] == '核心']
