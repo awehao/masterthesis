@@ -62,11 +62,28 @@ def shield_stats(bag):
     return dict(shield_ratio=round(float(a.mean()), 4), shield_dv_mean=round(float(v[a].mean()), 4) if a.any() else 0.0, shield_n=int(a.size))
 
 
+def _sources(batch):
+    """(結果檔, 來源批次, 情境資料夾) 清單。
+    n1final＝N1 最終（11/28 Howard）：results/plan1127/n1_r2_routes.txt 的 15 條用 n1r2（降難度情境 n1_scenarios），其餘 45 條用 n1main；
+    n1main 單獨分析時讀第一輪情境 n1_scenarios_r1（那 15 條的情境 11/28 已換成第二版）。"""
+    E = os.path.join(HERE, 'experiments')
+    r2f = os.path.join(HERE, 'results', 'plan1127', 'n1_r2_routes.txt')
+    r2 = set(open(r2f).read().split()) if os.path.exists(r2f) else set()
+    def key(f):
+        m = re.match(r'(n1_\w+?)_(?:static|crossing)_k(\d+)_', os.path.basename(f))
+        return f'{m.group(1)}:{int(m.group(2))}' if m else ''
+    def files(b):
+        return sorted(glob.glob(os.path.join(HERE, 'results', b, 'n1_*_k*_*.csv')))
+    if batch == 'n1final':
+        return ([(f, 'n1main', os.path.join(E, 'n1_scenarios')) for f in files('n1main') if key(f) not in r2]
+                + [(f, 'n1r2', os.path.join(E, 'n1_scenarios')) for f in files('n1r2') if key(f) in r2])
+    d = os.path.join(E, 'n1_scenarios_r1') if batch == 'n1main' and os.path.isdir(os.path.join(E, 'n1_scenarios_r1')) else os.path.join(E, 'n1_scenarios')
+    return [(f, batch, d) for f in files(batch)]
+
+
 def collect(batch, csv_only=False):
-    R = os.path.join(HERE, 'results', batch)
-    D = os.path.join(HERE, 'experiments', 'n1_scenarios')
     rows = []
-    for f in sorted(glob.glob(os.path.join(R, 'n1_*_k*_*.csv'))):
+    for f, batch, D in _sources(batch):
         m = re.match(r'(n1_\w+?)_(static|crossing)_k(\d+)_(gmpc_scan|mppi|dwb|rpp)\.csv$', os.path.basename(f))
         if not m:
             continue

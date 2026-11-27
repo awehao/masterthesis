@@ -186,7 +186,7 @@ def main():
     try:
         import n1_summary as NS
         cb = open(os.path.join(HERE, 'results', 'plan1127', 'current_batch.txt')).read().strip()
-        rr = NS.collect(cb, csv_only=True)
+        rr = NS.collect('n1final' if cb == 'n1r2' else cb, csv_only=True)   # 11/28：N1 最終＝45 條 n1main＋15 條 n1r2
         SS = NS.summarize(rr) if rr else {}
         for mth in NS.METHODS:
             v = SS.get(f'all|{mth}')
