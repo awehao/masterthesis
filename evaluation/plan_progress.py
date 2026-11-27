@@ -45,6 +45,7 @@ METH = {
     'wb_horizon_1': 'F 單步', 'wb_nearest_feasible_base': '最近可行底盤位置', 'wb_no_door_pose_tube': '移除門扇位姿限制',
     'wb_other_multistep_horizon_1': '另一步數（一）', 'wb_other_multistep_horizon_2': '另一步數（二）',
 }
+N2_METH = {'B': 'nav_no_motion_prediction', 'C': 'nav_no_cbf', 'D': 'nav_no_reference_adjustment', 'E': 'nav_speed_only'}
 N1_METH = {'gmpc_scan': 'nav_full', 'mppi': 'mppi_omni_shared_guard', 'dwb': 'dwb_omni_shared_guard', 'rpp': 'rpp_shared_guard'}
 DYN_METH = [('gmpc_scan', '本研究 GMPC'), ('mppi', 'MPPI'), ('dwb', 'DWB'), ('rpp', 'RPP')]
 DYN_COND = [('walk', 'const', '步行・等速'), ('walk', 'stopgo', '步行・停走'), ('fast', 'const', '快速・等速'), ('fast', 'stopgo', '快速・停走')]
@@ -63,19 +64,25 @@ def plan_rows():
         runs += list(csv.DictReader(io.TextIOWrapper(z.open(nm), encoding='utf-8')))
     done = set()
     n1_done = {}                                                       # N1 改用三種複雜布局（11/27 Howard），名稱與規劃清單不同 ⇒ 依方法計數
+    n2_done = {}
     if os.path.exists(REG):
         rows = list(csv.DictReader(open(REG)))
         done = {r['run_key'] for r in rows if r.get('status') == 'done'}
         for k in {r['run_key'] for r in rows if r.get('status') == 'done' and r['run_key'].startswith('N1/')}:
             meth = N1_METH.get(k.split('/')[-1], k.split('/')[-1])
             n1_done[meth] = n1_done.get(meth, 0) + 1
+        for k in {r['run_key'] for r in rows if r.get('status') == 'done' and r['run_key'].startswith('N2/')}:   # N2：配置字母 ⇒ 規劃清單的方法名
+            meth = N2_METH.get(k.split('/')[-1], k.split('/')[-1])
+            n2_done[meth] = n2_done.get(meth, 0) + 1
     exps, cells = [], []
     for i, (m, (tier, name, design)) in enumerate(MOD.items()):
         x = [r for r in runs if r['module'] == m]
-        d = sum(1 for r in x if r['run_key'] in done) if m != 'N1' else min(sum(n1_done.values()), len(x))
+        d = (min(sum(n1_done.values()), len(x)) if m == 'N1' else min(sum(n2_done.values()), len(x)) if m == 'N2'
+             else sum(1 for r in x if r['run_key'] in done))
         exps.append(dict(id=m, order=i + 1, tier=tier, code=m, name=name, design=design, done=d, total=len(x), status=status(d, len(x))))
         for meth, n in Counter(r['method'] for r in x).items():
-            dd = sum(1 for r in x if r['method'] == meth and r['run_key'] in done) if m != 'N1' else min(n1_done.get(meth, 0), n)
+            dd = (min(n1_done.get(meth, 0), n) if m == 'N1' else min(n2_done.get(meth, 0), n) if m == 'N2'
+                  else sum(1 for r in x if r['method'] == meth and r['run_key'] in done))
             cells.append(dict(id=f'{m}:{meth}', module=m, method=METH.get(meth, meth), done=dd, total=n))
     return exps, cells
 
