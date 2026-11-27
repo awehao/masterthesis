@@ -36,18 +36,21 @@ NAV_VMAX=0.26                # 四個方法平移速度上限一致（各軸＋G
 CBF／規劃的 6 個參數（`PLANNER_SCAN`、`CBF_ALPHA`、`CBF_SAFE_MARGIN`、`CBF_PRUNE_RANGE`、`CBF_FAR_STRIDE`、`PLAN_BLEND`）**不設**＝程式預設，與住宅任務相同。
 `NAV_YIELD`、`NAV_VMAX`、GUARD 的 `v_xy_max` 都是不設就與原行為相同。
 
-## 檔案雜湊（git 4e40d53e5；之後改了任何一個，這一版就不再成立，要更新本檔）
+## 檔案雜湊（git fa4377050；之後改了任何一個，這一版就不再成立，要更新本檔）
+
+11/27 晚更新：`gmpc_task_node.py` 加了 NAV_UNSTUCK（卡住解鎖）與 NAV_ZERO_OBS_VEL（N2 消融 B），`yield_side.py` 加了 YS_PRED_SPEED_ONLY（N2 消融 E）。
+三者都是**預設關閉**，住宅任務（run_d2_isaac.sh、task.env）沒有設 ⇒ 住宅任務行為與上一版相同；雜湊因此改變。
 
 ```
 2a1e2148b0d4bc22  src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc.py
 887bbdd591b40ed1  src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_node.py
-f31ef3ffcbed0e56  src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_task_node.py
+685dbe51e71588f4  src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_task_node.py
 e6c8e82a668f28b9  src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_wb.py
 e6db2380a74f041c  src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_obstacle_tracker.py
 075746e562acf529  src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_safety_shield.py
 11fc2ffc37290adb  src/ammr_wholebody_mpc/ammr_wholebody_mpc/wheel_limit_guard.py
 7f52031211741748  src/ammr_wholebody_mpc/ammr_wholebody_mpc/goal_to_plan_relay.py
-12ab03c40313f4c6  evaluation/yield_side.py
+ba5f2620a1444d8e  evaluation/yield_side.py
 e54c24c2b0931538  src/my_omnibot_description/launch/omni_bot_dynamic.launch.py
 3900dae17c82cfed  src/ammr_wholebody_mpc/config/gmpc_params.yaml
 898dce238b9e237a  src/my_omnibot_description/config/nav2_localization.yaml
