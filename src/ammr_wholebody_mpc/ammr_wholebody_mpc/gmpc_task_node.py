@@ -126,7 +126,7 @@ class GMPCTaskNode(GMPCNode):
             self.get_logger().info('gmpc_task_node: NAV_ZERO_OBS_VEL＝障礙速度設為 0（N2 消融 B）')
 
         # 卡住解鎖（11/27 N1：GMPC 在「門口＋門後未知箱」縮窄處以 CBF 安全距離判定過不去、停到逾時；同路線 RPP／DWB 擠過）：
-        #   NAV_UNSTUCK=1 ⇒ 車速 < UNSTUCK_V 持續 UNSTUCK_T 秒、1 m 內沒有移動中的障礙（速度 > 0.08）時，牆點與近乎靜止的追蹤障礙的
+        #   NAV_UNSTUCK=1 ⇒ 過去 UNSTUCK_T 秒實際位移 < UNSTUCK_DISP（0.15 m；命令可能被 Shield 擋住，故不看命令）、1 m 內沒有移動中的障礙（速度 > 0.08）時，牆點與近乎靜止的追蹤障礙的
         #   margin 暫降到 UNSTUCK_MARGIN（車半徑 0.30＋2 cm；原 0.38）；走出 UNSTUCK_EXIT_M 或超過 UNSTUCK_MAX 秒恢復。移動中的行人不變；
         #   最底層 Shield 不變。未設＝原行為。只在開發種子調參。
         self._t_unstuck = os.environ.get('NAV_UNSTUCK', '0') == '1'
@@ -135,18 +135,25 @@ class GMPCTaskNode(GMPCNode):
                               MAX=float(os.environ.get('UNSTUCK_MAX', '15.0')), CLR=float(os.environ.get('UNSTUCK_DYN_CLR', '1.0')))
         self._t_us = dict(slow_since=None, on_since=None, p0=None, n_on=0)
 
-        def _unstuck(X_now, obstacles):
+        def _unstuck(X_now, obstacles, xi_ref_win=None):
             if not self._t_unstuck or obstacles is None:
                 return obstacles
             P_ = self._t_us_par; st = self._t_us
             now = self.get_clock().now().nanoseconds * 1e-9
             X_now = np.asarray(X_now, float); pxy = np.array([X_now[0, 2], X_now[1, 2]])
-            v = float(np.hypot(self.xi_prev[0], self.xi_prev[1]))
+            # 停滯以「實際位置」判斷（命令可能非零但被下游 Shield 擋住）：過去 UNSTUCK_T 秒內最大位移 < UNSTUCK_DISP
+            hist = st.setdefault('hist', [])
+            hist.append((now, pxy.copy()))
+            while hist and now - hist[0][0] > P_['T'] + 0.5:
+                hist.pop(0)
+            span_ok = bool(hist) and now - hist[0][0] >= P_['T'] - 0.1
+            disp = max(float(np.hypot(*(p_ - pxy))) for _, p_ in hist) if hist else 9.9
+            v = 0.0 if (span_ok and disp < float(os.environ.get('UNSTUCK_DISP', '0.15'))) else 1.0
             moving_near = any((not o.get('static')) and np.hypot(o.get('vx', 0.0), o.get('vy', 0.0)) > 0.08
                               and np.hypot(o['x'] - pxy[0], o['y'] - pxy[1]) - o.get('radius', 0.0) < P_['CLR'] for o in obstacles)
+            want_go = xi_ref_win is not None and len(xi_ref_win) and float(np.mean(np.hypot(np.asarray(xi_ref_win)[:, 0], np.asarray(xi_ref_win)[:, 1]))) > 0.05
             if st['on_since'] is None:
-                st['slow_since'] = (st['slow_since'] or now) if v < P_['V'] else None
-                if st['slow_since'] is not None and now - st['slow_since'] >= P_['T'] and not moving_near:
+                if v < P_['V'] and not moving_near and want_go:           # 參考要它走、它卻沒動（起跑前靜止不算）
                     st['on_since'], st['p0'] = now, pxy.copy(); st['n_on'] += 1
                     self.get_logger().info(f'UNSTUCK on #{st["n_on"]} at ({pxy[0]:.2f},{pxy[1]:.2f})')
             else:
@@ -164,7 +171,7 @@ class GMPCTaskNode(GMPCNode):
 
         def _solve_pub(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles=None, _o=_orig_solve):
             try:
-                obstacles = _unstuck(X_now, obstacles)
+                obstacles = _unstuck(X_now, obstacles, xi_ref_win)
             except Exception as e_:                                   # noqa: BLE001
                 self.get_logger().warn(f'NAV_UNSTUCK 例外（本拍略過）：{e_!r}')
             if self._t_zero_vel and obstacles is not None:
