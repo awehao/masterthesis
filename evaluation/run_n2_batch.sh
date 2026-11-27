@@ -24,6 +24,8 @@ cfg_env() {
     H) echo "";;                                                            # 開發比較：住宅任務原版
     U) echo "NAV_UNSTUCK=1";;                                               # 開發比較：＋卡住解鎖
     UF) echo "NAV_UNSTUCK=1 PLANNER_SCAN=/scan_filtered";;                  # 開發比較：＋卡住解鎖＋規劃器遮掉行人（9 月鎖定設定的同一開關）
+    UE) echo "NAV_UNSTUCK=1 YS_ESCAPE=1";;                                  # 開發比較：＋卡住解鎖＋緊急避讓（會車層加後退候選）
+    UFE) echo "NAV_UNSTUCK=1 PLANNER_SCAN=/scan_filtered YS_ESCAPE=1";;     # 開發比較：三項全開
     B) echo "NAV_ZERO_OBS_VEL=1";;
     C) echo "CBF_ENABLE=0";;
     D) echo "D2_YIELD_SIDE=0";;
