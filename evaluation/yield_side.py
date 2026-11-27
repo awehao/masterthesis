@@ -133,6 +133,7 @@ PRED_BEHIND = [float(x) for x in os.environ.get('YS_PRED_BEHIND', '0.6,1.0').spl
 PRED_V_FAST = float(os.environ.get('YS_PRED_V_FAST', '0.18'))
 PRED_HYST = float(os.environ.get('YS_PRED_HYST', '0.10'))
 PRED_LAT_W = float(os.environ.get('YS_PRED_LAT_W', '1.0'))           # 側移代價（s／m）
+PRED_SPEED_ONLY = os.environ.get('YS_PRED_SPEED_ONLY', '0') == '1'   # 11/27 N2 消融 E：預測選動作只選速度比例、不側移（未設＝原行為）
 CROSS_MAX_S = float(os.environ.get('YS_CROSS_MAX_S', '15.0'))
 PRED_BUDGET_MS = float(os.environ.get('YS_PRED_BUDGET_MS', '15'))   # 預測選動作每拍時間預算（ms；0＝不限）
 PRED_MIN_AGE = float(os.environ.get('YS_PRED_MIN_AGE', '0.8'))       # 預測選動作只看追蹤滿此秒數的群（＝0.8×V_WIN，速度改由群中心位移估）
@@ -392,7 +393,7 @@ class YieldSide:
         manip_ = bool(getattr(self, 'manip', False))
         rmax = min(PRED_VMAX / v_nav, 1.2) if (v_nav >= PRED_V_FAST and not manip_) else 1.0   # 加速只在一般行駛（v_nav ≥ 0.18）且不在抓取中
         rhos = sorted(set([round(rmax, 3), 1.0, 0.8, 0.6, 0.4, 0.2, 0.0]), reverse=True)
-        lats = [(0.0, None)] if manip_ else [(0.0, None)] + [(sg, sc + sg * (need_l + ex)) for sg in (1.0, -1.0) for ex in (0.0, 0.3)] + [(2.0, float(q[:2] @ u) - dl) for dl in PRED_BEHIND]   # sg=2：往行人來的方向（−u）偏 dl（絕對座標線：沿 u 座標 ≤ 目前−dl），從它背後繞過
+        lats = [(0.0, None)] if (manip_ or PRED_SPEED_ONLY) else [(0.0, None)] + [(sg, sc + sg * (need_l + ex)) for sg in (1.0, -1.0) for ex in (0.0, 0.3)] + [(2.0, float(q[:2] @ u) - dl) for dl in PRED_BEHIND]   # sg=2：往行人來的方向（−u）偏 dl（絕對座標線：沿 u 座標 ≤ 目前−dl），從它背後繞過
         prev = getattr(self, 'pchoice', None); off0 = self.p_off
         best = None
         t_b0_ = _time.perf_counter()

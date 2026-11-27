@@ -8,7 +8,8 @@
 #   D 移除參考調整  D2_YIELD_SIDE=0（不做會車層的減速與側移）
 #   E 僅作速度調整  YS_PRED_SPEED_ONLY=1（會車層只選減速、不側移；yield_side.py 的這個開關要在 N1 跑完後加）
 # 共同：同 N1（SCENE、scheduled、SHIELD=1 GUARD=1、NAV_VMAX=0.26、時限 200 s、HEADING=1 GMPC_TASK=1 NAV_YIELD=1 YS_PRED=1 M8_MAP=<布局>）。
-# 結果：results/<批次>/<布局>_crossing_k<種子>_<配置>.csv；登記 N2/N/<布局>/crossing/seedNN/<配置>（種子 ≤20＝done）。
+# 結果：results/<批次>/<布局>_crossing_k<種子>_<配置>.csv；登記 ${MODULE:-N2}/N/<布局>/crossing/seedNN/<配置>（種子 ≤20＝done）。
+# 開發比較（GMPC 改進版）：MODULE=DEV、配置 H／U／UF、開發種子 101 起（登記 pilot，不計入任何正式模組）。
 cd "$(dirname "$0")/.."
 WS=$PWD
 B=$1; IFS=, read -ra LAYS <<< "$2"; K0=$3; K1=$4; IFS=, read -ra CFGS <<< "${5:-B,C,D,E}"
@@ -20,6 +21,9 @@ source /opt/ros/jazzy/setup.bash; source install/setup.bash
 set -u
 cfg_env() {
   case "$1" in
+    H) echo "";;                                                            # 開發比較：住宅任務原版
+    U) echo "NAV_UNSTUCK=1";;                                               # 開發比較：＋卡住解鎖
+    UF) echo "NAV_UNSTUCK=1 PLANNER_SCAN=/scan_filtered";;                  # 開發比較：＋卡住解鎖＋規劃器遮掉行人（9 月鎖定設定的同一開關）
     B) echo "NAV_ZERO_OBS_VEL=1";;
     C) echo "CBF_ENABLE=0";;
     D) echo "D2_YIELD_SIDE=0";;
@@ -50,7 +54,7 @@ for K in $(seq "$K0" "$K1"); do
         if [ "$K" -le 20 ]; then ST=done; else ST=pilot; fi
         break
       done
-      echo "N2/N/$LY/crossing/seed$(printf %02d "$K")/$CF,$ST,$B,$R/${LY}_crossing_k${K}_${CF}.csv,$(date +%F_%T)" >> "$REG"
+      echo "${MODULE:-N2}/N/$LY/crossing/seed$(printf %02d "$K")/$CF,$ST,$B,$R/${LY}_crossing_k${K}_${CF}.csv,$(date +%F_%T)" >> "$REG"
       sleep 5
     done
   done
