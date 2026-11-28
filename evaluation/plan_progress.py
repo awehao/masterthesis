@@ -168,7 +168,7 @@ def n1pilot_row(bname_=None):
             nc = nc * len(mc.group(1).split()) / 4.0
     bname = os.path.basename(R)
     nm_ = {'n1hardpilot': 'N1 加難先導（平行，已停）', 'n1hard12': 'N1 加難先導（種子 101，12 趟）', 'n1main': 'N1 正式第一輪（種子 1–20，240 趟）', 'n1r2': 'N1 第二版：15 條降難度路線 × 4 方法重跑（60 趟，其餘 45 條沿用第一輪）',
-           'gmpcdev': 'GMPC 改進開發比較 v1（偵測錯誤，已停）', 'gmpcdev2': 'GMPC 改進開發比較（種子 101–104：原版 H／卡住解鎖 U／＋規劃器遮行人 UF）', 'gmpcdev3': 'GMPC 改進開發比較第二輪（種子 101–104：卡住解鎖＋緊急避讓 UE／三項全開 UFE）', 'n1v2': 'N1 正式重跑：GMPC 改進版（種子 1–20 × 3 布局，60 趟）', 'gmpcdev4': 'GMPC 擴大開發驗證（種子 105–114：原版 H／三項全開 UFE）', 'n2main': 'N2 導航消融（多房間＋辦公室 × 種子 1–10 × B／C／D／E）'}.get(bname, f'批次 {bname}')
+           'gmpcdev': 'GMPC 改進開發比較 v1（偵測錯誤，已停）', 'gmpcdev2': 'GMPC 改進開發比較（種子 101–104：原版 H／卡住解鎖 U／＋規劃器遮行人 UF）', 'gmpcdev3': 'GMPC 改進開發比較第二輪（種子 101–104：卡住解鎖＋緊急避讓 UE／三項全開 UFE）', 'n1v2': 'N1 正式重跑：GMPC 改進版（種子 1–20 × 3 布局，60 趟）', 'gmpcdev4': 'GMPC 擴大開發驗證（種子 105–114：原版 H／三項全開 UFE）', 'n2main': 'N2 導航消融（多房間＋辦公室 × 種子 1–10 × B／C／D／E）', 'nfast': '快速行人開發比較（A 完整 vs B 不用障礙速度；行人 0.35–0.7 m/s；種子 201–210 × 3 布局）'}.get(bname, f'批次 {bname}')
     return dict(id='n1pilot', name=nm_, design='三種複雜布局 × 交會 × 4 方法（穿越、對向會車、轉角未知障礙）；GMPC 住宅任務版、四方法 0.26 m/s',
                 done=n, total=int(round(nc * 4)), skips=sum(1 for s in log if 'skipping' in s), caps=sum(1 for s in log if 'cap hit' in s),
                 running=run, status=status(n, int(round(nc * 4)), run), last=(log[-1] if log else ''), stats_note=''), recent

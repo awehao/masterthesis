@@ -13,7 +13,7 @@
 cd "$(dirname "$0")/.."
 WS=$PWD
 B=$1; IFS=, read -ra LAYS <<< "$2"; K0=$3; K1=$4; IFS=, read -ra CFGS <<< "${5:-B,C,D,E}"
-D=$WS/evaluation/experiments/n1_scenarios; R=$WS/evaluation/results/$B; L=$WS/evaluation/logs/$B
+D=${SCEN_DIR:-$WS/evaluation/experiments/n1_scenarios}; R=$WS/evaluation/results/$B; L=$WS/evaluation/logs/$B   # SCEN_DIR／POSES_PREFIX：11/28 快速行人開發比較（n1_scenarios_fast）
 REG=$WS/evaluation/results/plan1127/registry.csv
 mkdir -p "$R" "$L"
 LOG=$R/$B.log
@@ -32,7 +32,7 @@ cfg_env() {
     E) echo "YS_PRED_SPEED_ONLY=1";;
   esac
 }
-echo "$(date +%F_%T) batch $B layouts=${LAYS[*]} conds=crossing seeds=$K0-$K1 cfgs=${CFGS[*]} NAV_VMAX=0.26 git=$(git rev-parse --short HEAD)" >> "$LOG"
+echo "$(date +%F_%T) batch $B layouts=${LAYS[*]} conds=crossing seeds=$K0-$K1 cfgs=${CFGS[*]} NAV_VMAX=0.26 scen=$D git=$(git rev-parse --short HEAD)" >> "$LOG"
 for K in $(seq "$K0" "$K1"); do
   for LY in "${LAYS[@]}"; do
     F=$D/${LY}_crossing_k${K}.yaml
@@ -45,7 +45,7 @@ for K in $(seq "$K0" "$K1"); do
         TAG=_${B}_${CF}_${LY}_crossing_k${K}_t${TRY}
         OUT=$L/${LY}_crossing_k${K}_${CF}_t${TRY}.out
         bash mission/tools/wait_clean.sh > /dev/null 2>&1
-        env POSES_CSV=$WS/evaluation/results/n1_poses_${LY}.csv BIGARENA=1 SCENE=$LY TRAJ=bigarena_traffic GUI=0 SEED_FIRST=$K \
+        env POSES_CSV=${POSES_PREFIX:-$WS/evaluation/results/n1_poses_}${LY}.csv BIGARENA=1 SCENE=$LY TRAJ=bigarena_traffic GUI=0 SEED_FIRST=$K \
           SHIELD=1 GUARD=1 NAV_VMAX=0.26 AMMR_OBSTACLE_MODE=scheduled AMMR_TRAJ_FILE=$F \
           HEADING=1 GMPC_TASK=1 NAV_YIELD=1 D2_YIELD_SIDE=1 YS_PRED=1 M8_MAP=$LY $(cfg_env "$CF") \
           TAG_SUFFIX=$TAG OUT_CSV=$R/${LY}_crossing_k${K}_${CF}.csv \
