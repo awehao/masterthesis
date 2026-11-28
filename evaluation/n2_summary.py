@@ -21,16 +21,16 @@ CFG = ['B', 'C', 'D', 'E']
 NAME = dict(A='A 完整方法', B='B 不用障礙速度', C='C 移除 CBF', D='D 移除參考調整', E='E 僅速度調整')
 
 
-def row_n2(f, batch, csv_only):
+def row_n2(f, batch, csv_only, D=None, cfgs=None):
     m = re.match(r'(n1_\w+?)_(crossing)_k(\d+)_([A-Z]+)\.csv$', os.path.basename(f))
-    if not m or m.group(4) not in CFG:
+    if not m or m.group(4) not in (cfgs or CFG):
         return None
     lay, cond, k, cf = m.group(1), m.group(2), int(m.group(3)), m.group(4)
     rec = list(csv.DictReader(open(f)))
     if not rec:
         return None
     r = rec[-1]
-    D = os.path.join(HERE, 'experiments', 'n1_scenarios')
+    D = D or os.path.join(HERE, 'experiments', 'n1_scenarios')
     meta_f = os.path.join(D, f'{lay}_{cond}_k{k}_meta.json')
     meta = json.load(open(meta_f)) if os.path.exists(meta_f) else {}
     succ = r.get('success') == 'True'
@@ -70,8 +70,20 @@ def collect(batch='n2main', csv_only=False):
     return A + rows                                                   # A 列保留 method='gmpc_scan'（NS.summarize 以它為成對基準）
 
 
-def summarize(rows):
-    NS.METHODS = ['gmpc_scan'] + CFG
+def collect_dev(batch, scen_dir, cfgs=('B',), ref='H', csv_only=False):
+    """開發比較（同一批次內含參考配置 ref，例：nfast 的 H＝A 完整方法）：ref 列改名 gmpc_scan 當成對基準。"""
+    rows = []
+    for f in sorted(glob.glob(os.path.join(HERE, 'results', batch, 'n1_*_crossing_k*_*.csv'))):
+        r = row_n2(f, batch, csv_only, D=scen_dir, cfgs=list(cfgs) + [ref])
+        if r:
+            if r['method'] == ref:
+                r['method'] = 'gmpc_scan'
+            rows.append(r)
+    return rows
+
+
+def summarize(rows, cfgs=None):
+    NS.METHODS = ['gmpc_scan'] + list(cfgs or CFG)
     S = NS.summarize(rows)
     for lay in sorted({r['layout'] for r in rows}) + ['all']:
         for meth in NS.METHODS:
@@ -121,8 +133,13 @@ def plot(rows, S, out):
 def main():
     av = sys.argv
     batch = av[1] if len(av) > 1 and not av[1].startswith('--') else 'n2main'
-    rows = collect(batch, csv_only='--csv-only' in av)
-    S = summarize(rows)
+    if '--dev' in av:                                                 # n2_summary.py nfast --dev <情境資料夾> [--cfgs B]：同批次 H 當 A
+        cf = av[av.index('--cfgs') + 1].split(',') if '--cfgs' in av else ['B']
+        rows = collect_dev(batch, av[av.index('--dev') + 1], cfgs=cf, csv_only='--csv-only' in av)
+        S = summarize(rows, cfgs=cf)
+    else:
+        rows = collect(batch, csv_only='--csv-only' in av)
+        S = summarize(rows)
     for k, v in S.items():
         print(k, v)
     if '--json' in av:
