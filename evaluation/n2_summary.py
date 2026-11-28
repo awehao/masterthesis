@@ -81,6 +81,43 @@ def summarize(rows):
     return {k.replace('gmpc_scan', 'A').replace('_vs_gmpc', '_vs_A'): v for k, v in S.items()}
 
 
+def plot(rows, S, out):
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import numpy as np
+    plt.rcParams['font.sans-serif'] = ['Noto Sans CJK TC', 'Noto Sans CJK JP', 'DejaVu Sans']
+    plt.rcParams['axes.unicode_minus'] = False
+    M = ['gmpc_scan'] + CFG; LB = dict(gmpc_scan='A 完整', B='B 無障礙速度', C='C 無 CBF', D='D 無參考調整', E='E 僅速度')
+    COL = dict(gmpc_scan='#2b6cb0', B='#b7791f', C='#c53030', D='#6b46c1', E='#2f855a')
+    fig, ax = plt.subplots(1, 4, figsize=(20, 4.8))
+    for j, m in enumerate(M):
+        v = S.get(f"all|{m.replace('gmpc_scan', 'A')}")
+        if not v:
+            continue
+        ax[0].bar(j, 100.0 * v['success'] / v['n'], 0.6, color=COL[m], alpha=0.35)
+        ax[0].bar(j, 100.0 * v['clean'] / v['n'], 0.6, color=COL[m])
+        ax[0].text(j, 100.0 * v['success'] / v['n'] + 1.5, f"{v['clean']}/{v['n']}", ha='center', fontsize=8)
+    ax[0].set_xticks(range(len(M))); ax[0].set_xticklabels([LB[m] for m in M], fontsize=8)
+    ax[0].set_ylim(0, 112); ax[0].set_ylabel('百分比（%）'); ax[0].set_title('到達（淡）與乾淨到達（深；柱上＝乾淨／總趟）', fontsize=10)
+    for k, (key, lab, ttl) in enumerate((('min_clr_m', '對所有障礙最小淨空（m）', '最小淨空'),
+                                         ('dmin_dyn_m', '對行人最小表面距離（m）', '離行人最近距離'),
+                                         ('shield_ratio', 'Shield 介入比例', '安全層介入'))):
+        data = [[r[key] for r in rows if r['method'] == m and r.get(key) is not None] for m in M]
+        bp = ax[1 + k].boxplot([d if d else [np.nan] for d in data], widths=0.55, patch_artist=True, showfliers=False)
+        for b, m in zip(bp['boxes'], M):
+            b.set_facecolor(COL[m]); b.set_alpha(0.35); b.set_edgecolor(COL[m])
+        for i, (d, m) in enumerate(zip(data, M)):
+            ax[1 + k].scatter(np.full(len(d), i + 1) + np.random.default_rng(i).uniform(-0.18, 0.18, len(d)), d, s=9, color=COL[m], alpha=0.8, zorder=3)
+        ax[1 + k].set_xticks(range(1, len(M) + 1)); ax[1 + k].set_xticklabels([LB[m] for m in M], fontsize=8)
+        ax[1 + k].set_ylabel(lab, fontsize=9); ax[1 + k].set_title(ttl, fontsize=10)
+        if key != 'shield_ratio':
+            ax[1 + k].axhline(0, color='#1a1a1a', lw=0.8, ls='--')
+    for a in ax:
+        a.spines['top'].set_visible(False); a.spines['right'].set_visible(False); a.grid(axis='y', alpha=0.25)
+    fig.tight_layout(); fig.savefig(out, dpi=130)
+
+
 def main():
     av = sys.argv
     batch = av[1] if len(av) > 1 and not av[1].startswith('--') else 'n2main'
@@ -94,6 +131,8 @@ def main():
         keys = sorted({k for r in rows for k in r})
         with open(av[av.index('--runs-csv') + 1], 'w', newline='') as f:
             w = csv.DictWriter(f, fieldnames=keys); w.writeheader(); [w.writerow(r) for r in rows]
+    if '--png' in av:
+        plot(rows, S, av[av.index('--png') + 1])
 
 
 if __name__ == '__main__':
