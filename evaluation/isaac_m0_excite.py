@@ -88,10 +88,16 @@ def excitation(center, seed, dur):
 
 
 def main():
-    center = np.array([float(x) for x in a.center.split(',')], float)
-    if center.shape != (6,) or np.any(center - a.amp - 0.05 < LO) or np.any(center + a.amp + 0.05 > HI):
-        print(f'[m0] 中心 {center} ± {a.amp} 超出安全限位 ⇒ 拒跑', flush=True)
+    center_nom = np.array([float(x) for x in a.center.split(',')], float)
+    if center_nom.shape != (6,) or np.any(center_nom < LO) or np.any(center_nom > HI):
+        print(f'[m0] 中心 {center_nom} 超出安全限位 ⇒ 拒跑', flush=True)
         return 2
+    center = np.clip(center_nom, LO + 0.05 + a.amp, HI - 0.05 - a.amp)   # 靠近限位的軸：晃動中心往內移到剛好不超限（名目中心仍在晃動範圍內）
+    if np.any(np.abs(center - center_nom) > a.amp):
+        print(f'[m0] 名目中心 {center_nom} 離限位太近、內移後不再涵蓋名目中心 ⇒ 拒跑', flush=True)
+        return 2
+    if np.any(center != center_nom):
+        print(f'[m0] 晃動中心內移（靠近限位）：{np.round(center - center_nom, 4).tolist()}', flush=True)
     world = World(stage_units_in_meters=1.0, physics_dt=DT, rendering_dt=DT)
     stage = world.stage
     GroundPlane(prim_path='/World/ground', name='ground', z_position=0.0)
@@ -173,7 +179,7 @@ def main():
     wall = time.perf_counter() - w0
     np.savez_compressed(os.path.join(a.out, 'm0.npz'), t=t[:n], u_cmd=u_cmd[:n], u_eff=UE[:n], s=S[:n], q=Q[:n], dq=DQ[:n], base=BASE[:n], hold=hold[:n])
     err = S[:n] - Q[:n]
-    meta = dict(region=a.region, split=a.split, seed=a.seed, center=center.tolist(), amp=a.amp, vmax=a.vmax, dur=a.dur, n_steps=int(n),
+    meta = dict(region=a.region, split=a.split, seed=a.seed, center=center.tolist(), center_nominal=center_nom.tolist(), amp=a.amp, vmax=a.vmax, dur=a.dur, n_steps=int(n),
                 physics_dt=float(world.get_physics_dt()), d_steps=D_STEPS, ctrl_every=CTRL_EVERY, gains_requested=dict(kp=a.kp, kd=a.kd, finger_kp=a.finger_kp, finger_kd=a.finger_kd),
                 gains_readback=gains_rb, urdf=os.path.relpath(a.urdf, WS), wall_s=round(wall, 2),
                 base_drift_m=float(np.hypot(*(BASE[n - 1, :2] - BASE[0, :2]))) if n else None,
